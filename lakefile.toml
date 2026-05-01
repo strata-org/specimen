@@ -1,0 +1,24 @@
+name = "specimen"
+version = "0.1.0"
+defaultTargets = ["Specimen"]
+testRunner = "SpecimenTest"
+lintDriver = "batteries/runLinter"
+
+[leanOptions]
+linter.missingDocs = false
+
+[[lean_lib]]
+name = "SpecimenTest"
+
+[[lean_lib]]
+name = "Specimen"
+
+[[require]]
+name = "batteries"
+scope = "leanprover-community"
+rev = "main"
+
+[[require]]
+name = "plausible"
+scope = "leanprover-community"
+rev = "main"

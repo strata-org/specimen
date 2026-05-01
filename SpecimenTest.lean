@@ -1,0 +1,98 @@
+/-
+Copyright (c) 2024 AWS. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+Authors: AWS
+-/
+
+-- Common definitions for snapshot tests
+import SpecimenTest.CommonDefinitions.BinaryTree
+import SpecimenTest.CommonDefinitions.FunctionCallInConclusion
+import SpecimenTest.CommonDefinitions.ListRelations
+import SpecimenTest.CommonDefinitions.Permutation
+import SpecimenTest.CommonDefinitions.STLCDefinitions
+
+-- Tests for `derive_generator` (derives `ArbitrarySuchThat`)
+import SpecimenTest.DeriveArbitrarySuchThat.DeriveBSTGenerator
+import SpecimenTest.DeriveArbitrarySuchThat.DeriveBalancedTreeGenerator
+import SpecimenTest.DeriveArbitrarySuchThat.DeriveRegExpMatchGenerator
+import SpecimenTest.DeriveArbitrarySuchThat.SimultaneousMatchingTests
+import SpecimenTest.DeriveArbitrarySuchThat.FunctionCallsTest
+import SpecimenTest.DeriveArbitrarySuchThat.DerivePermutationGenerator
+import SpecimenTest.DeriveArbitrarySuchThat.MutuallyRecursiveRelationsTest
+import SpecimenTest.DeriveArbitrarySuchThat.WithUnfolds
+import SpecimenTest.DeriveArbitrarySuchThat.Syntax
+import SpecimenTest.DeriveArbitrarySuchThat.DependentArgs
+import SpecimenTest.DeriveArbitrarySuchThat.DependentOutputTypeTest
+import SpecimenTest.DeriveArbitrarySuchThat.InstanceParameterTest
+import SpecimenTest.DeriveArbitrarySuchThat.NEqGenerator
+import SpecimenTest.DeriveArbitrarySuchThat.MissingNonRecursiveConstructorTest
+
+-- Tests for `deriving Arbitrary`
+import SpecimenTest.DeriveArbitrary.DeriveTreeGenerator
+import SpecimenTest.DeriveArbitrary.DeriveSTLCTermTypeGenerators
+import SpecimenTest.DeriveArbitrary.DeriveNKIValueGenerator
+import SpecimenTest.DeriveArbitrary.DeriveNKIBinopGenerator
+import SpecimenTest.DeriveArbitrary.DeriveRegExpGenerator
+import SpecimenTest.DeriveArbitrary.StructureTest
+import SpecimenTest.DeriveArbitrary.StructureParameterTest
+import SpecimenTest.DeriveArbitrary.BitVecStructureTest
+import SpecimenTest.DeriveArbitrary.MissingNonRecursiveConstructorTest
+import SpecimenTest.DeriveArbitrary.ParameterizedTypeTest
+import SpecimenTest.DeriveArbitrary.MutuallyRecursiveTypeTest
+import SpecimenTest.DeriveArbitrarySuchThat.DeriveSTLCGenerator
+import SpecimenTest.DeriveArbitrarySuchThat.NonLinearPatternsTest
+
+-- Tests for instances of `Enum` for simple types and for correctness of enumerator combinators
+import SpecimenTest.Enum.EnumInstancesTest
+import SpecimenTest.Enum.EnumeratorSizeTest
+
+-- Tests for `deriving Enum`
+import SpecimenTest.DeriveEnum.DeriveTreeEnumerator
+import SpecimenTest.DeriveEnum.DeriveSTLCTermTypeEnumerators
+import SpecimenTest.DeriveEnum.DeriveNKIValueEnumerator
+import SpecimenTest.DeriveEnum.DeriveNKIBinopEnumerator
+import SpecimenTest.DeriveEnum.DeriveRegExpEnumerator
+import SpecimenTest.DeriveEnum.StructureTest
+import SpecimenTest.DeriveEnum.BitVecStructureTest
+import SpecimenTest.DeriveEnum.MissingNonRecursiveConstructorTest
+import SpecimenTest.DeriveEnum.NestedAndMutualRecursionTest
+import SpecimenTest.DeriveEnum.StructureParameterTest
+
+-- Tests for `derive_checker` (derives `DecOpt`)
+import SpecimenTest.DeriveDecOpt.DeriveBSTChecker
+import SpecimenTest.DeriveDecOpt.DeriveBalancedTreeChecker
+import SpecimenTest.DeriveDecOpt.DeriveRegExpMatchChecker
+import SpecimenTest.DeriveDecOpt.SimultaneousMatchingTests
+import SpecimenTest.DeriveDecOpt.ExistentialVariablesTest
+import SpecimenTest.DeriveDecOpt.FunctionCallsTest
+import SpecimenTest.DeriveDecOpt.DeriveSTLCChecker
+import SpecimenTest.DeriveDecOpt.NonLinearPatternsTest
+import SpecimenTest.DeriveDecOpt.DerivePermutationChecker
+
+-- Tests for `derive_enumerator` (derives `EnumSuchThat`)
+import SpecimenTest.DeriveEnumSuchThat.DeriveBSTEnumerator
+import SpecimenTest.DeriveEnumSuchThat.DeriveBalancedTreeEnumerator
+import SpecimenTest.DeriveEnumSuchThat.DeriveRegExpMatchEnumerator
+import SpecimenTest.DeriveEnumSuchThat.SimultaneousMatchingTests
+import SpecimenTest.DeriveEnumSuchThat.DeriveSTLCEnumerator
+import SpecimenTest.DeriveEnumSuchThat.NonLinearPatternsTest
+import SpecimenTest.DeriveEnumSuchThat.DerivePermutationEnumerator
+
+-- Key Value Store Example
+import SpecimenTest.KeyValueStoreExample.KeyValueStore
+import SpecimenTest.KeyValueStoreExample.TestKeyValueStoreCheckerGenerators
+
+-- Cedar Example
+import SpecimenTest.CedarExample.Cedar
+import SpecimenTest.CedarExample.CedarCheckerGenerators
+import SpecimenTest.CedarExample.CedarWellTypedTermGenerator
+
+-- Arithmetic Compiler Example
+-- Note: ArithCompilerTest and FancyCompilerBuggyTest can't be imported together
+-- because they define conflicting `Instr` types.
+import SpecimenTest.ArithCompiler.FancyCompilerBuggyTest
+
+-- Schedule quality regression tests
+import SpecimenTest.ScheduleQualityRegressionTest
+
+
