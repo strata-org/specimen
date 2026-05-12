@@ -5,6 +5,8 @@ Specimen's design is heavily inspired by [Coq/Rocq's QuickChick](https://github.
 - [*Computing Correctly with Inductive Relations* (PLDI 2022)](https://dl.acm.org/doi/10.1145/3519939.3523707)
 - [*Generating Good Generators for Inductive Relations* (POPL 2018)](https://dl.acm.org/doi/10.1145/3158133)
 
+*Specimen is a testing and verification tool* - it is designed to help find bugs during development, not to serve as a security guarantee or correctness proof for production or enterprise workloads. Intended use is development-time property-based testing, rapid prototyping of invariants, and pre-proof exploration of conjectures.
+
 ## Overview
 Like QuickChick, Specimen uses the following typeclasses:
 - `Arbitrary`: unconstrained random generators for inhabitants of algebraic data types. This is imported from Plausible
