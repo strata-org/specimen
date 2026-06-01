@@ -212,9 +212,9 @@ def foldlWithIndex (f : α → Nat → β → β) (init : β) (l : List α) : β
   aux 0 init l
 
 /-- Recursively collects all free variables in an expression and counts their occurrences.
-    If skipArgIndex is provided and the top-level expression is an application,
-    skips the argument at that index when counting occurrences. -/
-partial def collectFVarOccurrences (e : Expr) (skipArgIndex : Option Nat := none) : FVarIdMap Nat :=
+    If skipArgIndices is non-empty and the top-level expression is an application,
+    skips the arguments at those indices when counting occurrences. -/
+partial def collectFVarOccurrences (e : Expr) (skipArgIndices : List Nat := []) : FVarIdMap Nat :=
   let rec aux (expr : Expr) (acc : FVarIdMap Nat) (isTopLevel : Bool) : FVarIdMap Nat :=
     match expr with
     | .fvar fvarId => acc.insert fvarId (acc.getD fvarId 0 + 1)
@@ -225,7 +225,7 @@ partial def collectFVarOccurrences (e : Expr) (skipArgIndex : Option Nat := none
         Id.run do
           let mut result := acc
           for h : i in [:args.size] do
-            if some i != skipArgIndex then
+            if i ∉ skipArgIndices then
               result := aux args[i] result false
           result
       else
@@ -279,9 +279,9 @@ def lookupAndRemove [BEq α] (key : α) (list : List (α × β)) : Option (β ×
 
 /-- Recursively replaces expressions in an expression tree using a replacement map,
     removing each replacement after it's used.
-    If skipArgIndex is provided and the top-level expression is an application,
-    skips replacement in the argument at that index. -/
-partial def replaceExprsRecursivelyOnce (e : Expr) (replacements : List (Expr × Expr)) (skipArgIndex : Option Nat := none) : Expr :=
+    If skipArgIndices is non-empty and the top-level expression is an application,
+    skips replacement in the arguments at those indices. -/
+partial def replaceExprsRecursivelyOnce (e : Expr) (replacements : List (Expr × Expr)) (skipArgIndices : List Nat := []) : Expr :=
   let (result, _) := StateT.run (aux e true) replacements
   result
 where
@@ -300,10 +300,8 @@ where
         if isTopLevel then
           -- Handle top-level application with potential argument skipping
           let (fn, args) := expr.getAppFnArgs
-          let args' ← args.toList.mapIdxM (fun i arg =>
-            match skipArgIndex with
-            | some skipIdx => if i == skipIdx then return arg else aux arg false
-            | none => aux arg false)
+          let args' ← args.toList.mapIdxM (fun (i : Nat) arg =>
+            if i ∈ skipArgIndices then return arg else aux arg false)
           return mkAppN (mkConst fn []) args'.toArray
         else do
           let f' ← aux f false

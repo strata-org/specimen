@@ -70,7 +70,8 @@ def findTargetVarIndex (targetVar : FVarId) (args : Array Expr) : (Option Nat) :
     - a list of `inductiveGenerators`, to be invoked when `size > 0`
     - the name of the inductive relation (`inductiveName`)
     - the arguments (`args`) to the inductive relation
-    - the name and type for the value we wish to generate (`targetVar`, `targetType`)
+    - the names and types for the values we wish to generate (`targetVars`, `targetTypes`)
+      + For multiple outputs, the instance is created for the product type
     - the `producerSort`, which determines what typeclass is to be produced
       + If `producerSort = .Generator`, an `ArbitrarySizedSuchThat` instance is produced
       + If `producerSort = .Enumerator`, an `EnumSizedSuchThat` instance is produced
@@ -80,8 +81,8 @@ def mkConstrainedProducerTypeClassInstance
   (inductiveGenerators : TSyntax `term)
   (inductiveName : Name)
   (inductiveLevels : List Level)
-  (args : TSyntaxArray `term) (targetVar : Name)
-  (_targetType : Expr)
+  (args : TSyntaxArray `term) (targetVars : Array Name)
+  (targetTypes : Array Expr)
   (producerSort : ProducerSort)
   (topLevelLocalCtx : LocalContext) : TermElabM (TSyntax `command) := do
     -- Produce a fresh name for the `size` argument for the lambda
@@ -111,8 +112,10 @@ def mkConstrainedProducerTypeClassInstance
     let matchExpr ← mkMatchExpr sizeIdent caseExprs
 
     -- Add parameters for each argument to the inductive relation
-    -- (except the target variable, which we'll filter out later)
+    -- (except the target variables, which we'll filter out later)
     let paramInfo ← analyzeInductiveArgs inductiveName inductiveLevels args
+
+    let targetVarsList := targetVars.toList
 
     -- Inner params are for the inner `aux_arb` / `aux_enum` function
     let mut innerParams := #[]
@@ -121,14 +124,14 @@ def mkConstrainedProducerTypeClassInstance
 
     -- Outer params are for the top-level lambda function which invokes `aux_arb` / `aux_enum`
     let mut outerParams := #[]
-    let mut outputType := none
+    let mut outputTypeSyntaxes : Array (TSyntax `term) := #[]
     let mut typeParams := #[]
     for (paramName, paramType, paramTypeSyntax) in paramInfo do
-      -- Only add a function parameter is the argument to the inductive relation is not the target variable
-      -- (We skip the target variable since that's the value we wish to generate)
+      -- Only add a function parameter if the argument to the inductive relation is not a target variable
+      -- (We skip the target variables since those are the values we wish to generate)
       if paramType.isSort then
         typeParams := typeParams.push paramName
-      if paramName != targetVar then
+      if paramName ∉ targetVarsList then
         let outerParamIdent := mkIdent paramName
         outerParams := outerParams.push outerParamIdent
 
@@ -141,7 +144,28 @@ def mkConstrainedProducerTypeClassInstance
 
         innerParams := innerParams.push innerParam
       else
-        outputType := some paramTypeSyntax
+        outputTypeSyntaxes := outputTypeSyntaxes.push paramTypeSyntax
+
+    -- Build the target type syntax — for multiple outputs, use a right-nested product type
+    let targetTypeSyntax ← do
+      let syns ← if outputTypeSyntaxes.isEmpty then
+        targetTypes.mapM (fun ty => PrettyPrinter.delab ty)
+      else pure outputTypeSyntaxes
+      let rec mkProdType : List (TSyntax `term) → TermElabM (TSyntax `term)
+        | [] => throwError "no output types found"
+        | [t] => pure t
+        | t :: ts => do let rest ← mkProdType ts; `($t × $rest)
+      mkProdType syns.toList
+
+    -- Build the lambda pattern for the typeclass predicate
+    -- For a single output: `fun x => @P args*`
+    -- For multiple outputs: `fun (x₁, (x₂, x₃)) => @P args*` (right-nested)
+    let targetVarPattern : TSyntax `term ← do
+      let rec mkProdPat : List Name → TermElabM (TSyntax `term)
+        | [] => throwError "no output variables"
+        | [v] => `($(Lean.mkIdent v))
+        | v :: vs => do let rest ← mkProdPat vs; `(($(Lean.mkIdent v), $rest))
+      mkProdPat targetVars.toList
 
     -- Figure out which typeclass should be derived
     -- (`ArbitrarySizedSuchThat` for generators, `EnumSizedSuchThat` for enumerators)
@@ -162,10 +186,6 @@ def mkConstrainedProducerTypeClassInstance
       | .Generator => mkFreshAccessibleIdent topLevelLocalCtx `aux_arb
       | .Enumerator => mkFreshAccessibleIdent topLevelLocalCtx `aux_enum
 
-    -- Get the syntax for the target type, it must exist!
-    assert! outputType != none
-    let targetTypeSyntax := outputType.get!
-
     -- Determine the appropriate type of the final producer
     -- (either `Plausible.Gen α` or `ExceptT GenError Enum α`)
     let optionTProducerType ←
@@ -181,7 +201,7 @@ def mkConstrainedProducerTypeClassInstance
     let arbitraryTypeParamInstances ← mkTypeClassInstanceBinders typeParams #[producerUnconstrainedClass, ``DecidableEq]
 
     -- Produce an instance of the appropriate typeclass containing the definition for the derived producer
-    `(instance $arbitraryTypeParamInstances:bracketedBinder* : $producerTypeClass $targetTypeSyntax (fun $(mkIdent targetVar) => @$(mkIdent inductiveName) $args*) where
+    `(instance $arbitraryTypeParamInstances:bracketedBinder* : $producerTypeClass $targetTypeSyntax (fun $targetVarPattern => @$(mkIdent inductiveName) $args*) where
         $producerTypeClassFunction:ident :=
           let rec $innerFunctionIdent:ident $innerParams* $arbitraryTypeParamInstances:bracketedBinder* : $optionTProducerType :=
             $matchExpr

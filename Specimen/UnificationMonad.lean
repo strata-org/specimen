@@ -133,11 +133,11 @@ structure UnifyState where
   /-- A set of all existing `Unknown`s -/
   unknowns : Std.HashSet Unknown
 
-  /-- The name of the output variable (variable to be generated) -/
-  outputName : Name
+  /-- The names of the output variables (variables to be generated) -/
+  outputNames : List Name
 
-  /-- The type of the output variable (variable to be generated) -/
-  outputType : Expr
+  /-- The types of the output variables (variables to be generated) -/
+  outputTypes : List Expr
 
   /-- All inputs (top-level arguments) to the generator -/
   inputNames : List Name
@@ -150,15 +150,15 @@ structure UnifyState where
   deriving Repr
 
 /-- Initial (empty) unification state
-    - Note that the dummy `outputName` and `outputType` are never used
+    - Note that the dummy `outputNames` and `outputTypes` are never used
       (it will be updated when callers invoke the unification algorithm through this monad) -/
 def emptyUnifyState : UnifyState :=
   { constraints := ∅,
     equalities := ∅,
     patterns := [],
     unknowns := ∅,
-    outputName := `dummyOutput,
-    outputType := mkConst `dummyOutputType
+    outputNames := [],
+    outputTypes := []
     inputNames := []
     hypotheses := [] }
 
@@ -442,15 +442,15 @@ partial def updatePattern (k : UnknownMap) (p : Pattern) : UnifyM Pattern := do
   | .LitPattern l => return .LitPattern l
 
 /-- Extends the current state with the contents of the fields in `newState`
-    (Note that the `outputName` and `outputType` of `newStates` are used) -/
+    (Note that the `outputNames` and `outputTypes` of `newState` are used) -/
 def extendState (newState : UnifyState) : UnifyM Unit := do
   modify $ fun s => { s with
     constraints := s.constraints.union newState.constraints
     equalities := s.equalities.union newState.equalities
     patterns := s.patterns ++ newState.patterns
     unknowns := s.unknowns.union newState.unknowns
-    outputName := newState.outputName
-    outputType := newState.outputType
+    outputNames := newState.outputNames
+    outputTypes := newState.outputTypes
     inputNames := s.inputNames ++ newState.inputNames
     hypotheses := s.hypotheses ++ newState.hypotheses
   }
