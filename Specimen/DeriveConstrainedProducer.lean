@@ -1119,17 +1119,22 @@ def elabDeriveMutual : CommandElab := fun stx => do
             withParsedDerivingArgs e fun args outVars outTypes indName indLevels indArgs =>
               collectSpecDependencies args outVars outTypes indName indLevels indArgs .Generator
           for dep in deps do
-            -- Check if this dep is already in our spec list (by indName + output count)
+            -- Deduplicate by (inductiveName, outputIndices, deriveSort)
+            let key := (dep.inductiveName, dep.outputIndices, dep.deriveSort)
             let alreadyCovered := specMeta.any fun (sIndName, sOutIdxs, _) =>
-              sIndName == dep.inductiveName && sOutIdxs.length == dep.outputVarNames.length
-            if !alreadyCovered then
-              if !newDeps.contains dep then
-                newDeps := newDeps.push dep
+              sIndName == dep.inductiveName && sOutIdxs == dep.outputIndices
+            let alreadyFound := newDeps.any fun d =>
+              (d.inductiveName, d.outputIndices, d.deriveSort) == key
+            if !alreadyCovered && !alreadyFound then
+              newDeps := newDeps.push dep
         -- Report discovered dependencies
         if !newDeps.isEmpty then
           let depDescs := newDeps.toList.map fun d =>
-            s!"{d.inductiveName} (outputs: {d.outputVarNames}, sort: {repr d.deriveSort})"
-          logInfo m!"derive_mutual: auto-discovered {newDeps.size} dependencies:\n{String.intercalate "\n  " depDescs}\nDeriving them before the mutual block..."
+            let sortStr := match d.deriveSort with
+              | .Generator => "generator" | .Enumerator => "enumerator"
+              | .Checker => "checker" | .Theorem => "theorem"
+            s!"{sortStr} {d.inductiveName} (output indices: {d.outputIndices})"
+          logInfo m!"derive_mutual: auto-discovered {newDeps.size} needed instances:\n  {String.intercalate "\n  " depDescs}\nPlease add these to derive_mutual or derive them separately."
           -- Derive each discovered dep as a standalone instance before the mutual block
           for dep in newDeps do
             -- Try to derive using derive_generator_multi for the discovered dep

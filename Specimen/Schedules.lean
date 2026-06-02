@@ -308,13 +308,22 @@ def rewriteMutualCalls (steps : List ScheduleStep) (siblings : List (Name × Lis
     - `inductiveName`: the inductive relation being called
     - `hypothesis`: the full hypothesis expression (indName + args)
     - `outputVarNames`: the variables being produced (determines output positions)
+    - `outputIndices`: positions in the hypothesis args that are outputs
     - `deriveSort`: what kind of derivation is needed (Generator, Enumerator, Checker) -/
 structure ScheduleDep where
   inductiveName : Name
   hypothesis : HypothesisExpr
   outputVarNames : List Name
+  outputIndices : List Nat
   deriveSort : DeriveSort
   deriving Repr, BEq
+
+/-- Computes output indices: which positions in hypArgs are output variables -/
+private def computeOutputIndices (hypArgs : List ConstructorExpr) (outputVarNames : List Name) : List Nat :=
+  filterMapWithIndex (fun i arg =>
+    match arg with
+    | .Unknown name => if name ∈ outputVarNames then some i else none
+    | _ => none) hypArgs
 
 /-- Extracts all `Source.NonRec` dependencies from schedule steps.
     Each dependency tells us what instance is needed: which inductive,
@@ -324,20 +333,24 @@ def collectNonRecDeps (steps : List ScheduleStep) : List ScheduleDep :=
     match step with
     | .SuchThat vs (.NonRec hyp) ps =>
       let ds := match ps with | .Generator => DeriveSort.Generator | .Enumerator => .Enumerator
+      let outNames := vs.map Prod.fst
       some { inductiveName := hyp.fst
              hypothesis := hyp
-             outputVarNames := vs.map Prod.fst
+             outputVarNames := outNames
+             outputIndices := computeOutputIndices hyp.snd outNames
              deriveSort := ds }
     | .Unconstrained v (.NonRec hyp) ps =>
       let ds := match ps with | .Generator => DeriveSort.Generator | .Enumerator => .Enumerator
       some { inductiveName := hyp.fst
              hypothesis := hyp
              outputVarNames := [v]
+             outputIndices := computeOutputIndices hyp.snd [v]
              deriveSort := ds }
     | .Check (.NonRec hyp) _ =>
       some { inductiveName := hyp.fst
              hypothesis := hyp
              outputVarNames := []
+             outputIndices := []
              deriveSort := .Checker }
     | _ => none
 
