@@ -772,7 +772,9 @@ def deriveConstrainedProducer
 def deriveConstrainedProducerParts
   (_args : Array Expr) (outputVars : Array Expr) (outputTypes : Array Expr)
   (constrainingInductive : Name) (inductiveLevels : List Level)
-  (constrArgs : Array Expr) (deriveSort : DeriveSort) :
+  (constrArgs : Array Expr) (deriveSort : DeriveSort)
+  (scheduleRewriter : List ScheduleStep → List ScheduleStep := id)
+  (recFnNameOverride : Option Name := none) :
   TermElabM (TSyntax `term × TSyntax `term × Array Name × TSyntaxArray `term × Array Expr × LocalContext × Name × List Level × ProducerSort) := do
   let producerSort := convertDeriveSortToProducerSort deriveSort
   let inductiveName := constrainingInductive
@@ -818,19 +820,21 @@ def deriveConstrainedProducerParts
       let freshFuelPrimeName := localCtx.getUnusedName `fuel'
       let freshSizePrimeName := localCtx.getUnusedName `size'
       let freshSize' := mkIdent freshSizePrimeName
-      let freshRecFnName := localCtx.getUnusedName (match deriveSort with
-        | .Generator => `aux_arb | .Enumerator => `aux_enum | _ => `aux_dec)
+      let freshRecFnName := recFnNameOverride.getD (localCtx.getUnusedName (match deriveSort with
+        | .Generator => `aux_arb | .Enumerator => `aux_enum | _ => `aux_dec))
       for ctorName in inductiveVal.ctors do
         let scheduleOption ← (UnifyM.runInMetaM
           (getProducerScheduleForInductiveConstructor inductiveName ctorName outputNamesTypesIndices
             freshenedInputNamesExcludingOutput freshUnknowns deriveSort localCtx freshRecFnName)
             emptyUnifyState)
         match scheduleOption with
-        | some schedule =>
+        | some (scheduleSteps, scheduleSort) =>
+          let rewrittenSteps := scheduleRewriter scheduleSteps
+          let schedule := (rewrittenSteps, scheduleSort)
           let (subProducer, _instances) ← StateT.run (s := #[]) (do
             let mexp ← MExp.scheduleToMExp schedule (.MId `size) (.MId `initSize) _outputType (fuelPrimeName := freshFuelPrimeName) (sizePrimeName := freshSizePrimeName)
             MExp.mexpToTSyntax mexp deriveSort)
-          let isRecursive ← isConstructorRecursive inductiveName ctorName
+          let isRecursive ← (isConstructorRecursive inductiveName ctorName) <||> pure (scheduleUsesMutualCall rewrittenSteps)
           if isRecursive then
             let subProducerTerm ← match producerSort with
               | .Generator => `( ($(mkIdent ``Nat.succ) $freshSize', $subProducer) )
@@ -1021,8 +1025,38 @@ def elabDeriveMutual : CommandElab := fun stx => do
   match stx with
   | `(derive_mutual $entries,*) => do
     withScope (fun scope => { scope with opts := scope.opts.set `specimen.multiOutput true }) do
+      -- Step 1: Parse all specs and collect metadata
+      let mut specInfos : Array (Name × List Nat × Name) := #[] -- (inductiveName, outputIdxs, auxFnName)
+      let mut specIdx := 0
       for entry in entries.getElems do
-        let typeClassInstance ← liftTermElabM <| deriveArbitrarySuchThatInstance entry
+        let info ← liftTermElabM do
+          let e ← elabTerm entry .none
+          peelExistentialsAux e #[] #[] fun _innerBody outVars _outTypes => do
+            lambdaTelescope e fun args body => do
+              peelExistentialsAux body #[] #[] fun innerBody outVars2 _outTypes2 => do
+                innerBody.withApp fun ind indArgs => do
+                  let indName := ind.constName!
+                  let outputFVars := outVars2.map Expr.fvarId!
+                  let mut outputIdxs : Array Nat := #[]
+                  for i in [:indArgs.size] do
+                    let arg := indArgs[i]!
+                    if arg.isFVar && outputFVars.contains arg.fvarId! then
+                      outputIdxs := outputIdxs.push i
+                  let auxName := Name.mkSimple s!"aux_mutual_{specIdx}"
+                  return (indName, outputIdxs.toList, auxName)
+        specInfos := specInfos.push info
+        specIdx := specIdx + 1
+
+      -- Step 2: Build sibling list for rewriting
+      let siblings := specInfos.toList
+
+      -- Step 3: Derive each spec with mutual rewriting
+      for entry in entries.getElems do
+        let rewriter := fun steps => rewriteMutualCalls steps siblings
+        let typeClassInstance ← liftTermElabM do
+          let e ← elabTerm entry .none
+          withParsedDerivingArgs e fun args outVars outTypes indName indLevels indArgs => do
+            deriveConstrainedProducer args outVars outTypes indName indLevels indArgs .Generator
         let genFormat ← liftCoreM (PrettyPrinter.ppCommand typeClassInstance)
         liftTermElabM $ Tactic.TryThis.addSuggestion stx
           (Format.pretty genFormat) (header := "Try this generator: ")
