@@ -1146,19 +1146,45 @@ def elabDeriveMutual : CommandElab := fun stx => do
               -- Check if instance exists via synthInstance
               let instanceExists ← liftTermElabM <| Meta.withNewMCtxDepth do
                 try
-                  let ty ← match d.kind with
-                    | .baseType =>
-                      let indType := Lean.mkConst d.inductiveName
-                      mkAppM ``Plausible.Arbitrary #[indType]
-                    | _ =>
-                      -- For relations, we can't easily construct the full type here
-                      -- Just report based on mutual block membership
-                      pure (Lean.mkConst ``True)
-                  if d.kind == .baseType then
+                  match d.kind with
+                  | .baseType =>
+                    -- For base types: try Arbitrary with the full hypothesis expression
+                    -- (includes type arguments if present in the schedule)
+                    let hypExpr := constructorExprToExpr
+                      (if d.hypothesis.snd.isEmpty then .Ctor d.inductiveName []
+                       else .Ctor d.inductiveName d.hypothesis.snd)
+                    let ty ← mkAppM ``Plausible.Arbitrary #[hypExpr]
                     let result ← Meta.synthInstance? ty
                     pure result.isSome
-                  else
-                    pure false
+                  | .relation =>
+                    -- For relations: check ArbitrarySizedSuchThat/EnumSizedSuchThat
+                    -- Construct the output product type and predicate from the inductive's type
+                    let indInfo ← getConstInfoInduct d.inductiveName
+                    let indTypeComponents ← getComponentsOfArrowType indInfo.type
+                    let argTypes := indTypeComponents.pop
+                    -- Build the output type (product of output-position types)
+                    let outputTypes := d.outputIndices.filterMap (fun i => argTypes[i]?)
+                    let rec mkProdType : List Expr → MetaM Expr
+                      | [] => throwError "no output types"
+                      | [t] => pure t
+                      | t :: ts => do let rest ← mkProdType ts; mkAppM ``Prod #[t, rest]
+                    let outType ← mkProdType outputTypes
+                    -- For the predicate, use a metavariable (we just need the type to match)
+                    let predType ← mkArrow outType (mkSort .zero)
+                    let pred ← Meta.mkFreshExprMVar (some predType)
+                    let tcName := match d.deriveSort with
+                      | .Generator => ``ArbitrarySizedSuchThat
+                      | .Enumerator => ``EnumSizedSuchThat
+                      | _ => ``ArbitrarySizedSuchThat
+                    let ty ← mkAppM tcName #[outType, pred]
+                    let result ← Meta.synthInstance? ty
+                    pure result.isSome
+                  | .checker =>
+                    -- For checkers: check DecOpt with metavar predicate
+                    let prop ← Meta.mkFreshExprMVar (some (mkSort .zero))
+                    let ty ← mkAppM ``DecOpt #[prop]
+                    let result ← Meta.synthInstance? ty
+                    pure result.isSome
                 catch _ => pure false
               if instanceExists then
                 depDescs := depDescs.push s!"  ✓ {desc}"
