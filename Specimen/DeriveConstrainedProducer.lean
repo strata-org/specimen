@@ -1130,10 +1130,13 @@ def elabDeriveMutual : CommandElab := fun stx => do
         -- Report discovered dependencies
         if !newDeps.isEmpty then
           let depDescs := newDeps.toList.map fun d =>
-            let sortStr := match d.deriveSort with
-              | .Generator => "generator" | .Enumerator => "enumerator"
-              | .Checker => "checker" | .Theorem => "theorem"
-            s!"{sortStr} {d.inductiveName} (output indices: {d.outputIndices})"
+            match d.kind with
+            | .baseType => s!"Arbitrary {d.inductiveName}"
+            | .relation =>
+              let sortStr := match d.deriveSort with
+                | .Generator => "generator" | .Enumerator => "enumerator" | _ => "producer"
+              s!"{sortStr} {d.inductiveName} (output indices: {d.outputIndices})"
+            | .checker => s!"checker (DecOpt) {d.inductiveName}"
           logInfo m!"derive_mutual: auto-discovered {newDeps.size} needed instances:\n  {String.intercalate "\n  " depDescs}\nPlease add these to derive_mutual or derive them separately."
           -- Derive each discovered dep as a standalone instance before the mutual block
           for dep in newDeps do

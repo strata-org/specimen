@@ -304,13 +304,26 @@ def rewriteMutualCalls (steps : List ScheduleStep) (siblings : List (Name × Lis
       | none => step
     | other => other
 
+/-- Whether a dependency is for a base type (needs Arbitrary/Enum) or a relation
+    (needs ArbitrarySizedSuchThat/EnumSizedSuchThat/DecOpt). -/
+inductive DepKind
+  /-- Unconstrained generation of a base type (needs `Arbitrary` or `Enum`) -/
+  | baseType
+  /-- Constrained generation from a relation (needs `ArbitrarySizedSuchThat` or `EnumSizedSuchThat`) -/
+  | relation
+  /-- Checking a relation (needs `DecOpt`) -/
+  | checker
+  deriving Repr, BEq
+
 /-- A dependency extracted from a schedule: what instance is needed.
-    - `inductiveName`: the inductive relation being called
+    - `kind`: whether this is a base type, constrained relation, or checker
+    - `inductiveName`: the type/relation being referenced
     - `hypothesis`: the full hypothesis expression (indName + args)
     - `outputVarNames`: the variables being produced (determines output positions)
     - `outputIndices`: positions in the hypothesis args that are outputs
-    - `deriveSort`: what kind of derivation is needed (Generator, Enumerator, Checker) -/
+    - `deriveSort`: the producer sort context (Generator or Enumerator) -/
 structure ScheduleDep where
+  kind : DepKind
   inductiveName : Name
   hypothesis : HypothesisExpr
   outputVarNames : List Name
@@ -334,20 +347,23 @@ def collectNonRecDeps (steps : List ScheduleStep) : List ScheduleDep :=
     | .SuchThat vs (.NonRec hyp) ps =>
       let ds := match ps with | .Generator => DeriveSort.Generator | .Enumerator => .Enumerator
       let outNames := vs.map Prod.fst
-      some { inductiveName := hyp.fst
+      some { kind := .relation
+             inductiveName := hyp.fst
              hypothesis := hyp
              outputVarNames := outNames
              outputIndices := computeOutputIndices hyp.snd outNames
              deriveSort := ds }
     | .Unconstrained v (.NonRec hyp) ps =>
       let ds := match ps with | .Generator => DeriveSort.Generator | .Enumerator => .Enumerator
-      some { inductiveName := hyp.fst
+      some { kind := .baseType
+             inductiveName := hyp.fst
              hypothesis := hyp
              outputVarNames := [v]
              outputIndices := computeOutputIndices hyp.snd [v]
              deriveSort := ds }
     | .Check (.NonRec hyp) _ =>
-      some { inductiveName := hyp.fst
+      some { kind := .checker
+             inductiveName := hyp.fst
              hypothesis := hyp
              outputVarNames := []
              outputIndices := []
