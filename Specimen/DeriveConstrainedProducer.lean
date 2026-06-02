@@ -1025,38 +1025,44 @@ def elabDeriveMutual : CommandElab := fun stx => do
   match stx with
   | `(derive_mutual $entries,*) => do
     withScope (fun scope => { scope with opts := scope.opts.set `specimen.multiOutput true }) do
-      -- Step 1: Parse all specs and collect metadata
-      let mut specInfos : Array (Name × List Nat × Name) := #[] -- (inductiveName, outputIdxs, auxFnName)
-      let mut specIdx := 0
-      for entry in entries.getElems do
-        let info ← liftTermElabM do
+      let specEntries := entries.getElems
+
+      -- Step 1: Parse all specs to get (inductiveName, outputIdxs) and assign global def names
+      let mut specMeta : Array (Name × List Nat × Name) := #[]
+      for i in [:specEntries.size] do
+        let entry := specEntries[i]!
+        let (indName, outIdxs) ← liftTermElabM do
           let e ← elabTerm entry .none
-          peelExistentialsAux e #[] #[] fun _innerBody outVars _outTypes => do
-            lambdaTelescope e fun args body => do
-              peelExistentialsAux body #[] #[] fun innerBody outVars2 _outTypes2 => do
-                innerBody.withApp fun ind indArgs => do
-                  let indName := ind.constName!
-                  let outputFVars := outVars2.map Expr.fvarId!
-                  let mut outputIdxs : Array Nat := #[]
-                  for i in [:indArgs.size] do
-                    let arg := indArgs[i]!
-                    if arg.isFVar && outputFVars.contains arg.fvarId! then
-                      outputIdxs := outputIdxs.push i
-                  let auxName := Name.mkSimple s!"aux_mutual_{specIdx}"
-                  return (indName, outputIdxs.toList, auxName)
-        specInfos := specInfos.push info
-        specIdx := specIdx + 1
+          lambdaTelescope e fun _args body => do
+            peelExistentialsAux body #[] #[] fun innerBody outVars _outTypes => do
+              innerBody.withApp fun ind indArgs => do
+                if !ind.isConst then throwError "Expected constant in derive_mutual spec"
+                let indName := ind.constName!
+                let outputFVars := outVars.map Expr.fvarId!
+                let mut idxs : Array Nat := #[]
+                for j in [:indArgs.size] do
+                  if indArgs[j]!.isFVar && outputFVars.contains indArgs[j]!.fvarId! then
+                    idxs := idxs.push j
+                return (indName, idxs.toList)
+        let globalName := Name.mkSimple s!"specimen_mutual_{indName.toString.replace "." "_"}_{i}"
+        specMeta := specMeta.push (indName, outIdxs, globalName)
 
-      -- Step 2: Build sibling list for rewriting
-      let siblings := specInfos.toList
+      let siblings := specMeta.toList
 
-      -- Step 3: Derive each spec with mutual rewriting
-      for entry in entries.getElems do
+      -- Step 2: Derive each spec with schedule rewriting (Source.NonRec → Source.MutRec for siblings)
+      -- and with recFnNameOverride set to the global name
+      for i in [:specEntries.size] do
+        let entry := specEntries[i]!
+        let (_, _, globalName) := specMeta[i]!
         let rewriter := fun steps => rewriteMutualCalls steps siblings
         let typeClassInstance ← liftTermElabM do
           let e ← elabTerm entry .none
           withParsedDerivingArgs e fun args outVars outTypes indName indLevels indArgs => do
-            deriveConstrainedProducer args outVars outTypes indName indLevels indArgs .Generator
+            let parts ← deriveConstrainedProducerParts args outVars outTypes indName indLevels indArgs .Generator rewriter globalName
+            let (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, outputTypes, localCtx, _, inductiveLevels, producerSort) := parts
+            mkConstrainedProducerTypeClassInstance baseProducers inductiveProducers
+              indName inductiveLevels freshArgIdents freshenedOutputNames
+              outputTypes producerSort localCtx
         let genFormat ← liftCoreM (PrettyPrinter.ppCommand typeClassInstance)
         liftTermElabM $ Tactic.TryThis.addSuggestion stx
           (Format.pretty genFormat) (header := "Try this generator: ")
