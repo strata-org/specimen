@@ -36,3 +36,16 @@ derive_mutual
   let sample ← Gen.run
     (ArbitrarySizedSuchThat.arbitrarySizedST (fun (p : List type × term × type) => typing p.1 p.2.1 p.2.2) 3) 10
   return repr sample
+
+/-! ## Dependency discovery example
+
+    With `specimen.autoDeriveDeps true`, derive_mutual discovers that typing
+    depends on lookup instances even when they're not explicitly listed.
+    Currently reports what's needed; full auto-derivation is WIP. -/
+
+-- With autoDeriveDeps, derive_mutual discovers missing lookup/typing deps
+#guard_msgs(drop info, drop warning) in
+set_option specimen.autoDeriveDeps true in
+derive_mutual
+  (∃ (Γ : List type) (e : term) (τ : type), typing Γ e τ),
+  (fun τ => ∃ (Γ : List type) (e : term), typing Γ e τ)
