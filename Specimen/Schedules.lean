@@ -304,6 +304,43 @@ def rewriteMutualCalls (steps : List ScheduleStep) (siblings : List (Name × Lis
       | none => step
     | other => other
 
+/-- A dependency extracted from a schedule: what instance is needed.
+    - `inductiveName`: the inductive relation being called
+    - `hypothesis`: the full hypothesis expression (indName + args)
+    - `outputVarNames`: the variables being produced (determines output positions)
+    - `deriveSort`: what kind of derivation is needed (Generator, Enumerator, Checker) -/
+structure ScheduleDep where
+  inductiveName : Name
+  hypothesis : HypothesisExpr
+  outputVarNames : List Name
+  deriveSort : DeriveSort
+  deriving Repr, BEq
+
+/-- Extracts all `Source.NonRec` dependencies from schedule steps.
+    Each dependency tells us what instance is needed: which inductive,
+    which argument positions are outputs, and what derive sort. -/
+def collectNonRecDeps (steps : List ScheduleStep) : List ScheduleDep :=
+  steps.filterMap fun step =>
+    match step with
+    | .SuchThat vs (.NonRec hyp) ps =>
+      let ds := match ps with | .Generator => DeriveSort.Generator | .Enumerator => .Enumerator
+      some { inductiveName := hyp.fst
+             hypothesis := hyp
+             outputVarNames := vs.map Prod.fst
+             deriveSort := ds }
+    | .Unconstrained v (.NonRec hyp) ps =>
+      let ds := match ps with | .Generator => DeriveSort.Generator | .Enumerator => .Enumerator
+      some { inductiveName := hyp.fst
+             hypothesis := hyp
+             outputVarNames := [v]
+             deriveSort := ds }
+    | .Check (.NonRec hyp) _ =>
+      some { inductiveName := hyp.fst
+             hypothesis := hyp
+             outputVarNames := []
+             deriveSort := .Checker }
+    | _ => none
+
 /-- Checks if any step in a schedule uses `Source.MutRec`. -/
 def scheduleUsesMutualCall (steps : List ScheduleStep) : Bool :=
   steps.any fun step =>
