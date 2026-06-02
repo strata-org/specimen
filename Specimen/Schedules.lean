@@ -28,6 +28,7 @@ local instance [Ord α][Ord β]: Ord (α × β) := lexOrd
 inductive Source
   | NonRec : HypothesisExpr → Source
   | Rec : Name → List ConstructorExpr → Source
+  | MutRec : Name → List ConstructorExpr → Source
   deriving Repr, BEq
 
 /-- Producers are either enumerators or generators -/
@@ -92,6 +93,7 @@ inductive ScheduleStep
 /-- Stringifier for `Source` -/
 def sourceToString source := match source with
   | Source.Rec name ctrArgs => s!"{ToExpr.toExpr (name,ctrArgs)}"
+  | Source.MutRec name ctrArgs => s!"mut:{ToExpr.toExpr (name,ctrArgs)}"
   | Source.NonRec hyp => s!"{ToExpr.toExpr hyp}"
 
 def patternToString pat := s!"{ToExpr.toExpr $ constructorExprOfPattern pat}"
@@ -225,6 +227,9 @@ def updateSource (k : UnknownMap) (src : Source) : UnifyM Source := do
   | .Rec r tys => do
     let updatedTys ← List.mapM (UnifyM.updateConstructorArg k) tys
     return .Rec r updatedTys
+  | .MutRec r tys => do
+    let updatedTys ← List.mapM (UnifyM.updateConstructorArg k) tys
+    return .MutRec r updatedTys
 
 /-- Updates a list of `ScheduleSteps` with the result of unification -/
 def updateScheduleSteps (scheduleSteps : List ScheduleStep) : UnifyM (List ScheduleStep) := do

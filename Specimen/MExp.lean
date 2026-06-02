@@ -423,7 +423,7 @@ def scheduleStepToMExp (step : ScheduleStep) (defFuel : MExp) (k : MExp) (output
       let tyExpr := ToExpr.toExpr hyp
       let producer ← unconstrainedProducer prodSort ty
       pure $ .MBind monadSort producer [⟨v,tyExpr⟩] k
-    | Source.Rec f args =>
+    | Source.Rec f args | Source.MutRec f args =>
       pure $ .MBind monadSort (recCall f fuelPrimeName sizePrimeName args) [⟨v, outputType⟩] k
 
   | .SuchThat varsTys prod ps => do
@@ -433,7 +433,7 @@ def scheduleStepToMExp (step : ScheduleStep) (defFuel : MExp) (k : MExp) (output
     | Source.NonRec hypExpr => do
       let producer ← constrainedProducer ps varsTys (hypothesisExprToMExp hypExpr) defFuel
       pure $ .MBind monadSort producer typedVars k
-    | Source.Rec f args =>
+    | Source.Rec f args | Source.MutRec f args =>
       pure $ .MBind monadSort (recCall f fuelPrimeName sizePrimeName args) typedVars k
   | .Check src _ =>
 
@@ -442,7 +442,7 @@ def scheduleStepToMExp (step : ScheduleStep) (defFuel : MExp) (k : MExp) (output
       match src with
       | Source.NonRec hypExpr =>
         decOptChecker (hypothesisExprToMExp hypExpr) defFuel
-      | Source.Rec f args =>
+      | Source.Rec f args | Source.MutRec f args =>
         recCall f fuelPrimeName sizePrimeName args
 
     -- TODO: handle checking hypotheses w/ negative polarity (currently not handled)
