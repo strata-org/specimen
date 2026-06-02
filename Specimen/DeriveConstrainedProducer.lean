@@ -794,9 +794,6 @@ def collectSpecDependencies
         outputVars[outIdx]!.fvarId!.getUserName
       else throwError m!"{ident} is expected to be a variable.")
   let argNamesTypes := argNames.zip argTypes
-  let outputNamesTypesIndices : List (Name × Expr × Nat) :=
-    (List.range outputIdxs.size).map (fun i =>
-      ((argNames[outputIdxs[i]!]!), outputTypes[i]!, outputIdxs[i]!))
   withLocalDeclsDND argNamesTypes (fun _ => do
     let mut localCtx ← getLCtx
     let mut freshUnknowns := #[]
@@ -807,6 +804,9 @@ def collectSpecDependencies
     let freshenedOutputNames := outputIdxs.map (fun idx => freshUnknowns[idx]!)
     let freshenedInputNamesExcludingOutput := freshUnknowns.toList.filter
       (fun n => freshenedOutputNames.toList.all (· != n))
+    let outputNamesTypesIndices : List (Name × Expr × Nat) :=
+      (List.range outputIdxs.size).map (fun i =>
+        (freshenedOutputNames[i]!, outputTypes[i]!, outputIdxs[i]!))
     let freshRecFnName := recFnNameOverride.getD (localCtx.getUnusedName `aux_arb)
     let mut allDeps : Array ScheduleDep := #[]
     for ctorName in inductiveVal.ctors do
@@ -1107,6 +1107,43 @@ def elabDeriveMutual : CommandElab := fun stx => do
                 return (indName, idxs.toList)
         let globalName := Name.mkSimple s!"specimen_mutual_{indName.toString.replace "." "_"}_{i}"
         specMeta := specMeta.push (indName, outIdxs, globalName)
+
+      -- Auto-derive: discover missing dependencies and add them to the mutual block
+      let autoDerive := Lean.Option.get (← getOptions) specimen.autoDeriveDeps
+      if autoDerive then
+        -- Collect dependencies for all current specs
+        let mut newDeps : Array ScheduleDep := #[]
+        for entry in specEntries do
+          let deps ← liftTermElabM do
+            let e ← elabTerm entry .none
+            withParsedDerivingArgs e fun args outVars outTypes indName indLevels indArgs =>
+              collectSpecDependencies args outVars outTypes indName indLevels indArgs .Generator
+          for dep in deps do
+            -- Check if this dep is already in our spec list (by indName + output count)
+            let alreadyCovered := specMeta.any fun (sIndName, sOutIdxs, _) =>
+              sIndName == dep.inductiveName && sOutIdxs.length == dep.outputVarNames.length
+            if !alreadyCovered then
+              if !newDeps.contains dep then
+                newDeps := newDeps.push dep
+        -- Report discovered dependencies
+        if !newDeps.isEmpty then
+          let depDescs := newDeps.toList.map fun d =>
+            s!"{d.inductiveName} (outputs: {d.outputVarNames}, sort: {repr d.deriveSort})"
+          logInfo m!"derive_mutual: auto-discovered {newDeps.size} dependencies:\n{String.intercalate "\n  " depDescs}\nDeriving them before the mutual block..."
+          -- Derive each discovered dep as a standalone instance before the mutual block
+          for dep in newDeps do
+            -- Try to derive using derive_generator_multi for the discovered dep
+            -- We derive it as: (fun inputs... => ∃ outputs..., IndName args...)
+            -- For now, just use the existing single-spec derivation
+            try
+              let depInstance ← liftTermElabM do
+                let indInfo ← getConstInfoInduct dep.inductiveName
+                -- Simple case: derive with multiOutput for this inductive
+                -- TODO: construct proper spec term from ScheduleDep
+                throwError m!"Auto-derive for {dep.inductiveName} not yet fully implemented. Please add to derive_mutual:\n  Needed: {dep.inductiveName} with {dep.outputVarNames.length} outputs"
+              elabCommand depInstance
+            catch e =>
+              logWarning m!"Could not auto-derive dependency: {e.toMessageData}"
 
       let siblings := specMeta.toList
 
