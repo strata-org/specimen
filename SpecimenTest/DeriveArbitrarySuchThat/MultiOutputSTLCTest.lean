@@ -44,7 +44,7 @@ derive_mutual
     Currently reports what's needed; full auto-derivation is WIP. -/
 
 -- With autoDeriveDeps, derive_mutual discovers missing lookup/typing deps
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop warning) in
 set_option specimen.autoDeriveDeps true in
 derive_mutual
   (∃ (Γ : List type) (e : term) (τ : type), typing Γ e τ),
