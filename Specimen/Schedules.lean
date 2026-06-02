@@ -269,31 +269,40 @@ def addConclusionPatternsAndEqualitiesToSchedule (patterns : List (Unknown × Pa
   (matchSteps ++ equalityCheckSteps ++ existingScheduleSteps, scheduleSort)
 
 /-- Rewrites `Source.NonRec` calls in schedule steps to `Source.MutRec` when the hypothesis
-    matches a sibling spec. Used as a post-pass after all schedules are derived.
+    matches a sibling spec exactly (same inductive name AND same number of output variables).
     `siblings` is `(inductiveName, outputIndices, auxFnName)`. -/
 def rewriteMutualCalls (steps : List ScheduleStep) (siblings : List (Name × List Nat × Name)) : List ScheduleStep :=
-  let matchesSibling (hyp : HypothesisExpr) : Option (Name × List Nat) :=
+  let matchesSibling (hyp : HypothesisExpr) (numOutputs : Nat) : Option (Name × List Nat) :=
     let (hypName, hypArgs) := hyp
+    let numInputs := hypArgs.length - numOutputs
     siblings.findSome? fun (indName, outputIdxs, auxName) =>
-      if hypName == indName && outputIdxs.length + (hypArgs.length - outputIdxs.length) == hypArgs.length then
+      if hypName == indName && outputIdxs.length == numOutputs && (hypArgs.length - outputIdxs.length) == numInputs then
         some (auxName, outputIdxs)
       else none
-  let rewriteSource (src : Source) : Source :=
-    match src with
-    | .NonRec hyp =>
-      match matchesSibling hyp with
+  steps.map fun step =>
+    match step with
+    | .SuchThat vs (.NonRec hyp) ps =>
+      match matchesSibling hyp vs.length with
       | some (auxName, outputIdxs) =>
         let (_, hypArgs) := hyp
         let inputArgs := filterWithIndex (fun i _ => i ∉ outputIdxs) hypArgs
-        .MutRec auxName inputArgs
-      | none => src
+        .SuchThat vs (.MutRec auxName inputArgs) ps
+      | none => step
+    | .Unconstrained v (.NonRec hyp) ps =>
+      match matchesSibling hyp 1 with
+      | some (auxName, outputIdxs) =>
+        let (_, hypArgs) := hyp
+        let inputArgs := filterWithIndex (fun i _ => i ∉ outputIdxs) hypArgs
+        .Unconstrained v (.MutRec auxName inputArgs) ps
+      | none => step
+    | .Check (.NonRec hyp) pol =>
+      match matchesSibling hyp 0 with
+      | some (auxName, outputIdxs) =>
+        let (_, hypArgs) := hyp
+        let inputArgs := filterWithIndex (fun i _ => i ∉ outputIdxs) hypArgs
+        .Check (.MutRec auxName inputArgs) pol
+      | none => step
     | other => other
-  steps.map fun step =>
-    match step with
-    | .Unconstrained v src ps => .Unconstrained v (rewriteSource src) ps
-    | .SuchThat vs src ps => .SuchThat vs (rewriteSource src) ps
-    | .Check src pol => .Check (rewriteSource src) pol
-    | .Match e v p => .Match e v p
 
 /-- Checks if any step in a schedule uses `Source.MutRec`. -/
 def scheduleUsesMutualCall (steps : List ScheduleStep) : Bool :=

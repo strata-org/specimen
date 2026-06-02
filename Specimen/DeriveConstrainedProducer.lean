@@ -1049,32 +1049,35 @@ def elabDeriveMutual : CommandElab := fun stx => do
 
       let siblings := specMeta.toList
 
-      -- Step 2: Derive each spec, collecting the instance command.
-      -- The recFnNameOverride ensures self-recursive calls use the global name.
-      -- The scheduleRewriter rewrites sibling calls to Source.MutRec (→ global sibling name).
-      let mut instanceCmds : Array (TSyntax `command) := #[]
+      -- Step 2: Derive each spec, collecting (def, instance) pairs.
+      -- Uses mkConstrainedProducerMutualPieces which emits a standalone `def` + thin `instance`.
+      let mut defCmds : Array (TSyntax `command) := #[]
+      let mut instCmds : Array (TSyntax `command) := #[]
       for i in [:specEntries.size] do
         let entry := specEntries[i]!
         let (_, _, globalName) := specMeta[i]!
         let rewriter := fun steps => rewriteMutualCalls steps siblings
-        let cmd ← liftTermElabM do
+        let (defCmd, instCmd) ← liftTermElabM do
           let e ← elabTerm entry .none
           withParsedDerivingArgs e fun args outVars outTypes indName indLevels indArgs => do
             let parts ← deriveConstrainedProducerParts args outVars outTypes indName indLevels indArgs .Generator rewriter globalName
             let (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, outputTypes, localCtx, _, inductiveLevels, producerSort) := parts
-            mkConstrainedProducerTypeClassInstance baseProducers inductiveProducers
+            mkConstrainedProducerMutualPieces baseProducers inductiveProducers
               indName inductiveLevels freshArgIdents freshenedOutputNames
-              outputTypes producerSort localCtx
-        instanceCmds := instanceCmds.push cmd
+              outputTypes producerSort localCtx globalName
+        defCmds := defCmds.push defCmd
+        instCmds := instCmds.push instCmd
 
-      -- Step 3: Emit all instances. Since each uses `let rec globalName ...` internally,
-      -- and sibling calls reference other global names, we wrap in a mutual block
-      -- so all names are in scope.
-      -- TODO: For now emit sequentially (works when ordering breaks the cycle).
-      -- True mutual requires emitting `mutual def ... end` block.
-      for cmd in instanceCmds do
-        let genFormat ← liftCoreM (PrettyPrinter.ppCommand cmd)
+      -- Step 3: Emit a `mutual ... end` block with all defs, then instances
+      let mutualCmd ← `(command| mutual $defCmds* end)
+      let mutualFormat ← liftCoreM (PrettyPrinter.ppCommand mutualCmd)
+      liftTermElabM $ Tactic.TryThis.addSuggestion stx
+        (Format.pretty mutualFormat) (header := "Mutual block: ")
+      elabCommand mutualCmd
+
+      for instCmd in instCmds do
+        let genFormat ← liftCoreM (PrettyPrinter.ppCommand instCmd)
         liftTermElabM $ Tactic.TryThis.addSuggestion stx
-          (Format.pretty genFormat) (header := "Try this generator: ")
-        elabCommand cmd
+          (Format.pretty genFormat) (header := "Try this instance: ")
+        elabCommand instCmd
   | _ => throwUnsupportedSyntax
