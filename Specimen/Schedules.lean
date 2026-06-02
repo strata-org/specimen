@@ -268,4 +268,40 @@ def addConclusionPatternsAndEqualitiesToSchedule (patterns : List (Unknown × Pa
   let equalityCheckSteps := (fun (u1, u2) => ScheduleStep.Check (Source.NonRec (``Eq, [.Unknown u1, .Unknown u2])) true) <$> equalities.toList
   (matchSteps ++ equalityCheckSteps ++ existingScheduleSteps, scheduleSort)
 
+/-- Rewrites `Source.NonRec` calls in schedule steps to `Source.MutRec` when the hypothesis
+    matches a sibling spec. Used as a post-pass after all schedules are derived.
+    `siblings` is `(inductiveName, outputIndices, auxFnName)`. -/
+def rewriteMutualCalls (steps : List ScheduleStep) (siblings : List (Name × List Nat × Name)) : List ScheduleStep :=
+  let matchesSibling (hyp : HypothesisExpr) : Option (Name × List Nat) :=
+    let (hypName, hypArgs) := hyp
+    siblings.findSome? fun (indName, outputIdxs, auxName) =>
+      if hypName == indName && outputIdxs.length + (hypArgs.length - outputIdxs.length) == hypArgs.length then
+        some (auxName, outputIdxs)
+      else none
+  let rewriteSource (src : Source) : Source :=
+    match src with
+    | .NonRec hyp =>
+      match matchesSibling hyp with
+      | some (auxName, outputIdxs) =>
+        let (_, hypArgs) := hyp
+        let inputArgs := filterWithIndex (fun i _ => i ∉ outputIdxs) hypArgs
+        .MutRec auxName inputArgs
+      | none => src
+    | other => other
+  steps.map fun step =>
+    match step with
+    | .Unconstrained v src ps => .Unconstrained v (rewriteSource src) ps
+    | .SuchThat vs src ps => .SuchThat vs (rewriteSource src) ps
+    | .Check src pol => .Check (rewriteSource src) pol
+    | .Match e v p => .Match e v p
+
+/-- Checks if any step in a schedule uses `Source.MutRec`. -/
+def scheduleUsesMutualCall (steps : List ScheduleStep) : Bool :=
+  steps.any fun step =>
+    match step with
+    | .Unconstrained _ (.MutRec ..) _ => true
+    | .SuchThat _ (.MutRec ..) _ => true
+    | .Check (.MutRec ..) _ => true
+    | _ => false
+
 end Schedules

@@ -1195,22 +1195,6 @@ def defaultRecFnName (deriveSort : DeriveSort) : Name :=
   | .Enumerator => `aux_enum
   | .Checker | .Theorem => `aux_dec
 
-/-- Checks if a hypothesis matches any mutual sibling spec (exact inductive + output positions + compatible sort). -/
-private def findMutualSibling (binding : List Name) (typeVars : List Name) (hyp : HypothesisExpr)
-    (currentSort : DeriveSort) (siblings : List (Name × List Nat × Name × DeriveSort)) : MetaM (Option (Name × List Nat)) := do
-  for (indName, outputIdxs, auxName, siblingSort) in siblings do
-    let compatible := match currentSort, siblingSort with
-      | .Generator, .Generator => true
-      | .Enumerator, .Enumerator => true
-      | .Checker, .Enumerator => true
-      | .Enumerator, .Checker => true
-      | .Checker, .Checker => true
-      | _, _ => false
-    if compatible then
-      if ← isRecCall binding typeVars hyp (indName, outputIdxs) then
-        return some (auxName, outputIdxs)
-  return none
-
 private def preScheduleStepToScheduleStep (ctorName : Name) (preStep : PreScheduleStep HypothesisExpr TypedVar) : ScheduleM (List ScheduleStep) := do
   let env ← read
   match preStep with
@@ -1238,12 +1222,7 @@ private def preScheduleStepToScheduleStep (ctorName : Name) (preStep : PreSchedu
         let inputArgs := filterWithIndex (fun i _ => i ∉ (Prod.snd env.recCall)) hypArgs
         pure (Source.Rec env.recFnName inputArgs)
       else
-        match ← findMutualSibling (outs.map (fun x => x.var)) typedVars hyp env.deriveSort env.mutualSiblings with
-        | some (siblingAuxName, siblingOutputIdxs) =>
-          let inputArgs := filterWithIndex (fun i _ => i ∉ siblingOutputIdxs) hypArgs
-          pure (Source.MutRec siblingAuxName inputArgs)
-        | none =>
-          pure (Source.NonRec hyp')
+        pure (Source.NonRec hyp')
     return (ScheduleStep.SuchThat typedOutputs constrainingRelation env.prodSort :: newMatches)
   | .InstVars vars =>
     vars.mapM (fun ⟨v,ty⟩ => do
@@ -1328,12 +1307,12 @@ private def hypothesisToVarExpr (hyp : HypothesisExpr) : List (SearchTree.VarExp
       | _ => SearchTree.VarExpr.Ctor vars
 
 private def possiblePreSchedulesWithAdvancedPruning (vars : List TypedVar) (hypotheses : List HypothesisExpr) (deriveSort : DeriveSort)
-  (recCall : Name × List Nat) (fixedVars : List Name) (recFnName : Name := defaultRecFnName deriveSort) (multiOutput : Bool := false) (mutualSiblings : List (Name × List Nat × Name × DeriveSort) := []) : LazyList ((List (PreScheduleStep HypothesisExpr TypedVar))) × ScheduleEnv :=
+  (recCall : Name × List Nat) (fixedVars : List Name) (recFnName : Name := defaultRecFnName deriveSort) (multiOutput : Bool := false) : LazyList ((List (PreScheduleStep HypothesisExpr TypedVar))) × ScheduleEnv :=
   let typeVars := vars.filterMap fun ⟨v,t⟩ => if t.isSort then some v else none
   let sortedHypotheses := mkSortedHypothesesVariablesMap hypotheses
   let varNames := vars.map (fun x => x.var)
   let prodSort := convertDeriveSortToProducerSort deriveSort
-  let scheduleEnv := ⟨ vars, sortedHypotheses, deriveSort, prodSort, recCall, fixedVars, recFnName, multiOutput, mutualSiblings ⟩
+  let scheduleEnv := ⟨ vars, sortedHypotheses, deriveSort, prodSort, recCall, fixedVars, recFnName, multiOutput, [] ⟩
   let remainingVars := List.filter (fun v => not <| fixedVars.contains v) varNames
   let (newCheckedIdxs, newCheckedHyps) := List.unzip <| (collectCheckedHypotheses scheduleEnv fixedVars [])
   let remainingSortedHypotheses := filterWithIndex (fun i _ => i ∉ newCheckedIdxs) sortedHypotheses
@@ -1361,8 +1340,8 @@ private def possiblePreSchedulesWithAdvancedPruning (vars : List TypedVar) (hypo
     - `recCall`: A pair contianing the name of the inductive relation and a list of indices for output arguments
     - `fixedVars`: A list of fixed variables (i.e. inputs to the inductive relation) -/
 def possibleSchedules (ctorName : Name) (vars : List TypedVar) (hypotheses : List HypothesisExpr) (deriveSort : DeriveSort)
-  (recCall : Name × List Nat) (fixedVars : List Name) (recFnName : Name := defaultRecFnName deriveSort) (multiOutput : Bool := false) (mutualSiblings : List (Name × List Nat × Name × DeriveSort) := []) : LazyList (MetaM (List ScheduleStep × Nat)) := do
-  let (typedPreSchedules, scheduleEnv) := possiblePreSchedulesWithAdvancedPruning vars hypotheses deriveSort recCall fixedVars recFnName multiOutput mutualSiblings
+  (recCall : Name × List Nat) (fixedVars : List Name) (recFnName : Name := defaultRecFnName deriveSort) (multiOutput : Bool := false) : LazyList (MetaM (List ScheduleStep × Nat)) := do
+  let (typedPreSchedules, scheduleEnv) := possiblePreSchedulesWithAdvancedPruning vars hypotheses deriveSort recCall fixedVars recFnName multiOutput
   let prunedImprovingTypedPreSchedules := filterWorse typedPreSchedules preScheduleStepsScore
   let lazySchedules := prunedImprovingTypedPreSchedules.mapLazyList
     ((ReaderT.run . scheduleEnv) ∘ (fun (s,c) => return (← s.flatMapM <| preScheduleStepToScheduleStep ctorName, c)))
