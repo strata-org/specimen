@@ -15,6 +15,12 @@ register_option specimen.multiOutput : Bool := {
   descr := "allow multi-output production steps in derived generators"
 }
 
+/-- Fuel for derived generators (termination device). High values are fine; only decrease for testing. -/
+register_option specimen.fuel : Nat := {
+  defValue := 10000
+  descr := "fuel (termination budget) for derived generators/enumerators/checkers"
+}
+
 /-- Global flag for enabling/diabling debug messages -/
 def globalDebugFlag : Bool := false
 

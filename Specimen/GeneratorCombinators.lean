@@ -2,6 +2,11 @@ import Plausible.Gen
 import Plausible.ArbitraryFueled
 open Plausible
 
+namespace Gen
+/-- Error thrown when a derived generator runs out of fuel (should not happen in practice) -/
+def outOfFuelError : GenError := .genError "Specimen: out of fuel (termination limit reached)"
+end Gen
+
 namespace GeneratorCombinators
 
 /-- `pick default xs n` chooses a weight & a generator `(k, gen)` from the list `xs` such that `n < k`.

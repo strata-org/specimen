@@ -7,6 +7,7 @@ import Specimen.TSyntaxCombinators
 import Specimen.Idents
 import Specimen.Utils
 import Specimen.Schedules
+import Specimen.Debug
 
 
 open Lean Elab Command Meta Term Parser Std
@@ -85,31 +86,39 @@ def mkConstrainedProducerTypeClassInstance
   (targetTypes : Array Expr)
   (producerSort : ProducerSort)
   (topLevelLocalCtx : LocalContext) : TermElabM (TSyntax `command) := do
-    -- Produce a fresh name for the `size` argument for the lambda
-    -- at the end of the generator function, as well as the `aux_arb` inner helper function
+    -- Produce fresh names for function parameters
     let freshSizeIdent := mkFreshAccessibleIdent topLevelLocalCtx `size
     let freshSize' := mkFreshAccessibleIdent topLevelLocalCtx `size'
+    let freshFuel' := mkFreshAccessibleIdent topLevelLocalCtx `fuel'
 
     -- The (backtracking) combinator to be invoked
-    -- (`GeneratorCombinators.backtrack` for generators, `EnumeratorCombinators.enumerate` for enumerators)
     let combinatorFn :=
       match producerSort with
       | .Generator => genBacktrackFn
       | .Enumerator => enumerateFn
 
-    -- Create the cases for the pattern-match on the size argument
-    let mut caseExprs := #[]
+    -- Create the inner match on size (base vs recursive constructors)
+    let mut sizeCaseExprs := #[]
     let zeroCase ← `(Term.matchAltExpr| | $(mkIdent ``Nat.zero) => $combinatorFn $baseGenerators)
-    caseExprs := caseExprs.push zeroCase
+    sizeCaseExprs := sizeCaseExprs.push zeroCase
 
     let succCase ← `(Term.matchAltExpr| | $(mkIdent ``Nat.succ) $freshSize' => $combinatorFn $inductiveGenerators)
-    caseExprs := caseExprs.push succCase
+    sizeCaseExprs := sizeCaseExprs.push succCase
 
-    -- Create function arguments for the producer's `size` & `initSize` parameters
-    -- (former is the generator size, latter is the size argument with which to invoke other auxiliary producers/checkers)
+    let sizeMatchExpr ← mkMatchExpr sizeIdent sizeCaseExprs
+
+    -- Wrap with outer fuel match for termination
+    let mut fuelCaseExprs := #[]
+    let fuelZeroCase ← `(Term.matchAltExpr| | $(mkIdent ``Nat.zero) => $failFn $outOfFuelError)
+    fuelCaseExprs := fuelCaseExprs.push fuelZeroCase
+    let fuelSuccCase ← `(Term.matchAltExpr| | $(mkIdent ``Nat.succ) $freshFuel' => $sizeMatchExpr)
+    fuelCaseExprs := fuelCaseExprs.push fuelSuccCase
+    let matchExpr ← mkMatchExpr fuelIdent fuelCaseExprs
+
+    -- Create function arguments for the producer's `fuel`, `initSize` & `size` parameters
+    let fuelParam ← `(Term.letIdBinder| ($fuelIdent : $natIdent))
     let initSizeParam ← `(Term.letIdBinder| ($initSizeIdent : $natIdent))
     let sizeParam ← `(Term.letIdBinder| ($sizeIdent : $natIdent))
-    let matchExpr ← mkMatchExpr sizeIdent caseExprs
 
     -- Add parameters for each argument to the inductive relation
     -- (except the target variables, which we'll filter out later)
@@ -119,6 +128,7 @@ def mkConstrainedProducerTypeClassInstance
 
     -- Inner params are for the inner `aux_arb` / `aux_enum` function
     let mut innerParams := #[]
+    innerParams := innerParams.push fuelParam
     innerParams := innerParams.push initSizeParam
     innerParams := innerParams.push sizeParam
 
@@ -201,8 +211,10 @@ def mkConstrainedProducerTypeClassInstance
     let arbitraryTypeParamInstances ← mkTypeClassInstanceBinders typeParams #[producerUnconstrainedClass, ``DecidableEq]
 
     -- Produce an instance of the appropriate typeclass containing the definition for the derived producer
+    let fuelVal := Lean.Option.get (← getOptions) specimen.fuel
+    let fuelLit := Syntax.mkNumLit (toString fuelVal)
     `(instance $arbitraryTypeParamInstances:bracketedBinder* : $producerTypeClass $targetTypeSyntax (fun $targetVarPattern => @$(mkIdent inductiveName) $args*) where
         $producerTypeClassFunction:ident :=
           let rec $innerFunctionIdent:ident $innerParams* $arbitraryTypeParamInstances:bracketedBinder* : $optionTProducerType :=
             $matchExpr
-          fun $freshSizeIdent => $innerFunctionIdent $freshSizeIdent $freshSizeIdent $outerParams*)
+          fun $freshSizeIdent => $innerFunctionIdent $fuelLit $freshSizeIdent $freshSizeIdent $outerParams*)

@@ -690,6 +690,7 @@ def deriveConstrainedProducer
       let mut nonRecursiveProducers := #[]
       let mut recursiveProducers := #[]
 
+      let freshFuelPrimeName := localCtx.getUnusedName `fuel'
       let freshSizePrimeName := localCtx.getUnusedName `size'
       let freshSize' := mkIdent freshSizePrimeName
 
@@ -714,7 +715,7 @@ def deriveConstrainedProducer
           -- This is all done in a state monad: when we detect that a new instance is required, we append it to an array of `TSyntax term`s
           -- (where each term represents a typeclass instance)
           let (subProducer, instances) ← StateT.run (s := #[]) (do
-            let mexp ← MExp.scheduleToMExp schedule (.MId `size) (.MId `initSize) outputType freshSizePrimeName
+            let mexp ← MExp.scheduleToMExp schedule (.MId `size) (.MId `initSize) outputType (fuelPrimeName := freshFuelPrimeName) (sizePrimeName := freshSizePrimeName)
             MExp.mexpToTSyntax mexp deriveSort)
 
           requiredInstances := requiredInstances ++ instances
@@ -814,6 +815,7 @@ def deriveConstrainedProducerParts
           (freshenedOutputNames[i]!, outputTypes[i]!, outputIdxs[i]!))
       let mut nonRecursiveProducers := #[]
       let mut recursiveProducers := #[]
+      let freshFuelPrimeName := localCtx.getUnusedName `fuel'
       let freshSizePrimeName := localCtx.getUnusedName `size'
       let freshSize' := mkIdent freshSizePrimeName
       let freshRecFnName := localCtx.getUnusedName (match deriveSort with
@@ -826,7 +828,7 @@ def deriveConstrainedProducerParts
         match scheduleOption with
         | some schedule =>
           let (subProducer, _instances) ← StateT.run (s := #[]) (do
-            let mexp ← MExp.scheduleToMExp schedule (.MId `size) (.MId `initSize) _outputType freshSizePrimeName
+            let mexp ← MExp.scheduleToMExp schedule (.MId `size) (.MId `initSize) _outputType (fuelPrimeName := freshFuelPrimeName) (sizePrimeName := freshSizePrimeName)
             MExp.mexpToTSyntax mexp deriveSort)
           let isRecursive ← isConstructorRecursive inductiveName ctorName
           if isRecursive then
