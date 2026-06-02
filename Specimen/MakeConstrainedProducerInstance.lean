@@ -218,3 +218,4 @@ def mkConstrainedProducerTypeClassInstance
           let rec $innerFunctionIdent:ident $innerParams* $arbitraryTypeParamInstances:bracketedBinder* : $optionTProducerType :=
             $matchExpr
           fun $freshSizeIdent => $innerFunctionIdent $fuelLit $freshSizeIdent $freshSizeIdent $outerParams*)
+

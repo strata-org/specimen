@@ -1049,13 +1049,15 @@ def elabDeriveMutual : CommandElab := fun stx => do
 
       let siblings := specMeta.toList
 
-      -- Step 2: Derive each spec with schedule rewriting (Source.NonRec → Source.MutRec for siblings)
-      -- and with recFnNameOverride set to the global name
+      -- Step 2: Derive each spec, collecting the instance command.
+      -- The recFnNameOverride ensures self-recursive calls use the global name.
+      -- The scheduleRewriter rewrites sibling calls to Source.MutRec (→ global sibling name).
+      let mut instanceCmds : Array (TSyntax `command) := #[]
       for i in [:specEntries.size] do
         let entry := specEntries[i]!
         let (_, _, globalName) := specMeta[i]!
         let rewriter := fun steps => rewriteMutualCalls steps siblings
-        let typeClassInstance ← liftTermElabM do
+        let cmd ← liftTermElabM do
           let e ← elabTerm entry .none
           withParsedDerivingArgs e fun args outVars outTypes indName indLevels indArgs => do
             let parts ← deriveConstrainedProducerParts args outVars outTypes indName indLevels indArgs .Generator rewriter globalName
@@ -1063,8 +1065,16 @@ def elabDeriveMutual : CommandElab := fun stx => do
             mkConstrainedProducerTypeClassInstance baseProducers inductiveProducers
               indName inductiveLevels freshArgIdents freshenedOutputNames
               outputTypes producerSort localCtx
-        let genFormat ← liftCoreM (PrettyPrinter.ppCommand typeClassInstance)
+        instanceCmds := instanceCmds.push cmd
+
+      -- Step 3: Emit all instances. Since each uses `let rec globalName ...` internally,
+      -- and sibling calls reference other global names, we wrap in a mutual block
+      -- so all names are in scope.
+      -- TODO: For now emit sequentially (works when ordering breaks the cycle).
+      -- True mutual requires emitting `mutual def ... end` block.
+      for cmd in instanceCmds do
+        let genFormat ← liftCoreM (PrettyPrinter.ppCommand cmd)
         liftTermElabM $ Tactic.TryThis.addSuggestion stx
           (Format.pretty genFormat) (header := "Try this generator: ")
-        elabCommand typeClassInstance
+        elabCommand cmd
   | _ => throwUnsupportedSyntax
