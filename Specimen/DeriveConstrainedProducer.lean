@@ -831,9 +831,12 @@ def deriveConstrainedProducerParts
         | some (scheduleSteps, scheduleSort) =>
           let rewrittenSteps := scheduleRewriter scheduleSteps
           let schedule := (rewrittenSteps, scheduleSort)
-          let (subProducer, _instances) ← StateT.run (s := #[]) (do
+          let (subProducer, requiredInsts) ← StateT.run (s := #[]) (do
             let mexp ← MExp.scheduleToMExp schedule (.MId `size) (.MId `initSize) _outputType (fuelPrimeName := freshFuelPrimeName) (sizePrimeName := freshSizePrimeName)
             MExp.mexpToTSyntax mexp deriveSort)
+          if !requiredInsts.isEmpty then
+            let outputIdxsStr := outputNamesTypesIndices.map (fun (n, _, i) => s!"{n}@{i}")
+            trace[plausible.deriving.arbitrary] m!"[{repr deriveSort}] {inductiveName} (outputs: {outputIdxsStr}) constructor {ctorName} requires: {requiredInsts}"
           let isRecursive ← (isConstructorRecursive inductiveName ctorName) <||> pure (scheduleUsesMutualCall rewrittenSteps)
           if isRecursive then
             let subProducerTerm ← match producerSort with
