@@ -1121,23 +1121,55 @@ def elabDeriveMutual : CommandElab := fun stx => do
           for dep in deps do
             -- Deduplicate by (inductiveName, outputIndices, deriveSort)
             let key := (dep.inductiveName, dep.outputIndices, dep.deriveSort)
-            let alreadyCovered := specMeta.any fun (sIndName, sOutIdxs, _) =>
-              sIndName == dep.inductiveName && sOutIdxs == dep.outputIndices
             let alreadyFound := newDeps.any fun d =>
               (d.inductiveName, d.outputIndices, d.deriveSort) == key
-            if !alreadyCovered && !alreadyFound then
+            if !alreadyFound then
               newDeps := newDeps.push dep
-        -- Report discovered dependencies
+        -- Report all discovered dependencies with status
         if !newDeps.isEmpty then
-          let depDescs := newDeps.toList.map fun d =>
-            match d.kind with
-            | .baseType => s!"Arbitrary {d.inductiveName}"
-            | .relation =>
-              let sortStr := match d.deriveSort with
-                | .Generator => "generator" | .Enumerator => "enumerator" | _ => "producer"
-              s!"{sortStr} {d.inductiveName} (output indices: {d.outputIndices})"
-            | .checker => s!"checker (DecOpt) {d.inductiveName}"
-          logInfo m!"derive_mutual: auto-discovered {newDeps.size} needed instances:\n  {String.intercalate "\n  " depDescs}\nPlease add these to derive_mutual or derive them separately."
+          let mut depDescs : Array String := #[]
+          let mut missingCount := 0
+          for d in newDeps do
+            let desc := match d.kind with
+              | .baseType => s!"Arbitrary {d.inductiveName}"
+              | .relation =>
+                let sortStr := match d.deriveSort with
+                  | .Generator => "generator" | .Enumerator => "enumerator" | _ => "producer"
+                s!"{sortStr} {d.inductiveName} (output indices: {d.outputIndices})"
+              | .checker => s!"checker (DecOpt) {d.inductiveName}"
+            -- Check if covered by the derive_mutual specs
+            let inMutualBlock := specMeta.any fun (sIndName, sOutIdxs, _) =>
+              sIndName == d.inductiveName && sOutIdxs == d.outputIndices
+            if inMutualBlock then
+              depDescs := depDescs.push s!"  ✓ (in mutual block) {desc}"
+            else
+              -- Check if instance exists via synthInstance
+              let instanceExists ← liftTermElabM <| Meta.withNewMCtxDepth do
+                try
+                  let ty ← match d.kind with
+                    | .baseType =>
+                      let indType := Lean.mkConst d.inductiveName
+                      mkAppM ``Plausible.Arbitrary #[indType]
+                    | _ =>
+                      -- For relations, we can't easily construct the full type here
+                      -- Just report based on mutual block membership
+                      pure (Lean.mkConst ``True)
+                  if d.kind == .baseType then
+                    let result ← Meta.synthInstance? ty
+                    pure result.isSome
+                  else
+                    pure false
+                catch _ => pure false
+              if instanceExists then
+                depDescs := depDescs.push s!"  ✓ {desc}"
+              else
+                depDescs := depDescs.push s!"  ✗ {desc}"
+                missingCount := missingCount + 1
+          let header := if missingCount == 0 then
+            s!"derive_mutual: all {newDeps.size} dependencies satisfied"
+          else
+            s!"derive_mutual: {missingCount} of {newDeps.size} dependencies need attention"
+          logInfo m!"{header}\n{String.intercalate "\n" depDescs.toList}"
           -- Derive each discovered dep as a standalone instance before the mutual block
           for dep in newDeps do
             -- Try to derive using derive_generator_multi for the discovered dep
