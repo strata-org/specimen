@@ -1130,13 +1130,48 @@ def elabDeriveMutual : CommandElab := fun stx => do
           let mut depDescs : Array String := #[]
           let mut missingCount := 0
           for d in newDeps do
+            let rec ceToStr : ConstructorExpr → String
+              | .Unknown n => toString n
+              | .Ctor n [] => toString n
+              | .Ctor n args => s!"({n} {String.intercalate " " (args.map ceToStr)})"
+              | .TyCtor n [] => toString n
+              | .TyCtor n args => s!"({n} {String.intercalate " " (args.map ceToStr)})"
+              | .FuncApp n args => s!"({n} {String.intercalate " " (args.map ceToStr)})"
+              | .Lit l => s!"{repr l}"
+              | .CSort _ => "Sort"
             let desc := match d.kind with
-              | .baseType => s!"Arbitrary {d.inductiveName}"
+              | .baseType =>
+                let (hypName, hypArgs) := d.hypothesis
+                if hypArgs.isEmpty then s!"Arbitrary {hypName}"
+                else s!"Arbitrary ({hypName} {String.intercalate " " (hypArgs.map ceToStr)})"
               | .relation =>
+                let (hypName, hypArgs) := d.hypothesis
+                let varNames := #["a", "b", "c", "d", "e", "f", "g", "h"]
+                let (inputVars, appArgs) := Id.run do
+                  let mut inputVars : List String := []
+                  let mut appArgs : List String := []
+                  let mut inpIdx := 0
+                  let mut outIdx := 0
+                  for i in List.range hypArgs.length do
+                    if i ∈ d.outputIndices then
+                      appArgs := appArgs ++ [toString (d.outputVarNames.getD outIdx `x)]
+                      outIdx := outIdx + 1
+                    else
+                      let inpName := varNames.getD inpIdx s!"v{inpIdx}"
+                      inputVars := inputVars ++ [inpName]
+                      appArgs := appArgs ++ [inpName]
+                      inpIdx := inpIdx + 1
+                  (inputVars, appArgs)
                 let sortStr := match d.deriveSort with
                   | .Generator => "generator" | .Enumerator => "enumerator" | _ => "producer"
-                s!"{sortStr} {d.inductiveName} (output indices: {d.outputIndices})"
-              | .checker => s!"checker (DecOpt) {d.inductiveName}"
+                let inputsStr := if inputVars.isEmpty then ""
+                  else s!"fun {String.intercalate " " inputVars} => "
+                let outputsStr := if d.outputVarNames.isEmpty then ""
+                  else s!"∃ {String.intercalate " " (d.outputVarNames.map toString)}, "
+                s!"{sortStr} ({inputsStr}{outputsStr}{hypName} {String.intercalate " " appArgs})"
+              | .checker =>
+                let (hypName, hypArgs) := d.hypothesis
+                s!"checker ({hypName} {String.intercalate " " (hypArgs.map ceToStr)})"
             -- Check if covered by the derive_mutual specs
             let inMutualBlock := specMeta.any fun (sIndName, sOutIdxs, _) =>
               sIndName == d.inductiveName && sOutIdxs == d.outputIndices
@@ -1148,14 +1183,29 @@ def elabDeriveMutual : CommandElab := fun stx => do
                 try
                   match d.kind with
                   | .baseType =>
-                    -- For base types: try Arbitrary with the full hypothesis expression
-                    -- (includes type arguments if present in the schedule)
-                    let hypExpr := constructorExprToExpr
-                      (if d.hypothesis.snd.isEmpty then .Ctor d.inductiveName []
-                       else .Ctor d.inductiveName d.hypothesis.snd)
-                    let ty ← mkAppM ``Plausible.Arbitrary #[hypExpr]
-                    let result ← Meta.synthInstance? ty
-                    pure result.isSome
+                    -- For base types: apply to fvars with assumed Arbitrary + DecidableEq
+                    let constInfo ← getConstInfo d.inductiveName
+                    Meta.forallTelescope constInfo.type fun typeParams _ => do
+                      -- Build instance types for each Sort-typed parameter
+                      let mut instTypes : Array Expr := #[]
+                      for param in typeParams do
+                        let paramTy ← inferType param
+                        if paramTy.isSort then
+                          instTypes := instTypes.push (← mkAppM ``Plausible.Arbitrary #[param])
+                          instTypes := instTypes.push (← mkAppM ``DecidableEq #[param])
+                      -- Nest withLocalDecl calls for each instance
+                      let rec addInstDecls (remaining : List Expr) (idx : Nat) : MetaM Bool :=
+                        match remaining with
+                        | [] => do
+                          let indLevels := constInfo.levelParams.map (Level.param ·)
+                          let fullType := mkAppN (Lean.mkConst d.inductiveName indLevels) typeParams
+                          let ty ← mkAppM ``Plausible.Arbitrary #[fullType]
+                          let result ← Meta.synthInstance? ty
+                          pure result.isSome
+                        | instTy :: rest =>
+                          withLocalDecl (Name.mkSimple s!"inst_{idx}") .instImplicit instTy fun _ =>
+                            addInstDecls rest (idx + 1)
+                      addInstDecls instTypes.toList 0
                   | .relation =>
                     -- For relations: build predicate with fvars for ALL positions, use synthInstance?
                     let indInfo ← getConstInfoInduct d.inductiveName
