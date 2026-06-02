@@ -766,6 +766,64 @@ def deriveConstrainedProducer
     constrainingInductive inductiveLevels freshArgIdents freshenedOutputNames
     outputTypes producerSort localCtx
 
+/-- Derives schedules for a spec and returns the dependencies (Source.NonRec calls)
+    without compiling to code. Used by auto-derive to discover what instances are needed. -/
+def collectSpecDependencies
+  (_args : Array Expr) (outputVars : Array Expr) (outputTypes : Array Expr)
+  (constrainingInductive : Name) (inductiveLevels : List Level)
+  (constrArgs : Array Expr) (deriveSort : DeriveSort)
+  (scheduleRewriter : List ScheduleStep → List ScheduleStep := id)
+  (recFnNameOverride : Option Name := none) :
+  TermElabM (Array ScheduleDep) := do
+  let inductiveName := constrainingInductive
+  let outputFVars := outputVars.map Expr.fvarId!
+  let mut outputIdxs : Array Nat := #[]
+  for i in [:constrArgs.size] do
+    let arg := constrArgs[i]!
+    if arg.isFVar && outputFVars.contains arg.fvarId! then
+      outputIdxs := outputIdxs.push i
+  if outputIdxs.isEmpty then
+    throwError m!"cannot find output indices"
+  let inductiveVal ← getConstInfoInduct inductiveName
+  let inductiveTypeComponents ← getComponentsOfArrowType inductiveVal.type
+  let argTypes := inductiveTypeComponents.pop
+  let argNames ← constrArgs.mapIdxM
+    (fun i (ident : Expr) =>
+      if ident.isFVar then ident.fvarId!.getUserName
+      else if let some outIdx := outputIdxs.findIdx? (· == i) then
+        outputVars[outIdx]!.fvarId!.getUserName
+      else throwError m!"{ident} is expected to be a variable.")
+  let argNamesTypes := argNames.zip argTypes
+  let outputNamesTypesIndices : List (Name × Expr × Nat) :=
+    (List.range outputIdxs.size).map (fun i =>
+      ((argNames[outputIdxs[i]!]!), outputTypes[i]!, outputIdxs[i]!))
+  withLocalDeclsDND argNamesTypes (fun _ => do
+    let mut localCtx ← getLCtx
+    let mut freshUnknowns := #[]
+    for argName in argNames do
+      let freshArgName := localCtx.getUnusedName argName
+      localCtx := localCtx.renameUserName argName freshArgName
+      freshUnknowns := freshUnknowns.push freshArgName
+    let freshenedOutputNames := outputIdxs.map (fun idx => freshUnknowns[idx]!)
+    let freshenedInputNamesExcludingOutput := freshUnknowns.toList.filter
+      (fun n => freshenedOutputNames.toList.all (· != n))
+    let freshRecFnName := recFnNameOverride.getD (localCtx.getUnusedName `aux_arb)
+    let mut allDeps : Array ScheduleDep := #[]
+    for ctorName in inductiveVal.ctors do
+      let scheduleOption ← (UnifyM.runInMetaM
+        (getProducerScheduleForInductiveConstructor inductiveName ctorName outputNamesTypesIndices
+          freshenedInputNamesExcludingOutput freshUnknowns deriveSort localCtx freshRecFnName)
+          emptyUnifyState)
+      match scheduleOption with
+      | some (scheduleSteps, _) =>
+        let rewrittenSteps := scheduleRewriter scheduleSteps
+        let deps := collectNonRecDeps rewrittenSteps
+        for dep in deps do
+          if !allDeps.contains dep then
+            allDeps := allDeps.push dep
+      | none => pure ()
+    return allDeps)
+
 /-- Like `deriveConstrainedProducer` but returns the components needed for assembly
     into either a standalone instance or a mutual def block.
     Returns: (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, outputTypes, localCtx, inductiveName, inductiveLevels, producerSort) -/
