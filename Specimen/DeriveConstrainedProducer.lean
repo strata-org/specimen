@@ -1255,201 +1255,29 @@ def elabDeriveMutual : CommandElab := fun stx => do
         let globalName := Name.mkSimple s!"{uid}_{indName.toString.replace "." "_"}_{i}"
         specMeta := specMeta.push (indName, outIdxs, globalName)
 
-      -- Auto-derive: discover missing dependencies and add them to the mutual block
+      -- Auto-derive: recursively discover and derive all transitive dependencies
       let autoDerive := Lean.Option.get (← getOptions) specimen.autoDeriveDeps
       if autoDerive then
-        -- Collect dependencies for all current specs
-        let mut newDeps : Array ScheduleDep := #[]
-        let discoverySiblings := specMeta.toList
-        let rewriter := fun steps => rewriteMutualCalls steps discoverySiblings
-        for entry in specEntries do
-          let deps ← liftTermElabM do
-            let e ← elabTerm entry .none
-            withParsedDerivingArgs e fun args outVars outTypes indName indLevels indArgs =>
-              collectSpecDependencies args outVars outTypes indName indLevels indArgs .Generator rewriter
-          for dep in deps do
-            -- Deduplicate by (inductiveName, outputIndices, deriveSort)
-            let key := (dep.inductiveName, dep.outputIndices, dep.deriveSort)
-            let alreadyFound := newDeps.any fun d =>
-              (d.inductiveName, d.outputIndices, d.deriveSort) == key
-            if !alreadyFound then
-              newDeps := newDeps.push dep
-        -- Report all discovered dependencies with status
-        if !newDeps.isEmpty then
-          let mut depDescs : Array String := #[]
-          let mut missingCount := 0
-          for d in newDeps do
-            let rec ceToStr : ConstructorExpr → String
-              | .Unknown n => toString n
-              | .Ctor n [] => toString n
-              | .Ctor n args => s!"({n} {String.intercalate " " (args.map ceToStr)})"
-              | .TyCtor n [] => toString n
-              | .TyCtor n args => s!"({n} {String.intercalate " " (args.map ceToStr)})"
-              | .FuncApp n args => s!"({n} {String.intercalate " " (args.map ceToStr)})"
-              | .Lit l => s!"{repr l}"
-              | .CSort _ => "Sort"
-            let desc := match d.kind with
-              | .baseType =>
-                let (hypName, hypArgs) := d.hypothesis
-                if hypArgs.isEmpty then s!"Arbitrary {hypName}"
-                else s!"Arbitrary ({hypName} {String.intercalate " " (hypArgs.map ceToStr)})"
-              | .relation =>
-                let (hypName, hypArgs) := d.hypothesis
-                let varNames := #["a", "b", "c", "d", "e", "f", "g", "h"]
-                let (inputVars, appArgs) := Id.run do
-                  let mut inputVars : List String := []
-                  let mut appArgs : List String := []
-                  let mut inpIdx := 0
-                  let mut outIdx := 0
-                  for i in List.range hypArgs.length do
-                    if i ∈ d.outputIndices then
-                      appArgs := appArgs ++ [toString (d.outputVarNames.getD outIdx `x)]
-                      outIdx := outIdx + 1
-                    else
-                      let inpName := varNames.getD inpIdx s!"v{inpIdx}"
-                      inputVars := inputVars ++ [inpName]
-                      appArgs := appArgs ++ [inpName]
-                      inpIdx := inpIdx + 1
-                  (inputVars, appArgs)
-                let sortStr := match d.deriveSort with
-                  | .Generator => "generator" | .Enumerator => "enumerator" | _ => "producer"
-                let inputsStr := if inputVars.isEmpty then ""
-                  else s!"fun {String.intercalate " " inputVars} => "
-                let outputsStr := if d.outputVarNames.isEmpty then ""
-                  else s!"∃ {String.intercalate " " (d.outputVarNames.map toString)}, "
-                s!"{sortStr} ({inputsStr}{outputsStr}{hypName} {String.intercalate " " appArgs})"
-              | .checker =>
-                let (hypName, hypArgs) := d.hypothesis
-                s!"checker ({hypName} {String.intercalate " " (hypArgs.map ceToStr)})"
-            -- Check if covered by the derive_mutual specs
-            let inMutualBlock := specMeta.any fun (sIndName, sOutIdxs, _) =>
-              sIndName == d.inductiveName && sOutIdxs == d.outputIndices
-            if inMutualBlock then
-              depDescs := depDescs.push s!"  ✓ (in mutual block) {desc}"
-            else
-              -- Check if instance exists via synthInstance
-              let instanceExists ← liftTermElabM <| Meta.withNewMCtxDepth do
-                try
-                  match d.kind with
-                  | .baseType =>
-                    -- For base types: apply to fvars with assumed Arbitrary + DecidableEq
-                    let constInfo ← getConstInfo d.inductiveName
-                    Meta.forallTelescope constInfo.type fun typeParams _ => do
-                      -- Build instance types for each Sort-typed parameter
-                      let mut instTypes : Array Expr := #[]
-                      for param in typeParams do
-                        let paramTy ← inferType param
-                        if paramTy.isSort then
-                          instTypes := instTypes.push (← mkAppM ``Plausible.Arbitrary #[param])
-                          instTypes := instTypes.push (← mkAppM ``DecidableEq #[param])
-                      -- Nest withLocalDecl calls for each instance
-                      let rec addInstDecls (remaining : List Expr) (idx : Nat) : MetaM Bool :=
-                        match remaining with
-                        | [] => do
-                          let indLevels := constInfo.levelParams.map (Level.param ·)
-                          let fullType := mkAppN (Lean.mkConst d.inductiveName indLevels) typeParams
-                          let ty ← mkAppM ``Plausible.Arbitrary #[fullType]
-                          let result ← Meta.synthInstance? ty
-                          pure result.isSome
-                        | instTy :: rest =>
-                          withLocalDecl (Name.mkSimple s!"inst_{idx}") .instImplicit instTy fun _ =>
-                            addInstDecls rest (idx + 1)
-                      addInstDecls instTypes.toList 0
-                  | .relation =>
-                    -- For relations: build predicate with fvars for ALL positions, use synthInstance?
-                    let indInfo ← getConstInfoInduct d.inductiveName
-                    let indTypeComponents ← getComponentsOfArrowType indInfo.type
-                    let argTypes := indTypeComponents.pop
-                    if argTypes.size == 0 || d.outputIndices.isEmpty then
-                      pure false
-                    else
-                      let outputTypes := d.outputIndices.filterMap (fun i => argTypes[i]?)
-                      let rec mkProdTypeExpr : List Expr → MetaM Expr
-                        | [] => throwError "no output types"
-                        | [t] => pure t
-                        | t :: ts => do let rest ← mkProdTypeExpr ts; mkAppM ``Prod #[t, rest]
-                      let outType ← mkProdTypeExpr outputTypes
-                      -- Create a single fvar of the product output type, then project
-                      withLocalDecl `x .default outType fun xFvar => do
-                        -- Build projections: for right-nested (A × B × C), x.1 = A, x.2.1 = B, x.2.2 = C
-                        let mut projections : Array Expr := #[]
-                        let mut currentExpr := xFvar
-                        let numOutputs := d.outputIndices.length
-                        for i in [:numOutputs] do
-                          if numOutputs == 1 then
-                            projections := projections.push currentExpr
-                          else if i < numOutputs - 1 then
-                            projections := projections.push (← mkAppM ``Prod.fst #[currentExpr])
-                            currentExpr ← mkAppM ``Prod.snd #[currentExpr]
-                          else
-                            projections := projections.push currentExpr
-                        -- Build inductive application with fvars for inputs, projections for outputs
-                        let inputNameTypes := (List.range argTypes.size).filterMap (fun i =>
-                          if i ∉ d.outputIndices then some (Name.mkSimple s!"inp_{i}", argTypes[i]!)
-                          else none)
-                        withLocalDeclsDND inputNameTypes.toArray fun inputFVars => do
-                          let mut appArgs : Array Expr := #[]
-                          let mut outIdx := 0
-                          let mut inpIdx := 0
-                          for i in [:argTypes.size] do
-                            if i ∈ d.outputIndices then
-                              appArgs := appArgs.push projections[outIdx]!
-                              outIdx := outIdx + 1
-                            else
-                              appArgs := appArgs.push inputFVars[inpIdx]!
-                              inpIdx := inpIdx + 1
-                          let indLevels := indInfo.levelParams.map fun p => Level.param p
-                          let body := mkAppN (Lean.mkConst d.inductiveName indLevels) appArgs
-                          let pred ← mkLambdaFVars #[xFvar] body
-                          let tcName := match d.deriveSort with
-                            | .Generator => ``ArbitrarySizedSuchThat
-                            | .Enumerator => ``EnumSizedSuchThat
-                            | _ => ``ArbitrarySizedSuchThat
-                          let ty ← mkAppM tcName #[outType, pred]
-                          let result ← Meta.synthInstance? ty
-                          pure result.isSome
-                  | .checker =>
-                    -- For checkers: check DecOpt with metavar predicate
-                    let prop ← Meta.mkFreshExprMVar (some (mkSort .zero))
-                    let ty ← mkAppM ``DecOpt #[prop]
-                    let result ← Meta.synthInstance? ty
-                    pure result.isSome
-                catch _ => pure false
-              if instanceExists then
-                depDescs := depDescs.push s!"  ✓ {desc}"
-              else
-                depDescs := depDescs.push s!"  ✗ {desc}"
-                missingCount := missingCount + 1
-          let header := if missingCount == 0 then
-            s!"derive_mutual: all {newDeps.size} dependencies satisfied"
-          else
-            s!"derive_mutual: {missingCount} of {newDeps.size} dependencies need attention"
-          logInfo m!"{header}\n{String.intercalate "\n" depDescs.toList}"
-          -- Auto-derive missing relation deps before the mutual block
-          for dep in newDeps do
-            if dep.kind != .relation then continue
-            -- Skip if already in the mutual block
-            let inBlock := specMeta.any fun (sIndName, sOutIdxs, _) =>
-              sIndName == dep.inductiveName && sOutIdxs == dep.outputIndices
-            if inBlock then continue
-            -- Skip if instance already exists
-            let alreadyExists ← liftTermElabM <| Meta.withNewMCtxDepth do
-              try
-                let indInfo ← getConstInfoInduct dep.inductiveName
-                let indTypeComponents ← getComponentsOfArrowType indInfo.type
-                let argTypes := indTypeComponents.pop
-                if argTypes.size == 0 || dep.outputIndices.isEmpty then pure true
-                else pure false -- assume missing, will try to derive
-              catch _ => pure true
-            if alreadyExists then continue
-            -- Try to derive
-            try
-              let depInstance ← liftTermElabM <| deriveFromScheduleDep dep
-              logInfo m!"Auto-derived: {dep.inductiveName} (outputs: {dep.outputIndices})"
-              elabCommand depInstance
-            catch e =>
-              logWarning m!"Could not auto-derive {dep.inductiveName} (outputs: {dep.outputIndices}): {e.toMessageData}"
-
+        let memo ← IO.mkRef ({} : Std.HashMap SpecKey MemoEntry)
+        -- Recursively derive schedules for all user specs (populates memo with all deps)
+        for (indName, outIdxs, _) in specMeta do
+          let key : SpecKey := { inductiveName := indName, outputIndices := outIdxs, deriveSort := .Generator }
+          let _ ← liftTermElabM <| deriveBestInductiveSchedule key memo
+        -- DFS from roots to find actually-used deps
+        let finalMemo ← memo.get
+        let mut usedKeys : Std.HashSet SpecKey := {}
+        for (indName, outIdxs, _) in specMeta do
+          let key : SpecKey := { inductiveName := indName, outputIndices := outIdxs, deriveSort := .Generator }
+          usedKeys := collectUsedDeps key finalMemo usedKeys
+        -- Add all used deps to specMeta (so they're included in the mutual block)
+        for key in usedKeys.toList do
+          let inBlock := specMeta.any fun (sIndName, sOutIdxs, _) =>
+            sIndName == key.inductiveName && sOutIdxs == key.outputIndices
+          if !inBlock then
+            let uid ← liftTermElabM (Lean.Core.mkFreshUserName `specimen_mutual)
+            let globalName := Name.mkSimple s!"{uid}_{key.inductiveName.toString.replace "." "_"}_auto"
+            specMeta := specMeta.push (key.inductiveName, key.outputIndices, globalName)
+        logInfo m!"derive_mutual: {specMeta.size} specs total ({usedKeys.size} from auto-derive)"
       let siblings := specMeta.toList
 
       -- Step 2: Derive each spec, collecting (def, instance) pairs.

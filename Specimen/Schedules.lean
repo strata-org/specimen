@@ -393,6 +393,22 @@ def collectNonRecDeps (steps : List ScheduleStep) : List ScheduleDep :=
              deriveSort := .Checker }
     | _ => none
 
+/-- DFS from a root SpecKey through chosen schedules to find all actually-used dependencies. -/
+partial def collectUsedDeps (root : SpecKey) (memo : Std.HashMap SpecKey MemoEntry)
+    (visited : Std.HashSet SpecKey := {}) : Std.HashSet SpecKey :=
+  if visited.contains root then visited
+  else
+    let visited := visited.insert root
+    match memo[root]? with
+    | some (.done baseScheds recScheds _) =>
+      let allSchedules := baseScheds ++ recScheds
+      let deps := allSchedules.flatMap (fun (_, (steps, _)) => collectNonRecDeps steps)
+      let relDeps := deps.filter (·.kind == .relation)
+      relDeps.foldl (fun acc dep =>
+        let depKey : SpecKey := { inductiveName := dep.inductiveName, outputIndices := dep.outputIndices, deriveSort := dep.deriveSort }
+        collectUsedDeps depKey memo acc) visited
+    | _ => visited
+
 /-- Checks if any step in a schedule uses `Source.MutRec`. -/
 def scheduleUsesMutualCall (steps : List ScheduleStep) : Bool :=
   steps.any fun step =>
