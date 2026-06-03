@@ -224,23 +224,29 @@ instance [Gen G] : Monad (BacktrackGen G) where
 ### The `backtrack` combinator
 
 ```lean
-/-- Weighted backtracking: randomly pick a branch by weight, try it, retry remaining on failure. -/
+/-- Weighted backtracking: randomly pick a branch, try it, retry remaining on failure.
+    Uses fuel (initially gs.length) for structural termination. -/
 def backtrack [Gen G] (gs : List (Nat × (Unit → BacktrackGen G α))) : BacktrackGen G α :=
-  ⟨go gs⟩
+  ⟨go gs.length gs⟩
 where
-  go : List (Nat × (Unit → BacktrackGen G α)) → G (Option α)
-  | [] => pure none
-  | [(_, g)] => (g ()).run
-  | gs => do
+  go : Nat → List (Nat × (Unit → BacktrackGen G α)) → G (Option α)
+  | _, [] => pure none
+  | 0, _ => pure none
+  | fuel + 1, gs@(_ :: _) => do
     let idx ← RandomChoice.choose 0 (gs.length - 1) (by omega)
-    let (_, g) := gs[idx.down]!
-    match ← (g ()).run with
-    | some a => pure (some a)
-    | none => go (gs.eraseIdx idx.down)
-  termination_by gs => gs.length
+    let i := idx.down
+    if hi : i < gs.length then
+      let (_, g) := gs[i]
+      match ← (g ()).run with
+      | some a => pure (some a)
+      | none => go fuel (gs.eraseIdx i)
+    else
+      pure none
 ```
 
-This has identical operational semantics to Specimen's current `backtrack`: pick a branch randomly by weight, run it, and if it returns `none` (failure), remove it from the pool and retry with adjusted weights.
+This has identical operational semantics to Specimen's current `backtrack`: pick a branch randomly, run it, and if it returns `none` (failure), remove it from the pool and retry with decremented fuel. Termination is structural on the `fuel : Nat` parameter (which starts at `gs.length`, bounding retries to at most one attempt per branch).
+
+The key proof lemma for this combinator is `backtrack_mem_iff`, which states that `some a ∈ support ((backtrack gs).run)` iff there exists some branch `i` such that `some a ∈ support ((gs[i].2 ()).run)`. This reduces reasoning about backtracking to reasoning about individual branches, hiding the retry logic entirely.
 
 ### The `frequency` combinator
 
@@ -706,25 +712,32 @@ The practical upshot for this plan:
 
 ### Proving correctness (at `SetGen.Set`)
 
-With `[LawfulGenFor Nat (fun _ => True)]` in scope (which provides `GenFor Nat (fun _ => True)` via the subclass relationship), proofs compose modularly:
+Soundness and completeness proofs for the running example have been carried out manually as a POC. The proof structure is as follows.
+
+**The key lemma** is `backtrack_mem_iff`, which characterizes membership in `backtrack`'s support:
 
 ```lean
-theorem genHasType_sound [LawfulGenFor Nat (fun _ => True)]
-    (τ : Ty) (size : Nat) (e : Expr) :
-    some e ∈ SetGen.support (genHasType (G := SetGen.Set) size τ size) → HasType e τ := ...
-
-theorem genHasType_complete [LawfulGenFor Nat (fun _ => True)]
-    (τ : Ty) (e : Expr) (h : HasType e τ) :
-    ∃ size, some e ∈ SetGen.support (genHasType (G := SetGen.Set) size τ size) := ...
-
-theorem genWellFormed_sound
-    [LawfulGenFor Nat (fun _ => True)]
-    [LawfulGenFor Ty (fun _ => True)]
-    (size : Nat) (p : Prog) :
-    some p ∈ SetGen.support (genWellFormed (G := SetGen.Set) size size) → WellFormed p := ...
+theorem backtrack_mem_iff (gs : List (Nat × (Unit → BacktrackGen SetGen.Set α))) (a : α) :
+    some a ∈ SetGen.support ((backtrack gs).run) ↔
+    ∃ i : Fin gs.length, some a ∈ SetGen.support ((gs[i].2 ()).run) := ...
 ```
 
-The `LawfulGenFor` constraint gives the proof access to `LawfulGenFor.sound_and_complete`. Since any instance resolved for `GenFor Nat (fun _ => True)` must come from a `LawfulGenFor` instance (once the system invariant holds), the proof is sound regardless of which instance was picked.
+This reduces reasoning about `backtrack` to reasoning about individual branches — the random selection and retry logic is abstracted away.
+
+**The predicate.** Because `GenFor Nat (fun _ => True)` generates naturals in a bounded range (0–100 in the example), the generator's support does not cover *all* well-typed expressions — only those whose leaf values fall within range and whose depth fits the size budget. The proven predicate is:
+
+```lean
+def HasTypeBounded (τ : Ty) (size : Nat) (e : Expr) : Prop :=
+  HasType e τ ∧ exprBounded size e
+```
+
+where `exprBounded size e` requires leaf naturals ≤ 100 and `add`-nesting ≤ `size`.
+
+**Soundness** proceeds by induction on `size`, applying `backtrack_mem_iff` to decompose into branches, then case-splitting on `τ` within each branch. For the `isPos` branch, the `DecOpt` check (`decide (n ≠ 0)`) produces a `Bool` that is matched — only the `true` case reaches `pure (Expr.isPos n)`, directly yielding the `HasType.isPos` constructor with proof `n ≠ 0`.
+
+**Completeness** also proceeds by induction on `size`, constructing the appropriate branch index (`Fin gs.length`) for each `HasType` constructor. For example, `HasType.add` maps to branch index 2 in the `size + 1` case, with recursive appeals to the induction hypothesis for both subexpressions.
+
+**Compositionality.** In the full system with `LawfulGenFor` / `LawfulBacktrackGenFor` instances, these proofs compose modularly: the `genWellFormed` proof would discharge its `HasType` sub-generator obligations by appealing to the `LawfulBacktrackGenFor Expr (HasType · τ)` instance rather than inlining the `genHasType` proof.
 
 ## 8. Plan of Work
 
@@ -751,9 +764,9 @@ The goal of this phase is to make Specimen-derived generators polymorphic over B
 
 #### Step 1.2: Prove SetGen support lemmas
 
-- `backtrack_mem_iff`: `some a ∈ support (backtrack gs)` iff `some a ∈ support (gᵢ ())` for some `i`
+- `backtrack_mem_iff`: `some a ∈ support ((backtrack gs).run)` iff `some a ∈ support ((gs[i].2 ()).run)` for some `i : Fin gs.length`. This is the key lemma for proving correctness of derived generators — it reduces backtracking to a disjunction over branches. (Proven now in a separate scratchfile.)
 - `frequency_mem_iff`: analogous for `frequency`
-- Basic `liftGen`/`pure`/`bind` support lemmas
+- Basic `liftGen`/`pure`/`bind` support lemmas (follow from Basalt's existing `SetGen.support_bind`, `SetGen.support_pure`)
 
 #### Step 1.3: Modify Specimen's constrained code emission (`derive_generator`)
 
@@ -783,7 +796,7 @@ This step can proceed in parallel with Step 1.3 since the unconstrained deriver 
 - Verify existing Specimen test cases still pass (expected output will change shape; update snapshots)
 - Verify `derive Arbitrary` produces working `GenFor` instances for standard test types (e.g., `Tree`, `Expr`)
 - Verify the `plausible` tactic works end-to-end with both constrained and unconstrained generators
-- Write a manual soundness proof for the `HasType` example, demonstrating that a Specimen-derived generator can be proved sound at `SetGen.Set` given `LawfulGenFor` / `LawfulBacktrackGenFor` instances for sub-generators
+- Write a manual soundness proof for the `HasType` example, demonstrating that a Specimen-derived generator can be proved sound at `SetGen.Set` given `LawfulGenFor` / `LawfulBacktrackGenFor` instances for sub-generators. (Complete soundness and completeness proofs of `genHasType` in a scratchfile.)
 
 ### Phase 2: Lawful generation (with proof synthesis)
 
@@ -805,6 +818,8 @@ For each derived **constrained** generator, Specimen emits a proof that the gene
 4. **Completeness** (backward): For each constructor of the inductive relation, exhibit a `size` and branch that produces the corresponding value. Typically, the recursive constructor needs `size = depth_of_derivation`.
 
 Sub-generator proof obligations are discharged by the `LawfulGenFor` / `LawfulBacktrackGenFor` instances of sub-generators (available via typeclass resolution).
+
+This structure has been validated by hand-proving soundness and completeness for the running example's `genHasType`. The proofs use `induction size`, `backtrack_mem_iff`, `fin_cases` on branch indices, and `simp` over `SetGen.support` lemmas — a pattern amenable to automation.
 
 Emit `LawfulBacktrackGenFor` instances bundling generator + proof.
 
