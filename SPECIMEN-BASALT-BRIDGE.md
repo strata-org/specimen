@@ -366,15 +366,24 @@ To this end, we introduce two additional typeclasses:
     Provides only soundness & completeness — weaker than Basalt's LawfulGenerator
     which also requires almost-sure termination and cost bounds. -/
 class LawfulGenFor (α : Type) (P : α → Prop) extends GenFor α P where
-  sound_and_complete : IsSoundAndComplete (gen (G := SPMF)) P
+  sound_and_complete : SetGen.IsSoundAndComplete (gen (G := SetGen.Set)) P
 
-/-- A lawful backtracking generator: proves that successful outputs satisfy P. -/
-class LawfulBacktrackGenFor (α : Type) (P : α → Prop) extends BacktrackGenFor α P where
-  sound_and_complete : ∀ size a,
-    some a ∈ SPMF.support (gen (G := SPMF) size) ↔ P a
+/-- A lawful backtracking generator: proves that successful outputs satisfy a size-indexed
+    bounded predicate at SetGen.Set. The Bounded predicate refines P with size/range
+    constraints imposed by the implementation (e.g., bounded leaf values, bounded depth). -/
+class LawfulBacktrackGenFor (α : Type) (P : α → Prop) (Bounded : Nat → α → Prop)
+    extends BacktrackGenFor α P where
+  sound : ∀ size a,
+    some a ∈ SetGen.support ((gen (G := SetGen.Set) size).run) → Bounded size a
+  complete : ∀ size a,
+    Bounded size a → some a ∈ SetGen.support ((gen (G := SetGen.Set) size).run)
 ```
 
 Instances of these typeclasses are sure to be sound and complete, i.e., lawful (to a minimal degree). Thus users of them can rely on that lawfulness when proving lawfulness locally.
+
+**Why `Bounded` is separate from `P`.** The property `P` (e.g., `HasType e τ`) is the *semantic* specification the user cares about — it's what appears in `derive_generator (fun τ => ∃ e, HasType e τ)`. But a fuel-based generator cannot produce *all* values satisfying `P` at every size — it only produces values within its size budget and sub-generator ranges. The `Bounded` predicate (e.g., `HasTypeBounded τ`) captures these implementation constraints: `Bounded size a` implies `P a` but additionally requires bounded depth and bounded leaf values.
+
+This two-parameter design is a direct consequence of using explicit fuel for termination (see "Fuel vs size vs `partial_fixpoint`" in Section 7). If generators were defined via `partial_fixpoint` instead — where the generator's support at the fixpoint covers all values satisfying `P` — then `Bounded` would be unnecessary and the class could use a simple `iff` with `P`. The `Bounded` parameter is essentially the price of fuel-based termination; eliminating it is a benefit of moving to `partial_fixpoint` in the future.
 
 **Relationship to Basalt's `LawfulGenerator`:** Basalt defines `LawfulGenerator` as a property of a *specific generator term* — it says "this particular generator `g` is sound, complete, terminating, and cost-bounded." Our `LawfulGenFor` and `LawfulBacktrackGenFor` serve a different purpose: they are *typeclasses for resolution* — they say "there exists a generator for this type/property findable by typeclass synthesis, and it is sound and complete." They intentionally omit cost and termination requirements for simplicity; in the future, these could be strengthened to require `LawfulGenerator` of the underlying term, at which point the system would provide full lawfulness guarantees.
 
@@ -663,6 +672,29 @@ This invariant is enforced by the two-step roadmap (see Section 8):
 1. First, Specimen emits generators with `GenFor` / `BacktrackGenFor` constraints (for execution only).
 2. Then, Specimen is upgraded to also emit `LawfulGenFor` / `LawfulBacktrackGenFor` instances with synthesized proofs, ensuring every derived generator is lawful.
 
+### Instance diamond with `LawfulBacktrackGenFor`
+
+A practical issue arises from `LawfulBacktrackGenFor` extending `BacktrackGenFor`: when both a standalone `BacktrackGenFor` instance and a `LawfulBacktrackGenFor` instance exist for the same type/predicate, typeclass synthesis may resolve `BacktrackGenFor.gen` to the standalone instance inside a generator body, while `LawfulBacktrackGenFor.sound`/`.complete` expect the inherited instance. Even though both produce the same generator, Lean treats them as distinct terms, causing type mismatches in proofs.
+
+**Solution:** Generators that need lawfulness proofs must explicitly route through the lawful instance:
+
+```lean
+def genWellFormed' [Gen G] [GenFor Nat (fun _ => True)] [GenFor Ty (fun _ => True)]
+    [inst : ∀ τ, LawfulBacktrackGenFor Expr (fun e => HasType e τ) (HasTypeBounded τ)]
+    (initSize : Nat) : (size : Nat) → BacktrackGen G Prog
+  | 0 => backtrack [
+      (1, fun () => do
+        let τ ← BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G Ty)
+        let e ← @BacktrackGenFor.gen _ _ ((inst τ).toBacktrackGenFor) _ _ initSize
+        pure (Prog.expr e)),
+      ...]
+```
+
+**Implication for Specimen's code emission:** When emitting generators that will carry proofs (Phase 2), Specimen must either:
+- Emit `@BacktrackGenFor.gen` with explicit instance selection via the lawful instance's `.toBacktrackGenFor` field, or
+- Ensure that the `LawfulBacktrackGenFor` instance is the *only* `BacktrackGenFor` instance registered for that type/predicate (i.e., don't register a separate standalone instance once the lawful one exists), or
+- Use instance priority to ensure the lawful instance wins synthesis
+
 ### Mutual recursion
 
 Specimen supports mutually recursive inductive relations. For mutually recursive generators, the emitted code uses Lean's `mutual ... end` block with direct name calls between the co-defined generators (not typeclass resolution). After the mutual block, each generator is registered as a `BacktrackGenFor` instance. This is the same pattern Specimen uses today — mutual generators call each other by name, and only *external* callers go through typeclass resolution.
@@ -737,7 +769,7 @@ where `exprBounded size e` requires leaf naturals ≤ 100 and `add`-nesting ≤ 
 
 **Completeness** also proceeds by induction on `size`, constructing the appropriate branch index (`Fin gs.length`) for each `HasType` constructor. For example, `HasType.add` maps to branch index 2 in the `size + 1` case, with recursive appeals to the induction hypothesis for both subexpressions.
 
-**Compositionality.** In the full system with `LawfulGenFor` / `LawfulBacktrackGenFor` instances, these proofs compose modularly: the `genWellFormed` proof would discharge its `HasType` sub-generator obligations by appealing to the `LawfulBacktrackGenFor Expr (HasType · τ)` instance rather than inlining the `genHasType` proof.
+**Compositionality.** In the full system with `LawfulGenFor` / `LawfulBacktrackGenFor` instances, these proofs compose modularly: the `genWellFormed` proof discharges its `HasType` sub-generator obligations by appealing to the `LawfulBacktrackGenFor Expr (HasType · τ) (HasTypeBounded τ)` instance's `.sound` and `.complete` fields rather than inlining the `genHasType` proof. This has been validated: soundness and completeness of `genWellFormed` are proved using `backtrack_mem_iff` to decompose into branches, then `backtrackGen_bind_mem` / `backtrackGen_pure_mem` to decompose the sequential `BacktrackGen` bind chain within each branch, and finally `(inst τ).sound` / `(inst τ).complete` to discharge sub-generator obligations. The generator must explicitly route through the lawful instance to avoid the instance diamond described in "Instance diamond with `LawfulBacktrackGenFor`" above.
 
 ## 8. Plan of Work
 
@@ -766,7 +798,9 @@ The goal of this phase is to make Specimen-derived generators polymorphic over B
 
 - `backtrack_mem_iff`: `some a ∈ support ((backtrack gs).run)` iff `some a ∈ support ((gs[i].2 ()).run)` for some `i : Fin gs.length`. This is the key lemma for proving correctness of derived generators — it reduces backtracking to a disjunction over branches. (Proven now in a separate scratchfile.)
 - `frequency_mem_iff`: analogous for `frequency`
-- Basic `liftGen`/`pure`/`bind` support lemmas (follow from Basalt's existing `SetGen.support_bind`, `SetGen.support_pure`)
+- `backtrackGen_bind_mem`: `some b ∈ support ((x >>= f).run)` iff `∃ a, some a ∈ support x.run ∧ some b ∈ support ((f a).run)`. This is essential for decomposing sequential composition inside `BacktrackGen` branches — without it, proofs about composite generators (like `genWellFormed`) are extremely difficult because `BacktrackGen`'s bind introduces nested `match` on `Option` that doesn't reduce with `simp`.
+- `backtrackGen_pure_mem`: `some b ∈ support ((pure a : BacktrackGen SetGen.Set α).run)` iff `b = a`. The base case for branch decomposition.
+- Basic `liftGen` support lemma (follows from the above and Basalt's existing `SetGen.support_bind`, `SetGen.support_pure`)
 
 #### Step 1.3: Modify Specimen's constrained code emission (`derive_generator`)
 
@@ -804,8 +838,8 @@ The goal of this phase is to make Specimen emit `LawfulGenFor` / `LawfulBacktrac
 
 #### Step 2.1: Define `LawfulGenFor` and `LawfulBacktrackGenFor` in Basalt
 
-- Define `LawfulGenFor` extending `GenFor` with soundness/completeness at `SPMF`
-- Define `LawfulBacktrackGenFor` extending `BacktrackGenFor` similarly
+- Define `LawfulGenFor` extending `GenFor` with soundness/completeness at `SetGen.Set`
+- Define `LawfulBacktrackGenFor` extending `BacktrackGenFor` with a `Bounded : Nat → α → Prop` parameter and sound/complete fields at `SetGen.Set`
 - Provide `LawfulGenFor` instances for standard types (using existing Basalt proofs like `Nat.arbitrary_support`)
 
 #### Step 2.2: Synthesize soundness/completeness proofs in Specimen
