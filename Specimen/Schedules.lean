@@ -47,7 +47,7 @@ inductive DeriveSort
   | Enumerator
   | Checker
   | Theorem
-  deriving Repr, BEq, Ord
+  deriving Repr, BEq, Ord, Hashable
 
 /-- Determines if a `DeriveSort` corresponds to a producer
     (only generators & enumerators are considered producers) -/
@@ -303,6 +303,29 @@ def rewriteMutualCalls (steps : List ScheduleStep) (siblings : List (Name × Lis
         .Check (.MutRec auxName inputArgs) pol
       | none => step
     | other => other
+
+/-- Identifies a unique derivation spec (inductive + output mode + sort). -/
+structure SpecKey where
+  inductiveName : Name
+  outputIndices : List Nat
+  deriveSort : DeriveSort
+  deriving Repr, BEq, Hashable
+
+/-- Score for a derived schedule (used for selecting best schedule). -/
+structure SpecScore where
+  checks : Nat := 0
+  unconstrained : Nat := 0
+  backtracking : Nat := 0
+  deriving Repr, BEq, Ord
+
+instance : Inhabited SpecScore := ⟨{}⟩
+
+/-- Result of deriving a schedule, stored in the dependency memo. -/
+inductive MemoEntry
+  | inProgress  -- derivation started, cycle detection
+  | done (baseSchedules : List (Name × Schedule)) (recSchedules : List (Name × Schedule)) (score : SpecScore)
+  | failed (msg : String)
+  deriving Repr
 
 /-- Whether a dependency is for a base type (needs Arbitrary/Enum) or a relation
     (needs ArbitrarySizedSuchThat/EnumSizedSuchThat/DecOpt). -/

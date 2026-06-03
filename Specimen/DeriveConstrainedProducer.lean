@@ -1081,6 +1081,51 @@ typing depends on "fixed type" typing and vice versa), the following changes are
     Later entries can use instances derived by earlier ones. -/
 syntax (name := mutual_deriver) "derive_mutual" term,+ : command
 
+/-- Derives a constrained producer instance directly from a ScheduleDep,
+    without going through syntax parsing. Returns the instance command. -/
+def deriveFromScheduleDep (dep : ScheduleDep) (scheduleRewriter : List ScheduleStep → List ScheduleStep := id)
+    (recFnNameOverride : Option Name := none) : TermElabM (TSyntax `command) := do
+  let indInfo ← getConstInfoInduct dep.inductiveName
+  let indLevels := indInfo.levelParams.map (Level.param ·)
+  let indTypeComponents ← getComponentsOfArrowType indInfo.type
+  let argTypes := indTypeComponents.pop
+  -- Create fvars for all args
+  let argNameTypes : Array (Name × Expr) := Id.run do
+    let mut result := #[]
+    let mut inpIdx := 0
+    let mut outIdx := 0
+    for i in [:argTypes.size] do
+      if i ∈ dep.outputIndices then
+        let name := Name.mkSimple s!"out_{outIdx}"
+        result := result.push (name, argTypes[i]!)
+        outIdx := outIdx + 1
+      else
+        let name := Name.mkSimple s!"inp_{inpIdx}"
+        result := result.push (name, argTypes[i]!)
+        inpIdx := inpIdx + 1
+    result
+  withLocalDeclsDND argNameTypes fun allFVars => do
+    let inputFVars := Id.run do
+      let mut result := #[]
+      for i in [:argTypes.size] do
+        if i ∉ dep.outputIndices then
+          result := result.push allFVars[i]!
+      result
+    let outputFVars := Id.run do
+      let mut result := #[]
+      for i in [:argTypes.size] do
+        if i ∈ dep.outputIndices then
+          result := result.push allFVars[i]!
+      result
+    let outputTypes := dep.outputIndices.filterMap (fun i => argTypes[i]?)
+    let deriveSort := dep.deriveSort
+    let parts ← deriveConstrainedProducerParts inputFVars outputFVars outputTypes.toArray
+      dep.inductiveName indLevels allFVars deriveSort scheduleRewriter recFnNameOverride
+    let (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, outTypes, localCtx, _, _, producerSort) := parts
+    mkConstrainedProducerTypeClassInstance baseProducers inductiveProducers
+      dep.inductiveName indLevels freshArgIdents freshenedOutputNames
+      outTypes producerSort localCtx
+
 @[command_elab mutual_deriver]
 def elabDeriveMutual : CommandElab := fun stx => do
   match stx with
@@ -1105,7 +1150,8 @@ def elabDeriveMutual : CommandElab := fun stx => do
                   if indArgs[j]!.isFVar && outputFVars.contains indArgs[j]!.fvarId! then
                     idxs := idxs.push j
                 return (indName, idxs.toList)
-        let globalName := Name.mkSimple s!"specimen_mutual_{indName.toString.replace "." "_"}_{i}"
+        let uid ← liftTermElabM (Lean.Core.mkFreshUserName `specimen_mutual)
+        let globalName := Name.mkSimple s!"{uid}_{indName.toString.replace "." "_"}_{i}"
         specMeta := specMeta.push (indName, outIdxs, globalName)
 
       -- Auto-derive: discover missing dependencies and add them to the mutual block
@@ -1113,11 +1159,13 @@ def elabDeriveMutual : CommandElab := fun stx => do
       if autoDerive then
         -- Collect dependencies for all current specs
         let mut newDeps : Array ScheduleDep := #[]
+        let discoverySiblings := specMeta.toList
+        let rewriter := fun steps => rewriteMutualCalls steps discoverySiblings
         for entry in specEntries do
           let deps ← liftTermElabM do
             let e ← elabTerm entry .none
             withParsedDerivingArgs e fun args outVars outTypes indName indLevels indArgs =>
-              collectSpecDependencies args outVars outTypes indName indLevels indArgs .Generator
+              collectSpecDependencies args outVars outTypes indName indLevels indArgs .Generator rewriter
           for dep in deps do
             -- Deduplicate by (inductiveName, outputIndices, deriveSort)
             let key := (dep.inductiveName, dep.outputIndices, dep.deriveSort)
@@ -1276,20 +1324,30 @@ def elabDeriveMutual : CommandElab := fun stx => do
           else
             s!"derive_mutual: {missingCount} of {newDeps.size} dependencies need attention"
           logInfo m!"{header}\n{String.intercalate "\n" depDescs.toList}"
-          -- Derive each discovered dep as a standalone instance before the mutual block
+          -- Auto-derive missing relation deps before the mutual block
           for dep in newDeps do
-            -- Try to derive using derive_generator_multi for the discovered dep
-            -- We derive it as: (fun inputs... => ∃ outputs..., IndName args...)
-            -- For now, just use the existing single-spec derivation
-            try
-              let depInstance ← liftTermElabM do
+            if dep.kind != .relation then continue
+            -- Skip if already in the mutual block
+            let inBlock := specMeta.any fun (sIndName, sOutIdxs, _) =>
+              sIndName == dep.inductiveName && sOutIdxs == dep.outputIndices
+            if inBlock then continue
+            -- Skip if instance already exists
+            let alreadyExists ← liftTermElabM <| Meta.withNewMCtxDepth do
+              try
                 let indInfo ← getConstInfoInduct dep.inductiveName
-                -- Simple case: derive with multiOutput for this inductive
-                -- TODO: construct proper spec term from ScheduleDep
-                throwError m!"Auto-derive for {dep.inductiveName} not yet fully implemented. Please add to derive_mutual:\n  Needed: {dep.inductiveName} with {dep.outputVarNames.length} outputs"
+                let indTypeComponents ← getComponentsOfArrowType indInfo.type
+                let argTypes := indTypeComponents.pop
+                if argTypes.size == 0 || dep.outputIndices.isEmpty then pure true
+                else pure false -- assume missing, will try to derive
+              catch _ => pure true
+            if alreadyExists then continue
+            -- Try to derive
+            try
+              let depInstance ← liftTermElabM <| deriveFromScheduleDep dep
+              logInfo m!"Auto-derived: {dep.inductiveName} (outputs: {dep.outputIndices})"
               elabCommand depInstance
             catch e =>
-              logWarning m!"Could not auto-derive dependency: {e.toMessageData}"
+              logWarning m!"Could not auto-derive {dep.inductiveName} (outputs: {dep.outputIndices}): {e.toMessageData}"
 
       let siblings := specMeta.toList
 
