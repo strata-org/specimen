@@ -107,18 +107,21 @@ end BacktrackGen
 /-! ## Combinators -/
 
 def backtrack [Gen G] (gs : List (Nat × (Unit → BacktrackGen G α))) : BacktrackGen G α :=
-  ⟨go gs⟩
+  ⟨go gs.length gs⟩
 where
-  go : List (Nat × (Unit → BacktrackGen G α)) → G (Option α)
-  | [] => pure none
-  | [(_, g)] => (g ()).run
-  | gs => do
+  go : Nat → List (Nat × (Unit → BacktrackGen G α)) → G (Option α)
+  | _, [] => pure none
+  | 0, _ => pure none
+  | fuel + 1, gs@(_ :: _) => do
     let idx ← RandomChoice.choose 0 (gs.length - 1) (by omega)
-    let (_, g) := gs[idx.down]!
-    match ← (g ()).run with
-    | some a => pure (some a)
-    | none => go (gs.eraseIdx idx.down)
-  termination_by gs => gs.length
+    let i := idx.down
+    if hi : i < gs.length then
+      let (_, g) := gs[i]
+      match ← (g ()).run with
+      | some a => pure (some a)
+      | none => go fuel (gs.eraseIdx i)
+    else
+      pure none
 
 /-! ## Typeclasses -/
 
@@ -249,7 +252,7 @@ def genWellFormed [Gen G] [GenFor Nat (fun _ => True)] [GenFor Ty (fun _ => True
         let e1 ← BacktrackGenFor.gen (P := fun e => HasType e τ) initSize
         let e2 ← BacktrackGenFor.gen (P := fun e => HasType e τ) initSize
         pure (Prog.both e1 e2))]
-  | size + 1 => backtrack [
+  | _size + 1 => backtrack [
       (1, fun () => do
         let τ ← BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G Ty)
         let e ← BacktrackGenFor.gen (P := fun e => HasType e τ) initSize
