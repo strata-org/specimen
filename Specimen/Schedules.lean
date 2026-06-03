@@ -320,10 +320,27 @@ structure SpecScore where
 
 instance : Inhabited SpecScore := ⟨{}⟩
 
+/-- A complete derivation plan for one inductive at one output mode.
+    Analogous to QuickChick's `inductive_schedule`. -/
+structure InductiveSchedule where
+  /-- The spec this schedule is for -/
+  key : SpecKey
+  /-- Freshened argument names (used in the schedule steps) -/
+  argNames : List Name
+  /-- The recursive function name used in Source.Rec calls -/
+  recFnName : Name
+  /-- Per-constructor schedules for non-recursive (base) constructors -/
+  baseSchedules : List (Name × Schedule)
+  /-- Per-constructor schedules for recursive constructors -/
+  recSchedules : List (Name × Schedule)
+  /-- Quality score for this derivation -/
+  score : SpecScore
+  deriving Repr
+
 /-- Result of deriving a schedule, stored in the dependency memo. -/
 inductive MemoEntry
   | inProgress  -- derivation started, cycle detection
-  | done (baseSchedules : List (Name × Schedule)) (recSchedules : List (Name × Schedule)) (score : SpecScore)
+  | done (indSched : InductiveSchedule)
   | failed (msg : String)
   deriving Repr
 
@@ -400,14 +417,28 @@ partial def collectUsedDeps (root : SpecKey) (memo : Std.HashMap SpecKey MemoEnt
   else
     let visited := visited.insert root
     match memo[root]? with
-    | some (.done baseScheds recScheds _) =>
-      let allSchedules := baseScheds ++ recScheds
+    | some (.done indSched) =>
+      let allSchedules := indSched.baseSchedules ++ indSched.recSchedules
       let deps := allSchedules.flatMap (fun (_, (steps, _)) => collectNonRecDeps steps)
       let relDeps := deps.filter (·.kind == .relation)
       relDeps.foldl (fun acc dep =>
         let depKey : SpecKey := { inductiveName := dep.inductiveName, outputIndices := dep.outputIndices, deriveSort := dep.deriveSort }
         collectUsedDeps depKey memo acc) visited
     | _ => visited
+
+/-- Given a set of used SpecKeys and the memo, compute SCCs (mutual groups).
+    Returns components in topological order (dependencies before dependants). -/
+def computeSpecSCC (usedKeys : List SpecKey) (memo : Std.HashMap SpecKey MemoEntry) : List (List SpecKey) :=
+  let successors (key : SpecKey) : List SpecKey :=
+    match memo[key]? with
+    | some (.done indSched) =>
+      let allScheds := indSched.baseSchedules ++ indSched.recSchedules
+      let deps := allScheds.flatMap (fun (_, (steps, _)) => collectNonRecDeps steps)
+      let relDeps := deps.filter (·.kind == .relation)
+      let depKeys := relDeps.map (fun d => SpecKey.mk d.inductiveName d.outputIndices d.deriveSort)
+      depKeys.filter (usedKeys.contains ·)
+    | _ => []
+  Lean.SCC.scc usedKeys successors
 
 /-- Checks if any step in a schedule uses `Source.MutRec`. -/
 def scheduleUsesMutualCall (steps : List ScheduleStep) : Bool :=
