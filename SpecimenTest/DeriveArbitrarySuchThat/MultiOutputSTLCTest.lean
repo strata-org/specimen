@@ -49,12 +49,12 @@ set_option guard_msgs.diff true
 -- set_option trace.plausible.deriving.results true in
 set_option specimen.autoDeriveDeps true in
 derive_mutual
-  (∃ (Γ : List type) (e : term) (τ : type), typing Γ e τ),
-  (fun τ => ∃ (Γ : List type) (e : term), typing Γ e τ),
-  (fun Γ => ∃ (e : term) (τ : type), typing Γ e τ)
+  (∃ (Γ : List type) (e : term) (τ : type), typing Γ e τ)
+  -- (fun τ => ∃ (Γ : List type) (e : term), typing Γ e τ),
+  -- (fun Γ => ∃ (e : term) (τ : type), typing Γ e τ)
 
 
 #eval! do
   let sample ← Gen.run
-    (ArbitrarySizedSuchThat.arbitrarySizedST (fun (p : List type × term × type) => typing p.1 p.2.1 p.2.2) 3) 1
+    (ArbitrarySizedSuchThat.arbitrarySizedST (fun (p : List type × Nat) => lookup p.1 p.2 (.Fun (.Fun .Nat .Nat) .Nat)) 2) 2
   return repr sample

@@ -874,7 +874,59 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
   | some (.failed _) => return { unconstrained := 1 }  -- user must provide; assume partial quality
   | none => pure ()
 
-  -- 2. Insert placeholder
+  -- 2. Check if instance already exists — skip derivation if so
+  let indInfo ← getConstInfoInduct key.inductiveName
+  let indTypeComponents ← getComponentsOfArrowType indInfo.type
+  let argTypes := indTypeComponents.pop
+  let nonSortOutputIndices := key.outputIndices.filter (fun i =>
+    match argTypes[i]? with | some ty => !ty.isSort | none => true)
+  let instanceExists ← Meta.withNewMCtxDepth do
+    try
+      if nonSortOutputIndices.isEmpty then pure true  -- nothing to generate
+      else
+        let outputTypes := nonSortOutputIndices.filterMap (fun i => argTypes[i]?)
+        let rec mkProdTypeExpr : List Expr → MetaM Expr
+          | [] => throwError "empty" | [t] => pure t
+          | t :: ts => do let rest ← mkProdTypeExpr ts; mkAppM ``Prod #[t, rest]
+        let outType ← mkProdTypeExpr outputTypes
+        withLocalDecl `x .default outType fun xFvar => do
+          let inputNameTypes := (List.range argTypes.size).filterMap (fun i =>
+            if i ∉ key.outputIndices then some (Name.mkSimple s!"inp_{i}", argTypes[i]!)
+            else none)
+          withLocalDeclsDND inputNameTypes.toArray fun inputFVars => do
+            let mut appArgs : Array Expr := #[]
+            let mut projections : Array Expr := #[]
+            let mut currentExpr := xFvar
+            for i in [:nonSortOutputIndices.length] do
+              if nonSortOutputIndices.length == 1 then projections := projections.push currentExpr
+              else if i < nonSortOutputIndices.length - 1 then
+                projections := projections.push (← mkAppM ``Prod.fst #[currentExpr])
+                currentExpr ← mkAppM ``Prod.snd #[currentExpr]
+              else projections := projections.push currentExpr
+            let mut outIdx := 0
+            let mut inpIdx := 0
+            for i in [:argTypes.size] do
+              if i ∈ nonSortOutputIndices then
+                appArgs := appArgs.push projections[outIdx]!
+                outIdx := outIdx + 1
+              else if !(argTypes[i]!.isSort) then
+                appArgs := appArgs.push inputFVars[inpIdx]!
+                inpIdx := inpIdx + 1
+              else
+                appArgs := appArgs.push (← Meta.mkFreshExprMVar (some argTypes[i]!))
+            let indLevels := indInfo.levelParams.map (Level.param ·)
+            let body := mkAppN (Lean.mkConst key.inductiveName indLevels) appArgs
+            let pred ← mkLambdaFVars #[xFvar] body
+            let ty ← mkAppM ``ArbitrarySizedSuchThat #[outType, pred]
+            let result ← Meta.synthInstance? ty
+            pure result.isSome
+    catch _ => pure false
+  if instanceExists then
+    let trivialSched : InductiveSchedule := { key, argNames := [], recFnName := `_, baseSchedules := [], recSchedules := [], score := {}, alreadyExists := true }
+    memo.modify (·.insert key (.done trivialSched))
+    return {}
+
+  -- 3. Insert placeholder
   memo.modify (·.insert key .inProgress)
 
   -- 3. Derive schedules for each constructor
@@ -1391,6 +1443,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
           for (key, globalName) in compMeta do
             match finalMemo[key]? with
             | some (.done indSched) =>
+              if indSched.alreadyExists then continue
               try
                 let (defCmd, instCmd) ← liftTermElabM <|
                   compileInductiveSchedule indSched globalName compSiblings

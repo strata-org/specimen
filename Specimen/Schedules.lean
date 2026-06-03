@@ -362,6 +362,8 @@ structure InductiveSchedule where
   recSchedules : List (Name × Schedule)
   /-- Quality score for this derivation -/
   score : SpecScore
+  /-- True if this spec already has an instance in the environment (no need to compile) -/
+  alreadyExists : Bool := false
   deriving Repr
 
 /-- Result of deriving a schedule, stored in the dependency memo. -/
