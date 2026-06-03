@@ -795,7 +795,10 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
       for i in [:argTypes.size] do
         if i ∈ key.outputIndices then r := r.push allFVars[i]!
       r
-    let outputTypes := key.outputIndices.filterMap (fun i => argTypes[i]?)
+    -- Filter out Sort-typed positions from outputs (those are type params, handled by instance binders)
+    let outputIndicesNonSort := key.outputIndices.filter (fun i =>
+      match argTypes[i]? with | some ty => !ty.isSort | none => true)
+    let outputTypes := outputIndicesNonSort.filterMap (fun i => argTypes[i]?)
     -- Compile each constructor schedule to a sub-producer term
     let rec mkProdType : List Expr → TermElabM Expr
       | [] => throwError "no output types"
@@ -843,8 +846,9 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
     let baseProducers ← `([$nonRecursiveProducers,*])
     let inductiveProducers ← `([$nonRecursiveProducers,*, $recursiveProducers,*])
     -- Build the output pieces using existing infrastructure
+    -- freshArgIdents: include all args (mkConstrainedProducerMutualPieces handles Sort filtering)
     let freshArgIdents : TSyntaxArray `term := argNameTypes.map (fun (n, _) => Lean.mkIdent n)
-    let freshenedOutputNames := key.outputIndices.filterMap (fun i => argNameTypes[i]?.map (·.1))
+    let freshenedOutputNames := outputIndicesNonSort.filterMap (fun i => argNameTypes[i]?.map (·.1))
     mkConstrainedProducerMutualPieces baseProducers inductiveProducers
       key.inductiveName indLevels freshArgIdents freshenedOutputNames.toArray
       outputTypes.toArray producerSort (← getLCtx) globalName

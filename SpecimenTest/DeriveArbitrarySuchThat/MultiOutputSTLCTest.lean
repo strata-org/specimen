@@ -17,12 +17,12 @@ open Plausible
 set_option guard_msgs.diff true
 
 -- Derive all mutual dependencies together
-#guard_msgs(drop info, drop warning) in
-derive_mutual
-  (∃ (Γ : List type) (x : Nat) (τ : type), lookup Γ x τ),
-  (fun τ => ∃ (Γ : List type) (x : Nat), lookup Γ x τ),
-  (∃ (Γ : List type) (e : term) (τ : type), typing Γ e τ),
-  (fun τ => ∃ (Γ : List type) (e : term), typing Γ e τ)
+-- #guard_msgs(drop info, drop warning) in
+-- derive_mutual
+--   (∃ (Γ : List type) (x : Nat) (τ : type), lookup Γ x τ),
+--   (fun τ => ∃ (Γ : List type) (x : Nat), lookup Γ x τ),
+--   (∃ (Γ : List type) (e : term) (τ : type), typing Γ e τ),
+--   (fun τ => ∃ (Γ : List type) (e : term), typing Γ e τ)
 
 -- -- Verify instances
 -- #guard_msgs(drop info, drop warning) in
@@ -45,9 +45,16 @@ derive_mutual
 
 -- With autoDeriveDeps, derive_mutual auto-derives missing lookup and typing[1] deps.
 -- Note: typing[1,2] must still be listed explicitly (schedule-dependent discovery limitation).
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop warning) in
+-- set_option trace.plausible.deriving.results true in
 set_option specimen.autoDeriveDeps true in
 derive_mutual
   (∃ (Γ : List type) (e : term) (τ : type), typing Γ e τ),
   (fun τ => ∃ (Γ : List type) (e : term), typing Γ e τ),
   (fun Γ => ∃ (e : term) (τ : type), typing Γ e τ)
+
+
+#eval! do
+  let sample ← Gen.run
+    (ArbitrarySizedSuchThat.arbitrarySizedST (fun (p : List type × term × type) => typing p.1 p.2.1 p.2.2) 3) 1
+  return repr sample
