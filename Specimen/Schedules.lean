@@ -311,6 +311,33 @@ structure SpecKey where
   deriveSort : DeriveSort
   deriving Repr, BEq, Hashable
 
+/-- Pretty-prints a SpecKey as a spec form like "fun τ => ∃ Γ e, typing Γ e τ".
+    Requires knowing the inductive's arg types (number of args). -/
+def SpecKey.prettyPrint (key : SpecKey) (numArgs : Nat) : String :=
+  let inputVarNames := #["a", "b", "c", "d", "e", "f", "g", "h"]
+  let outputVarNames := #["x", "y", "z", "w", "u", "v", "p", "q"]
+  let (inputs, outputs, appArgs) := Id.run do
+    let mut inputs : List String := []
+    let mut outputs : List String := []
+    let mut appArgs : List String := []
+    let mut inpIdx := 0
+    let mut outIdx := 0
+    for i in List.range numArgs do
+      if i ∈ key.outputIndices then
+        let name := outputVarNames.getD outIdx s!"o{outIdx}"
+        outputs := outputs ++ [name]
+        appArgs := appArgs ++ [name]
+        outIdx := outIdx + 1
+      else
+        let name := inputVarNames.getD inpIdx s!"i{inpIdx}"
+        inputs := inputs ++ [name]
+        appArgs := appArgs ++ [name]
+        inpIdx := inpIdx + 1
+    (inputs, outputs, appArgs)
+  let inputsStr := if inputs.isEmpty then "" else s!"fun {String.intercalate " " inputs} => "
+  let outputsStr := if outputs.isEmpty then "" else s!"∃ {String.intercalate " " outputs}, "
+  s!"{inputsStr}{outputsStr}{key.inductiveName} {String.intercalate " " appArgs}"
+
 /-- Score for a derived schedule (used for selecting best schedule). -/
 structure SpecScore where
   checks : Nat := 0

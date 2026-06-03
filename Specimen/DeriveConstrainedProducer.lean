@@ -1400,13 +1400,19 @@ def elabDeriveMutual : CommandElab := fun stx => do
                 logWarning m!"Failed to compile {key.inductiveName}{key.outputIndices}: {e.toMessageData}"
             | _ => logWarning m!"No schedule found for {key.inductiveName}{key.outputIndices}"
           -- Emit: mutual block for multi-element, standalone for singletons
-          let specNames := compMeta.toList.map (fun (k, gn) => s!"{gn}: {k.inductiveName}{k.outputIndices}")
+          let specDescs ← compMeta.toList.mapM fun (k, _) => do
+            let numArgs ← liftTermElabM do
+              try
+                let comps ← getComponentsOfArrowType (← getConstInfoInduct k.inductiveName).type
+                pure (comps.size - 1)
+              catch _ => pure k.outputIndices.length
+            pure (k.prettyPrint numArgs)
           if defCmds.size > 1 then
-            logInfo m!"  mutual block ({defCmds.size}): {specNames}"
+            logInfo m!"  mutual block ({defCmds.size}):\n    {String.intercalate "\n    " specDescs}"
             let mutualCmd ← `(command| mutual $defCmds* end)
             elabCommand mutualCmd
           else if defCmds.size == 1 then
-            logInfo m!"  singleton: {specNames}"
+            logInfo m!"  singleton: {specDescs.head!}"
             elabCommand defCmds[0]!
           for instCmd in instCmds do
             elabCommand instCmd
