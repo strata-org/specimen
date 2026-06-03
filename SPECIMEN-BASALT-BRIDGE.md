@@ -81,38 +81,35 @@ The following are explicitly **not** addressed by this plan:
 
 ### Example
 
-We will use the following small typed language throughout this document to illustrate the changes. (Note: the `letBind` form is a simplification — the bound variable is never referenced in the body. This is intentional; the example is designed to show cross-generator composition, not to be a realistic language.)
+We will use the following small typed language throughout this document to illustrate the changes. This example is designed to exercise all three mechanisms: backtracking (multiple constructors per type, some of which fail), checkers (the `isPos` constructor has a decidable guard `n ≠ 0`), and cross-generator composition (`WellFormed` calls `HasType`).
 
 ```lean
 inductive Ty | nat | bool
 
 inductive Expr
-  | litNat (n : Nat)
-  | litBool (b : Bool)
-  | isZero (e : Expr)
-
-inductive Stmt
-  | expr (e : Expr)
-  | letBind (x : Nat) (e : Expr) (body : Stmt)
-  | assert (e : Expr) (τ : Ty)
+  | lit (n : Nat)
+  | isPos (n : Nat)
+  | add (l r : Expr)
 
 inductive HasType : Expr → Ty → Prop
-  | litNat (n : Nat) : HasType (.litNat n) .nat
-  | litBool (b : Bool) : HasType (.litBool b) .bool
-  | isZero (e : Expr) : HasType e .nat → HasType (.isZero e) .bool
+  | lit (n) : HasType (.lit n) .nat
+  | isPos (n) : n ≠ 0 → HasType (.isPos n) .bool
+  | add (l r) : HasType l .nat → HasType r .nat → HasType (.add l r) .nat
 
-inductive WellTypedStmt : Stmt → Prop
-  | expr (e : Expr) (τ : Ty) : HasType e τ → WellTypedStmt (.expr e)
-  | letBind (x : Nat) (e : Expr) (body : Stmt) (τ : Ty) :
-      HasType e τ → WellTypedStmt body → WellTypedStmt (.letBind x e body)
-  | assert (e : Expr) (τ : Ty) : HasType e τ → WellTypedStmt (.assert e τ)
+inductive Prog
+  | expr (e : Expr)
+  | both (e1 e2 : Expr)
+
+inductive WellFormed : Prog → Prop
+  | expr (e τ) : HasType e τ → WellFormed (.expr e)
+  | both (e1 e2 τ) : HasType e1 τ → HasType e2 τ → WellFormed (.both e1 e2)
 ```
 
 To get generators, a user invokes Specimen (this syntax will not change):
 
 ```lean
 derive_generator (fun τ => ∃ e, HasType e τ)
-derive_generator (fun _ => ∃ s, WellTypedStmt s)
+derive_generator (fun _ => ∃ p, WellFormed p)
 ```
 
 ### What Specimen emits today
@@ -127,54 +124,65 @@ instance : ArbitrarySizedSuchThat Expr (fun e => HasType e τ) where
       | Nat.zero =>
         GeneratorCombinators.backtrack
           [(1, match τ with
-            | Ty.nat => do let n ← Arbitrary.arbitrary; return Expr.litNat n
+            | Ty.nat => do
+              let n ← Arbitrary.arbitrary
+              return Expr.lit n
             | _ => MonadExcept.throw Gen.genericFailure),
            (1, match τ with
-            | Ty.bool => do let b ← Arbitrary.arbitrary; return Expr.litBool b
+            | Ty.bool => do
+              let n ← Arbitrary.arbitrary
+              match @DecOpt.decOpt (¬(n = 0)) _ initSize with
+              | Except.ok true => return Expr.isPos n
+              | _ => MonadExcept.throw Gen.genericFailure
             | _ => MonadExcept.throw Gen.genericFailure)]
       | Nat.succ size' =>
         GeneratorCombinators.backtrack
           [(1, match τ with
-            | Ty.nat => do let n ← Arbitrary.arbitrary; return Expr.litNat n
+            | Ty.nat => do
+              let n ← Arbitrary.arbitrary
+              return Expr.lit n
             | _ => MonadExcept.throw Gen.genericFailure),
            (1, match τ with
-            | Ty.bool => do let b ← Arbitrary.arbitrary; return Expr.litBool b
+            | Ty.bool => do
+              let n ← Arbitrary.arbitrary
+              match @DecOpt.decOpt (¬(n = 0)) _ initSize with
+              | Except.ok true => return Expr.isPos n
+              | _ => MonadExcept.throw Gen.genericFailure
             | _ => MonadExcept.throw Gen.genericFailure),
            (Nat.succ size', match τ with
-            | Ty.bool => do let e ← aux_arb initSize size' Ty.nat; return Expr.isZero e
+            | Ty.nat => do
+              let l ← aux_arb initSize size' Ty.nat
+              let r ← aux_arb initSize size' Ty.nat
+              return Expr.add l r
             | _ => MonadExcept.throw Gen.genericFailure)]
     fun size => aux_arb size size τ
 ```
 
-For `WellTypedStmt`, Specimen produces a generator that calls the `HasType` generator **via typeclass resolution** (`ArbitrarySizedSuchThat.arbitrarySizedST`):
+For `WellFormed`, Specimen produces a generator that calls the `HasType` generator **via typeclass resolution** (`ArbitrarySizedSuchThat.arbitrarySizedST`):
 
 ```lean
-instance : ArbitrarySizedSuchThat Stmt (fun s => WellTypedStmt s) where
+instance : ArbitrarySizedSuchThat Prog (fun p => WellFormed p) where
   arbitrarySizedST :=
-    let rec aux_arb (initSize : Nat) (size : Nat) : Plausible.Gen Stmt :=
+    let rec aux_arb (initSize : Nat) (size : Nat) : Plausible.Gen Prog :=
       match size with
       | Nat.zero =>
         GeneratorCombinators.backtrack
           [(1, do let τ ← Arbitrary.arbitrary
                   let e ← @ArbitrarySizedSuchThat.arbitrarySizedST _ (fun e => HasType e τ) _ initSize
-                  return Stmt.expr e),
+                  return Prog.expr e),
            (1, do let τ ← Arbitrary.arbitrary
-                  let e ← @ArbitrarySizedSuchThat.arbitrarySizedST _ (fun e => HasType e τ) _ initSize
-                  return Stmt.assert e τ)]
+                  let e1 ← @ArbitrarySizedSuchThat.arbitrarySizedST _ (fun e => HasType e τ) _ initSize
+                  let e2 ← @ArbitrarySizedSuchThat.arbitrarySizedST _ (fun e => HasType e τ) _ initSize
+                  return Prog.both e1 e2)]
       | Nat.succ size' =>
         GeneratorCombinators.backtrack
           [(1, do let τ ← Arbitrary.arbitrary
                   let e ← @ArbitrarySizedSuchThat.arbitrarySizedST _ (fun e => HasType e τ) _ initSize
-                  return Stmt.expr e),
+                  return Prog.expr e),
            (1, do let τ ← Arbitrary.arbitrary
-                  let e ← @ArbitrarySizedSuchThat.arbitrarySizedST _ (fun e => HasType e τ) _ initSize
-                  return Stmt.assert e τ),
-           (Nat.succ size', do
-                  let body ← aux_arb initSize size'
-                  let τ ← Arbitrary.arbitrary
-                  let e ← @ArbitrarySizedSuchThat.arbitrarySizedST _ (fun e => HasType e τ) _ initSize
-                  let x ← Arbitrary.arbitrary
-                  return Stmt.letBind x e body)]
+                  let e1 ← @ArbitrarySizedSuchThat.arbitrarySizedST _ (fun e => HasType e τ) _ initSize
+                  let e2 ← @ArbitrarySizedSuchThat.arbitrarySizedST _ (fun e => HasType e τ) _ initSize
+                  return Prog.both e1 e2)]
     fun size => aux_arb size size
 ```
 
@@ -184,7 +192,7 @@ These generators work for execution but cannot be proved correct. To bridge them
 
 **Problem 2: Sub-generator resolution.** The generators call sub-generators via Plausible-specific typeclasses (`Arbitrary`, `ArbitrarySizedSuchThat`). These typeclasses wrap `Plausible.Gen` and cannot be used polymorphically over `G`. We need a Basalt-compatible typeclass for sub-generator lookup. (Addressed in Section 3.)
 
-**Problem 3: Checkers.** In more complex examples, Specimen invokes `DecOpt.decOpt` within generators to check hypotheses that involve only fixed (input) variables. `DecOpt.decOpt` returns `Except GenError Bool` — a Plausible-specific type. Checkers must also be made polymorphic over `G`. (Addressed in Section 5. Our running example does not trigger this, but it arises frequently in practice — e.g., checking `n < m` or type equality after both sides are determined.)
+**Problem 3: Checkers.** In more complex examples, Specimen invokes `DecOpt.decOpt` within generators to check hypotheses that involve only fixed (input) variables. `DecOpt.decOpt` returns `Except GenError Bool` — a Plausible-specific type. Checkers must also be made polymorphic over `G`. (Addressed in Section 4. In our running example, the `isPos` constructor triggers this: after generating `n`, Specimen checks `n ≠ 0` via `DecOpt`.)
 
 **Problem 4: Unconstrained generators.** Specimen's `derive Arbitrary` emits generators using Plausible-specific `Gen.frequency` / `Gen.oneOfWithDefault` and `Arbitrary.arbitrary`. These must also become Basalt-polymorphic so they can serve as provably-correct `GenFor` instances for sub-generator resolution in constrained generators. (Addressed in Section 6.)
 
@@ -383,112 +391,7 @@ instance [GenFor α (fun _ => True)] : Arbitrary α where
   arbitrary := GenFor.gen  -- specializes at G := Plausible.Gen
 ```
 
-## 4. The Generated Code (Running Example)
-
-Applying `BacktrackGen` (Section 2) and the `GenFor` / `BacktrackGenFor` typeclasses (Section 3) to the example, the generated code becomes:
-
-```lean
-def genHasType [Gen G] [GenFor Nat (fun _ => True)] [GenFor Bool (fun _ => True)]
-    (initSize : Nat) (τ : Ty) : (size : Nat) → BacktrackGen G Expr
-  | 0 => backtrack [
-      (1, fun () => match τ with
-        | .nat => do
-            let n ← BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G Nat)
-            pure (Expr.litNat n)
-        | .bool => do
-            let b ← BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G Bool)
-            pure (Expr.litBool b)),
-      (1, fun () => match τ with
-        | .bool => do
-            let b ← BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G Bool)
-            pure (Expr.litBool b)
-        | .nat => BacktrackGen.fail)]
-  | size + 1 => backtrack [
-      (1, fun () => match τ with
-        | .nat => do
-            let n ← BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G Nat)
-            pure (Expr.litNat n)
-        | .bool => do
-            let b ← BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G Bool)
-            pure (Expr.litBool b)),
-      (1, fun () => match τ with
-        | .bool => do
-            let b ← BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G Bool)
-            pure (Expr.litBool b)
-        | .nat => BacktrackGen.fail),
-      (size + 1, fun () => match τ with
-        | .bool => do
-            let e ← genHasType initSize Ty.nat size
-            pure (Expr.isZero e)
-        | .nat => BacktrackGen.fail)]
-
-instance [GenFor Nat (fun _ => True)] [GenFor Bool (fun _ => True)]
-    : ∀ τ, BacktrackGenFor Expr (fun e => HasType e τ) :=
-  fun τ => ⟨fun {_} [_] size => genHasType size τ size⟩
-```
-
-And `genWellTypedStmt` calls the `HasType` generator via `BacktrackGenFor` typeclass resolution — the runtime value `τ` is captured in the predicate lambda, just as today's code captures it in `(fun e => HasType e τ)`:
-
-```lean
-def genWellTypedStmt [Gen G] [GenFor Nat (fun _ => True)] [GenFor Bool (fun _ => True)]
-    [GenFor Ty (fun _ => True)]
-    [∀ τ, BacktrackGenFor Expr (fun e => HasType e τ)]
-    (initSize : Nat) : (size : Nat) → BacktrackGen G Stmt
-  | 0 => backtrack [
-      (1, fun () => do
-        let τ ← BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G Ty)
-        let e ← BacktrackGenFor.gen (P := fun e => HasType e τ) initSize
-        pure (Stmt.expr e)),
-      (1, fun () => do
-        let τ ← BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G Ty)
-        let e ← BacktrackGenFor.gen (P := fun e => HasType e τ) initSize
-        pure (Stmt.assert e τ))]
-  | size + 1 => backtrack [
-      (1, fun () => do
-        let τ ← BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G Ty)
-        let e ← BacktrackGenFor.gen (P := fun e => HasType e τ) initSize
-        pure (Stmt.expr e)),
-      (1, fun () => do
-        let τ ← BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G Ty)
-        let e ← BacktrackGenFor.gen (P := fun e => HasType e τ) initSize
-        pure (Stmt.assert e τ)),
-      (size + 1, fun () => do
-        let body ← genWellTypedStmt initSize size
-        let τ ← BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G Ty)
-        let e ← BacktrackGenFor.gen (P := fun e => HasType e τ) initSize
-        let x ← BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G Nat)
-        pure (Stmt.letBind x e body))]
-```
-
-### Key transformations from the code Specimen generates today
-
-- `MonadExcept.throw Gen.genericFailure` → `BacktrackGen.fail`
-- `return value` → `pure value` (the `BacktrackGen` Monad wraps in `some` automatically)
-- `Arbitrary.arbitrary` → `BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G α)`
-- `ArbitrarySizedSuchThat.arbitrarySizedST (fun e => P e) initSize` → `BacktrackGenFor.gen (P := fun e => P e) initSize`
-- Registering the `HasType` generator as `GenFor Bool (fun _ => True)`
-- Return type: `Plausible.Gen α` → `BacktrackGen G α`
-- Function is now polymorphic over `[Gen G]`
-- Recursive calls compose directly in the `BacktrackGen` monad (failure propagates via `bind`)
-
-The `let rec aux_arb` inner function is eliminated — `initSize` and `τ` are explicit parameters with structural recursion on `size`. However, the double-initialization pattern remains: at the Plausible call site, the same value is used for both `initSize` and `size` (matching today's `fun size => aux_arb size size τ`). The `initSize` variable (passed when calling sub-generators like `BacktrackGenFor.gen ... initSize`) gives sub-generators their full budget without decrementing.
-
-### Executing via Plausible
-
-```lean
-instance : ArbitrarySizedSuchThat Expr (HasType · τ) where
-  arbitrarySizedST size := BacktrackGen.toPlausibleGen (genHasType size τ size)
-
-instance : ArbitrarySuchThat Expr (HasType · τ) where
-  arbitraryST := Gen.sized (fun n => BacktrackGen.toPlausibleGen (genHasType n τ n))
-
-instance : ArbitrarySizedSuchThat Stmt WellTypedStmt where
-  arbitrarySizedST size := BacktrackGen.toPlausibleGen (genWellTypedStmt size size)
-```
-
-The `plausible` tactic finds these instances via the existing `ArbitrarySizedSuchThat → ArbitrarySuchThat → Arbitrary` chain and executes them normally.
-
-## 5. Solving Problem 3: Checkers (`DecOpt`)
+## 4. Solving Problem 3: Checkers (`DecOpt`)
 
 ### The problem
 
@@ -517,25 +420,7 @@ The three-valued semantics map cleanly to `G (Option Bool)`:
 - `some false` → P doesn't hold
 - `none` → can't decide (out of fuel) → causes backtracking
 
-This fits naturally into the `BacktrackGen` framework: when the checker returns `none`, the calling generator treats it as local failure and backtracks to another branch — exactly today's behavior.
-
-### Example usage
-
-Checkers arise in cases like the following:
-
-```lean
--- Suppose a relation has a constructor with a decidable guard:
--- | bounded (n m : Nat) : n < m → SomeRel n m
--- Specimen generates n and m, then *checks* n < m:
-(1, fun () => do
-  let n ← BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G Nat)
-  let m ← BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G Nat)
-  match ← DecOpt.decOpt (n < m) fuel with
-  | true => pure (SomeResult n m)
-  | false => BacktrackGen.fail)
-```
-
-The checker result is a `Bool` in `BacktrackGen G` — match on `true`/`false` (the `none` case is handled by `BacktrackGen`'s monad: if `decOpt` returns `none` internally, the bind short-circuits to failure automatically).
+This fits naturally into the `BacktrackGen` framework: when the checker returns `none`, the calling generator treats it as local failure and backtracks to another branch — exactly today's behavior. The running example demonstrates this: in the `isPos` branch, `DecOpt.decOpt (P := ¬(n = 0))` is called after `n` is generated; if it returns `false`, the branch fails and `backtrack` retries another branch.
 
 ### Interpretations
 
@@ -553,6 +438,107 @@ Any `Decidable` instance gives a `DecOpt` trivially (it never fails):
 instance [Decidable P] : DecOpt P where
   decOpt _ := pure (decide P)
 ```
+
+## 5. The Generated Code (Running Example)
+
+Applying `BacktrackGen` (Section 2), `GenFor` / `BacktrackGenFor` (Section 3), and `DecOpt` (Section 4) to the example, the generated code becomes:
+
+```lean
+def genHasType [Gen G] [GenFor Nat (fun _ => True)]
+    (initSize : Nat) (τ : Ty) : (size : Nat) → BacktrackGen G Expr
+  | 0 => backtrack [
+      (1, fun () => match τ with
+        | .nat => do
+            let n ← BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G Nat)
+            pure (Expr.lit n)
+        | _ => BacktrackGen.fail),
+      (1, fun () => match τ with
+        | .bool => do
+            let n ← BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G Nat)
+            match ← DecOpt.decOpt (P := ¬(n = 0)) initSize with
+            | true => pure (Expr.isPos n)
+            | false => BacktrackGen.fail
+        | _ => BacktrackGen.fail)]
+  | size + 1 => backtrack [
+      (1, fun () => match τ with
+        | .nat => do
+            let n ← BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G Nat)
+            pure (Expr.lit n)
+        | _ => BacktrackGen.fail),
+      (1, fun () => match τ with
+        | .bool => do
+            let n ← BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G Nat)
+            match ← DecOpt.decOpt (P := ¬(n = 0)) initSize with
+            | true => pure (Expr.isPos n)
+            | false => BacktrackGen.fail
+        | _ => BacktrackGen.fail),
+      (size + 1, fun () => match τ with
+        | .nat => do
+            let l ← genHasType initSize .nat size
+            let r ← genHasType initSize .nat size
+            pure (Expr.add l r)
+        | _ => BacktrackGen.fail)]
+
+instance [GenFor Nat (fun _ => True)]
+    : ∀ τ, BacktrackGenFor Expr (fun e => HasType e τ) :=
+  fun τ => ⟨fun {_} [_] size => genHasType size τ size⟩
+```
+
+And `genWellFormed` calls the `HasType` generator via `BacktrackGenFor` typeclass resolution — the runtime value `τ` is captured in the predicate lambda, just as today's code captures it in `(fun e => HasType e τ)`:
+
+```lean
+def genWellFormed [Gen G] [GenFor Nat (fun _ => True)] [GenFor Ty (fun _ => True)]
+    [∀ τ, BacktrackGenFor Expr (fun e => HasType e τ)]
+    (initSize : Nat) : (size : Nat) → BacktrackGen G Prog
+  | 0 => backtrack [
+      (1, fun () => do
+        let τ ← BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G Ty)
+        let e ← BacktrackGenFor.gen (P := fun e => HasType e τ) initSize
+        pure (Prog.expr e)),
+      (1, fun () => do
+        let τ ← BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G Ty)
+        let e1 ← BacktrackGenFor.gen (P := fun e => HasType e τ) initSize
+        let e2 ← BacktrackGenFor.gen (P := fun e => HasType e τ) initSize
+        pure (Prog.both e1 e2))]
+  | size + 1 => backtrack [
+      (1, fun () => do
+        let τ ← BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G Ty)
+        let e ← BacktrackGenFor.gen (P := fun e => HasType e τ) initSize
+        pure (Prog.expr e)),
+      (1, fun () => do
+        let τ ← BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G Ty)
+        let e1 ← BacktrackGenFor.gen (P := fun e => HasType e τ) initSize
+        let e2 ← BacktrackGenFor.gen (P := fun e => HasType e τ) initSize
+        pure (Prog.both e1 e2))]
+```
+
+### Key transformations from the code Specimen generates today
+
+- `MonadExcept.throw Gen.genericFailure` → `BacktrackGen.fail`
+- `return value` → `pure value` (the `BacktrackGen` Monad wraps in `some` automatically)
+- `Arbitrary.arbitrary` → `BacktrackGen.liftGen (GenFor.gen (P := fun _ => True) : G α)`
+- `ArbitrarySizedSuchThat.arbitrarySizedST (fun e => P e) initSize` → `BacktrackGenFor.gen (P := fun e => P e) initSize`
+- `match @DecOpt.decOpt P _ fuel with | Except.ok true => ... | _ => throw` → `match ← DecOpt.decOpt (P := P) fuel with | true => ... | false => BacktrackGen.fail`
+- Return type: `Plausible.Gen α` → `BacktrackGen G α`
+- Function is now polymorphic over `[Gen G]`
+- Recursive calls compose directly in the `BacktrackGen` monad (failure propagates via `bind`)
+
+The `let rec aux_arb` inner function is eliminated — `initSize` and `τ` are explicit parameters with structural recursion on `size`. However, the double-initialization pattern remains: at the Plausible call site, the same value is used for both `initSize` and `size` (matching today's `fun size => aux_arb size size τ`). The `initSize` variable (passed when calling sub-generators like `BacktrackGenFor.gen ... initSize`) gives sub-generators their full budget without decrementing.
+
+### Executing via Plausible
+
+```lean
+instance : ArbitrarySizedSuchThat Expr (HasType · τ) where
+  arbitrarySizedST size := BacktrackGen.toPlausibleGen (genHasType size τ size)
+
+instance : ArbitrarySuchThat Expr (HasType · τ) where
+  arbitraryST := Gen.sized (fun n => BacktrackGen.toPlausibleGen (genHasType n τ n))
+
+instance : ArbitrarySizedSuchThat Prog WellFormed where
+  arbitrarySizedST size := BacktrackGen.toPlausibleGen (genWellFormed size size)
+```
+
+The `plausible` tactic finds these instances via the existing `ArbitrarySizedSuchThat → ArbitrarySuchThat → Arbitrary` chain and executes them normally.
 
 ## 6. Solving Problem 4: Unconstrained Generators (`derive Arbitrary`)
 
@@ -652,7 +638,7 @@ The emitted code uses different calling conventions depending on the sub-generat
 
 - **Self-recursive call**: Direct, with decremented size:
   ```lean
-  let body ← genWellTypedStmt initSize size
+  let l ← genHasType initSize .nat size
   ```
 
 - **Hand-written non-backtracking constrained generator** (e.g., Basalt's `Tree.genBST`): Returns `G α`, registered as a `GenFor`:
@@ -681,7 +667,7 @@ The generated code takes both `initSize` and `size` as parameters:
 - `size` is structurally decremented at each recursive call, ensuring termination.
 - `initSize` is the original fuel value, passed unchanged to sub-generators via `BacktrackGenFor.gen ... initSize`.
 
-This means sub-generators always get a full budget. When `genWellTypedStmt` at `size=3` calls `BacktrackGenFor.gen (P := fun e => HasType e τ) initSize`, the `HasType` generator receives the original budget (e.g., 5) rather than the remaining budget (3). This matches today's behavior where `aux_arb initSize size' Ty.nat` passes `initSize` to nested `ArbitrarySizedSuchThat.arbitrarySizedST` calls.
+This means sub-generators always get a full budget. When `genWellFormed` at `size=3` calls `BacktrackGenFor.gen (P := fun e => HasType e τ) initSize`, the `HasType` generator receives the original budget (e.g., 5) rather than the remaining budget (3). This matches today's behavior where `aux_arb initSize size' Ty.nat` passes `initSize` to nested `ArbitrarySizedSuchThat.arbitrarySizedST` calls.
 
 ### Fuel vs size vs `partial_fixpoint`
 
@@ -723,19 +709,19 @@ The practical upshot for this plan:
 With `[LawfulGenFor Nat (fun _ => True)]` in scope (which provides `GenFor Nat (fun _ => True)` via the subclass relationship), proofs compose modularly:
 
 ```lean
-theorem genHasType_sound [LawfulGenFor Nat (fun _ => True)] [LawfulGenFor Bool (fun _ => True)]
+theorem genHasType_sound [LawfulGenFor Nat (fun _ => True)]
     (τ : Ty) (size : Nat) (e : Expr) :
     some e ∈ SetGen.support (genHasType (G := SetGen.Set) size τ size) → HasType e τ := ...
 
-theorem genHasType_complete [LawfulGenFor Nat (fun _ => True)] [LawfulGenFor Bool (fun _ => True)]
+theorem genHasType_complete [LawfulGenFor Nat (fun _ => True)]
     (τ : Ty) (e : Expr) (h : HasType e τ) :
     ∃ size, some e ∈ SetGen.support (genHasType (G := SetGen.Set) size τ size) := ...
 
-theorem genWellTypedStmt_sound
-    [LawfulGenFor Nat (fun _ => True)] [LawfulGenFor Bool (fun _ => True)]
+theorem genWellFormed_sound
+    [LawfulGenFor Nat (fun _ => True)]
     [LawfulGenFor Ty (fun _ => True)]
-    (size : Nat) (s : Stmt) :
-    some s ∈ SetGen.support (genWellTypedStmt (G := SetGen.Set) size size) → WellTypedStmt s := ...
+    (size : Nat) (p : Prog) :
+    some p ∈ SetGen.support (genWellFormed (G := SetGen.Set) size size) → WellFormed p := ...
 ```
 
 The `LawfulGenFor` constraint gives the proof access to `LawfulGenFor.sound_and_complete`. Since any instance resolved for `GenFor Nat (fun _ => True)` must come from a `LawfulGenFor` instance (once the system invariant holds), the proof is sound regardless of which instance was picked.
