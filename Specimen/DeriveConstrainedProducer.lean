@@ -875,6 +875,7 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
   | none => pure ()
 
   -- 2. Check if instance already exists — skip derivation if so
+  -- Use forallTelescope for proper dependent types, add instImplicit for Sort params
   let indInfo ← getConstInfoInduct key.inductiveName
   let indTypeComponents ← getComponentsOfArrowType indInfo.type
   let argTypes := indTypeComponents.pop
@@ -882,44 +883,60 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
     match argTypes[i]? with | some ty => !ty.isSort | none => true)
   let instanceExists ← Meta.withNewMCtxDepth do
     try
-      if nonSortOutputIndices.isEmpty then pure true  -- nothing to generate
+      if nonSortOutputIndices.isEmpty && key.outputIndices.length > 0 then pure true
+      else if nonSortOutputIndices.isEmpty then pure false
       else
-        let outputTypes := nonSortOutputIndices.filterMap (fun i => argTypes[i]?)
-        let rec mkProdTypeExpr : List Expr → MetaM Expr
-          | [] => throwError "empty" | [t] => pure t
-          | t :: ts => do let rest ← mkProdTypeExpr ts; mkAppM ``Prod #[t, rest]
-        let outType ← mkProdTypeExpr outputTypes
-        withLocalDecl `x .default outType fun xFvar => do
-          let inputNameTypes := (List.range argTypes.size).filterMap (fun i =>
-            if i ∉ key.outputIndices then some (Name.mkSimple s!"inp_{i}", argTypes[i]!)
-            else none)
-          withLocalDeclsDND inputNameTypes.toArray fun inputFVars => do
-            let mut appArgs : Array Expr := #[]
-            let mut projections : Array Expr := #[]
-            let mut currentExpr := xFvar
-            for i in [:nonSortOutputIndices.length] do
-              if nonSortOutputIndices.length == 1 then projections := projections.push currentExpr
-              else if i < nonSortOutputIndices.length - 1 then
-                projections := projections.push (← mkAppM ``Prod.fst #[currentExpr])
-                currentExpr ← mkAppM ``Prod.snd #[currentExpr]
-              else projections := projections.push currentExpr
-            let mut outIdx := 0
-            let mut inpIdx := 0
-            for i in [:argTypes.size] do
-              if i ∈ nonSortOutputIndices then
-                appArgs := appArgs.push projections[outIdx]!
-                outIdx := outIdx + 1
-              else if !(argTypes[i]!.isSort) then
-                appArgs := appArgs.push inputFVars[inpIdx]!
-                inpIdx := inpIdx + 1
-              else
-                appArgs := appArgs.push (← Meta.mkFreshExprMVar (some argTypes[i]!))
-            let indLevels := indInfo.levelParams.map (Level.param ·)
-            let body := mkAppN (Lean.mkConst key.inductiveName indLevels) appArgs
-            let pred ← mkLambdaFVars #[xFvar] body
-            let ty ← mkAppM ``ArbitrarySizedSuchThat #[outType, pred]
-            let result ← Meta.synthInstance? ty
-            pure result.isSome
+        -- forallTelescope gives properly dependent-typed params
+        Meta.forallTelescope indInfo.type fun allParams _resultType => do
+          let params := allParams.pop
+          if params.size != argTypes.size then pure false
+          else
+            -- Add instImplicit Arbitrary + DecidableEq for Sort-typed params
+            let mut instTypes : Array Expr := #[]
+            for p in params do
+              let pty ← inferType p
+              if pty.isSort then
+                instTypes := instTypes.push (← mkAppM ``Plausible.Arbitrary #[p])
+                instTypes := instTypes.push (← mkAppM ``DecidableEq #[p])
+            let rec addInstDecls (remaining : List Expr) (idx : Nat) : MetaM Bool :=
+              match remaining with
+              | [] => do
+                -- Build output type from non-Sort output positions
+                let outputParams := nonSortOutputIndices.filterMap (fun i => params[i]?)
+                let outputTypes ← outputParams.mapM inferType
+                let rec mkProdTypeExpr : List Expr → MetaM Expr
+                  | [] => throwError "empty" | [t] => pure t
+                  | t :: ts => do let rest ← mkProdTypeExpr ts; mkAppM ``Prod #[t, rest]
+                let outType ← mkProdTypeExpr outputTypes
+                -- Build predicate with a single product-typed fvar
+                withLocalDecl `x .default outType fun xFvar => do
+                  let mut projections : Array Expr := #[]
+                  let mut currentExpr := xFvar
+                  for i in [:outputParams.length] do
+                    if outputParams.length == 1 then projections := projections.push currentExpr
+                    else if i < outputParams.length - 1 then
+                      projections := projections.push (← mkAppM ``Prod.fst #[currentExpr])
+                      currentExpr ← mkAppM ``Prod.snd #[currentExpr]
+                    else projections := projections.push currentExpr
+                  -- Build application with projections for outputs, params for inputs
+                  let mut appArgs : Array Expr := #[]
+                  let mut outIdx := 0
+                  for i in [:params.size] do
+                    if i ∈ nonSortOutputIndices then
+                      appArgs := appArgs.push projections[outIdx]!
+                      outIdx := outIdx + 1
+                    else
+                      appArgs := appArgs.push params[i]!
+                  let indLevels := indInfo.levelParams.map (Level.param ·)
+                  let body := mkAppN (Lean.mkConst key.inductiveName indLevels) appArgs
+                  let pred ← mkLambdaFVars #[xFvar] body
+                  let ty ← mkAppM ``ArbitrarySizedSuchThat #[outType, pred]
+                  let result ← Meta.synthInstance? ty
+                  pure result.isSome
+              | instTy :: rest =>
+                withLocalDecl (Name.mkSimple s!"inst_{idx}") .instImplicit instTy fun _ =>
+                  addInstDecls rest (idx + 1)
+            addInstDecls instTypes.toList 0
     catch _ => pure false
   if instanceExists then
     let trivialSched : InductiveSchedule := { key, argNames := [], recFnName := `_, baseSchedules := [], recSchedules := [], score := {}, alreadyExists := true }
