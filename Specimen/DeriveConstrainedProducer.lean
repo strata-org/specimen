@@ -766,6 +766,107 @@ def deriveConstrainedProducer
     constrainingInductive inductiveLevels freshArgIdents freshenedOutputNames
     outputTypes producerSort localCtx
 
+/-- Recursively derives the best schedule for a SpecKey, populating the memo with
+    all transitive dependencies. Returns the score for this spec.
+
+    Follows QuickChick's `inductive_best_valid_schedule` pattern:
+    1. Check memo (return cached if found, or optimistic score if inProgress/cycle)
+    2. Check if instance already exists (return totalScore)
+    3. Insert inProgress placeholder
+    4. Derive schedules for each constructor
+    5. Collect NonRec deps from chosen schedules → recursively derive
+    6. Store result in memo -/
+partial def deriveBestInductiveSchedule (key : SpecKey)
+    (memo : IO.Ref (Std.HashMap SpecKey MemoEntry))
+    (scheduleRewriter : List ScheduleStep → List ScheduleStep := id) : TermElabM SpecScore := do
+  -- 1. Check memo
+  let current ← memo.get
+  match current[key]? with
+  | some .inProgress => return {}  -- cycle: optimistic (mutual call = cheap)
+  | some (.done _ _ score) => return score
+  | some (.failed _) => return { unconstrained := 1 }  -- user must provide; assume partial quality
+  | none => pure ()
+
+  -- 2. Insert placeholder
+  memo.modify (·.insert key .inProgress)
+
+  -- 3. Derive schedules for each constructor
+  let indInfo ← getConstInfoInduct key.inductiveName
+  let indTypeComponents ← getComponentsOfArrowType indInfo.type
+  let argTypes := indTypeComponents.pop
+  let argNames := (List.range argTypes.size).map (fun i => Name.mkSimple s!"arg_{i}")
+  let argNamesTypes := argNames.toArray.zip argTypes
+
+  let outputNamesTypesIndices : List (Name × Expr × Nat) :=
+    key.outputIndices.map (fun idx => (argNames.getD idx `x, argTypes.getD idx (mkSort .zero), idx))
+  let inputNames := (List.range argTypes.size).filter (· ∉ key.outputIndices)
+    |>.map (fun i => argNames.getD i `x)
+
+  let mut baseSchedules : List (Name × Schedule) := []
+  let mut recSchedules : List (Name × Schedule) := []
+  let mut allDeps : Array ScheduleDep := #[]
+
+  try
+    let results ← withLocalDeclsDND argNamesTypes fun _ => do
+      let mut localCtx ← getLCtx
+      let mut freshUnknowns := #[]
+      for argName in argNames do
+        let freshArgName := localCtx.getUnusedName argName
+        localCtx := localCtx.renameUserName argName freshArgName
+        freshUnknowns := freshUnknowns.push freshArgName
+
+      let freshenedInputNames := freshUnknowns.toList.filter
+        (fun n => key.outputIndices.all (fun idx => freshUnknowns.getD idx `_ != n))
+      let freshenedOutputNamesTypesIndices : List (Name × Expr × Nat) :=
+        key.outputIndices.map (fun idx => (freshUnknowns.getD idx `x, argTypes.getD idx (mkSort .zero), idx))
+      let freshRecFnName := localCtx.getUnusedName `aux_arb
+
+      let mut base : List (Name × Schedule) := []
+      let mut rec_ : List (Name × Schedule) := []
+      let mut deps : Array ScheduleDep := #[]
+
+      for ctorName in indInfo.ctors do
+        try
+          let scheduleOption ← (UnifyM.runInMetaM
+            (getProducerScheduleForInductiveConstructor key.inductiveName ctorName
+              freshenedOutputNamesTypesIndices freshenedInputNames freshUnknowns
+              key.deriveSort localCtx freshRecFnName)
+              emptyUnifyState)
+          match scheduleOption with
+          | some (scheduleSteps, scheduleSort) =>
+            let rewrittenSteps := scheduleRewriter scheduleSteps
+            let schedule := (rewrittenSteps, scheduleSort)
+            let ctorDeps := collectNonRecDeps rewrittenSteps
+            for dep in ctorDeps do
+              if !deps.contains dep then
+                deps := deps.push dep
+            let isRec ← isConstructorRecursive key.inductiveName ctorName
+            if isRec || scheduleUsesMutualCall rewrittenSteps then
+              rec_ := rec_ ++ [(ctorName, schedule)]
+            else
+              base := base ++ [(ctorName, schedule)]
+          | none => pure ()
+        catch _ => pure ()  -- skip constructors that fail to schedule
+      return (base, rec_, deps)
+
+    baseSchedules := results.1
+    recSchedules := results.2.1
+    allDeps := results.2.2
+  catch _ =>
+    memo.modify (·.insert key (.failed s!"Failed to derive schedules for {key.inductiveName}"))
+    return { unconstrained := 1 }
+
+  -- 4. Recursively derive deps
+  for dep in allDeps do
+    if dep.kind == .relation then
+      let depKey : SpecKey := { inductiveName := dep.inductiveName, outputIndices := dep.outputIndices, deriveSort := dep.deriveSort }
+      let _ ← deriveBestInductiveSchedule depKey memo scheduleRewriter
+
+  -- 5. Store result + compute score (worst of all constructors)
+  let score : SpecScore := { checks := 0, unconstrained := 0, backtracking := 0 }
+  memo.modify (·.insert key (.done baseSchedules recSchedules score))
+  return score
+
 /-- Derives schedules for a spec and returns the dependencies (Source.NonRec calls)
     without compiling to code. Used by auto-derive to discover what instances are needed. -/
 def collectSpecDependencies
