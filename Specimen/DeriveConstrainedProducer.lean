@@ -770,7 +770,7 @@ def deriveConstrainedProducer
     Uses the pre-derived schedules directly (no re-derivation).
     `siblings` is the list of specs in the same mutual block (for rewriting to Source.MutRec). -/
 def compileInductiveSchedule (indSched : InductiveSchedule)
-    (globalName : Name) (siblings : List (Name × List Nat × Name))
+    (globalName : Name) (siblings : List (Name × List Nat × Name × DeriveSort))
     : TermElabM (TSyntax `command × TSyntax `command) := do
   let key := indSched.key
   let indInfo ← getConstInfoInduct key.inductiveName
@@ -1346,8 +1346,10 @@ typing depends on "fixed type" typing and vice versa), the following changes are
 
 /-- Command for deriving multiple constrained generators in sequence,
     each with multi-output hypothesis steps enabled.
-    Later entries can use instances derived by earlier ones. -/
-syntax (name := mutual_deriver) "derive_mutual" term,+ : command
+    Later entries can use instances derived by earlier ones.
+    Each entry can optionally be prefixed with a sort keyword (default: generator). -/
+syntax mutualEntry := ("generator" <|> "enumerator" <|> "checker")? term
+syntax (name := mutual_deriver) "derive_mutual" mutualEntry,+ : command
 
 /-- Derives a constrained producer instance directly from a ScheduleDep,
     without going through syntax parsing. Returns the instance command. -/
@@ -1401,12 +1403,30 @@ def elabDeriveMutual : CommandElab := fun stx => do
     withScope (fun scope => { scope with opts := scope.opts.set `specimen.multiOutput true }) do
       let specEntries := entries.getElems
 
-      -- Step 1: Parse all specs to get (inductiveName, outputIdxs) and assign global def names
-      let mut specMeta : Array (Name × List Nat × Name) := #[]
+      -- Step 1: Parse all specs to get (inductiveName, outputIdxs, deriveSort) and assign global def names
+      let mut specMeta : Array (Name × List Nat × Name × DeriveSort) := #[]
       for i in [:specEntries.size] do
         let entry := specEntries[i]!
+        -- Parse the optional sort keyword from the mutualEntry syntax
+        let (deriveSort, termStx) : DeriveSort × (TSyntax `term) := Id.run do
+          let children := entry.raw.getArgs
+          -- mutualEntry = ("generator" | "enumerator" | "checker")? term
+          -- If keyword present: children[0] is the keyword, children[1] is the term
+          -- If no keyword: children[0] is empty, children[1] is the term (or just the term)
+          if children.size >= 2 then
+            let kw := children[0]!
+            let tm := children[1]!
+            if kw.isOfKind `null && kw.getArgs.isEmpty then
+              (.Generator, ⟨tm⟩)
+            else
+              let sort := if kw.getArgs.any (fun a => a.isIdent && a.getId == `checker) then .Checker
+                else if kw.getArgs.any (fun a => a.isIdent && a.getId == `enumerator) then .Enumerator
+                else .Generator
+              (sort, ⟨tm⟩)
+          else
+            (.Generator, ⟨entry.raw⟩)
         let (indName, outIdxs) ← liftTermElabM do
-          let e ← elabTerm entry .none
+          let e ← elabTerm termStx .none
           lambdaTelescope e fun _args body => do
             peelExistentialsAux body #[] #[] fun innerBody outVars _outTypes => do
               innerBody.withApp fun ind indArgs => do
@@ -1420,30 +1440,30 @@ def elabDeriveMutual : CommandElab := fun stx => do
                 return (indName, idxs.toList)
         let uid ← liftTermElabM (Lean.Core.mkFreshUserName `specimen_mutual)
         let globalName := Name.mkSimple s!"{uid}_{indName.toString.replace "." "_"}_{i}"
-        specMeta := specMeta.push (indName, outIdxs, globalName)
+        specMeta := specMeta.push (indName, outIdxs, globalName, deriveSort)
 
       -- Auto-derive: recursively discover and derive all transitive dependencies
       let autoDerive := Lean.Option.get (← getOptions) specimen.autoDeriveDeps
       if autoDerive then
         let memo ← IO.mkRef ({} : Std.HashMap SpecKey MemoEntry)
         -- Recursively derive schedules for all user specs (populates memo with all deps)
-        for (indName, outIdxs, _) in specMeta do
-          let key : SpecKey := { inductiveName := indName, outputIndices := outIdxs, deriveSort := .Generator }
+        for (indName, outIdxs, _, ds) in specMeta do
+          let key : SpecKey := { inductiveName := indName, outputIndices := outIdxs, deriveSort := ds }
           let _ ← liftTermElabM <| deriveBestInductiveSchedule key memo
         -- DFS from roots to find actually-used deps
         let finalMemo ← memo.get
         let mut usedKeys : Std.HashSet SpecKey := {}
-        for (indName, outIdxs, _) in specMeta do
-          let key : SpecKey := { inductiveName := indName, outputIndices := outIdxs, deriveSort := .Generator }
+        for (indName, outIdxs, _, ds) in specMeta do
+          let key : SpecKey := { inductiveName := indName, outputIndices := outIdxs, deriveSort := ds }
           usedKeys := collectUsedDeps key finalMemo usedKeys
         -- Add all used deps to specMeta (so they're included in the mutual block)
         for key in usedKeys.toList do
-          let inBlock := specMeta.any fun (sIndName, sOutIdxs, _) =>
+          let inBlock := specMeta.any fun (sIndName, sOutIdxs, _, _) =>
             sIndName == key.inductiveName && sOutIdxs == key.outputIndices
           if !inBlock then
             let uid ← liftTermElabM (Lean.Core.mkFreshUserName `specimen_mutual)
             let globalName := Name.mkSimple s!"{uid}_{key.inductiveName.toString.replace "." "_"}_auto"
-            specMeta := specMeta.push (key.inductiveName, key.outputIndices, globalName)
+            specMeta := specMeta.push (key.inductiveName, key.outputIndices, globalName, key.deriveSort)
         -- Use SCC-based compilation from memo
         let components := computeSpecSCC usedKeys.toList finalMemo
         logInfo m!"derive_mutual: {usedKeys.size} specs in {components.length} components"
@@ -1456,8 +1476,8 @@ def elabDeriveMutual : CommandElab := fun stx => do
             let globalName := Name.mkSimple s!"{uid}_{key.inductiveName.toString.replace "." "_"}"
             compMeta := compMeta.push (key, globalName)
           -- Build siblings list for this component (for MutRec rewriting)
-          let compSiblings : List (Name × List Nat × Name) :=
-            compMeta.toList.map (fun (k, gn) => (k.inductiveName, k.outputIndices, gn))
+          let compSiblings : List (Name × List Nat × Name × DeriveSort) :=
+            compMeta.toList.map (fun (k, gn) => (k.inductiveName, k.outputIndices, gn, k.deriveSort))
           -- Compile each spec in the component
           let mut defCmds : Array (TSyntax `command) := #[]
           let mut instCmds : Array (TSyntax `command) := #[]
@@ -1496,13 +1516,17 @@ def elabDeriveMutual : CommandElab := fun stx => do
         let mut defCmds : Array (TSyntax `command) := #[]
         let mut instCmds : Array (TSyntax `command) := #[]
         for i in [:specEntries.size] do
-          let entry := specEntries[i]!
-          let (_, _, globalName) := specMeta[i]!
+          let rawEntry := specEntries[i]!
+          -- Extract term from mutualEntry syntax (skip optional keyword)
+          let termStx : TSyntax `term := Id.run do
+            let children := rawEntry.raw.getArgs
+            if children.size >= 2 then ⟨children[1]!⟩ else ⟨rawEntry.raw⟩
+          let (_, _, globalName, _) := specMeta[i]!
           let rewriter := fun steps => rewriteMutualCalls steps siblings
           let (defCmd, instCmd) ← liftTermElabM do
-            let e ← elabTerm entry .none
+            let e ← elabTerm termStx .none
             withParsedDerivingArgs e fun args outVars outTypes indName indLevels indArgs => do
-              let parts ← deriveConstrainedProducerParts args outVars outTypes indName indLevels indArgs .Generator rewriter globalName
+              let parts ← deriveConstrainedProducerParts args outVars outTypes indName indLevels indArgs .Generator rewriter (some globalName)
               let (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, outputTypes, localCtx, _, inductiveLevels, producerSort) := parts
               mkConstrainedProducerMutualPieces baseProducers inductiveProducers
                 indName inductiveLevels freshArgIdents freshenedOutputNames

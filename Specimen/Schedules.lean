@@ -47,7 +47,7 @@ inductive DeriveSort
   | Enumerator
   | Checker
   | Theorem
-  deriving Repr, BEq, Ord, Hashable
+  deriving Repr, BEq, Ord, Hashable, Inhabited
 
 /-- Determines if a `DeriveSort` corresponds to a producer
     (only generators & enumerators are considered producers) -/
@@ -268,39 +268,52 @@ def addConclusionPatternsAndEqualitiesToSchedule (patterns : List (Unknown × Pa
   let equalityCheckSteps := (fun (u1, u2) => ScheduleStep.Check (Source.NonRec (``Eq, [.Unknown u1, .Unknown u2])) true) <$> equalities.toList
   (matchSteps ++ equalityCheckSteps ++ existingScheduleSteps, scheduleSort)
 
+/-- Extracts all variable names from a ConstructorExpr (looks inside constructors) -/
+partial def varsInConstructorExpr : ConstructorExpr → List Name
+  | .Unknown u => [u]
+  | .Ctor _ args | .FuncApp _ args | .TyCtor _ args => args.flatMap varsInConstructorExpr
+  | .Lit _ | .CSort _ => []
+
+/-- Computes output indices: position i is an output if any output variable appears in it -/
+def computeOutputIndicesForRewrite (hypArgs : List ConstructorExpr) (outputVarNames : List Name) : List Nat :=
+  filterMapWithIndex (fun i arg =>
+    let vars := varsInConstructorExpr arg
+    if vars.any (· ∈ outputVarNames) then some i else none) hypArgs
+
 /-- Rewrites `Source.NonRec` calls in schedule steps to `Source.MutRec` when the hypothesis
-    matches a sibling spec exactly (same inductive name AND same number of output variables).
-    `siblings` is `(inductiveName, outputIndices, auxFnName)`. -/
-def rewriteMutualCalls (steps : List ScheduleStep) (siblings : List (Name × List Nat × Name)) : List ScheduleStep :=
-  let matchesSibling (hyp : HypothesisExpr) (numOutputs : Nat) : Option (Name × List Nat) :=
+    matches a sibling spec exactly (same inductive, same output positions, same derive sort).
+    `siblings` is `(inductiveName, outputIndices, auxFnName, siblingDeriveSort)`. -/
+def rewriteMutualCalls (steps : List ScheduleStep) (siblings : List (Name × List Nat × Name × DeriveSort)) : List ScheduleStep :=
+  let matchesSibling (hyp : HypothesisExpr) (outNames : List Name) (stepDeriveSort : DeriveSort) : Option (Name × List Nat) :=
     let (hypName, hypArgs) := hyp
-    let numInputs := hypArgs.length - numOutputs
-    siblings.findSome? fun (indName, outputIdxs, auxName) =>
-      if hypName == indName && outputIdxs.length == numOutputs && (hypArgs.length - outputIdxs.length) == numInputs then
-        some (auxName, outputIdxs)
+    let stepOutputIdxs := computeOutputIndicesForRewrite hypArgs outNames
+    siblings.findSome? fun (indName, sibOutputIdxs, auxName, sibSort) =>
+      if hypName == indName && stepOutputIdxs == sibOutputIdxs && stepDeriveSort == sibSort then
+        some (auxName, sibOutputIdxs)
       else none
   steps.map fun step =>
     match step with
     | .SuchThat vs (.NonRec hyp) ps =>
-      match matchesSibling hyp vs.length with
+      let ds := match ps with | .Generator => DeriveSort.Generator | .Enumerator => .Enumerator
+      match matchesSibling hyp (vs.map Prod.fst) ds with
       | some (auxName, outputIdxs) =>
         let (_, hypArgs) := hyp
         let inputArgs := filterWithIndex (fun i _ => i ∉ outputIdxs) hypArgs
         .SuchThat vs (.MutRec auxName inputArgs) ps
       | none => step
     | .Unconstrained v (.NonRec hyp) ps =>
-      match matchesSibling hyp 1 with
+      let ds := match ps with | .Generator => DeriveSort.Generator | .Enumerator => .Enumerator
+      match matchesSibling hyp [v] ds with
       | some (auxName, outputIdxs) =>
         let (_, hypArgs) := hyp
         let inputArgs := filterWithIndex (fun i _ => i ∉ outputIdxs) hypArgs
         .Unconstrained v (.MutRec auxName inputArgs) ps
       | none => step
     | .Check (.NonRec hyp) pol =>
-      match matchesSibling hyp 0 with
-      | some (auxName, outputIdxs) =>
+      match matchesSibling hyp [] .Checker with
+      | some (auxName, _) =>
         let (_, hypArgs) := hyp
-        let inputArgs := filterWithIndex (fun i _ => i ∉ outputIdxs) hypArgs
-        .Check (.MutRec auxName inputArgs) pol
+        .Check (.MutRec auxName hypArgs) pol
       | none => step
     | other => other
 
