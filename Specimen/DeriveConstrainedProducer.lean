@@ -828,9 +828,10 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
         let mexp ← MExp.scheduleToMExp rewrittenSchedule (.MId `size) (.MId `initSize) outputType
           (fuelPrimeName := freshFuelPrimeName) (sizePrimeName := freshSizePrimeName)
         MExp.mexpToTSyntax mexp key.deriveSort)
-      let term ← match producerSort with
+      let term ← match key.deriveSort with
         | .Generator => `( (1, $subProducer) )
         | .Enumerator => pure subProducer
+        | .Checker | .Theorem => `(fun (_ : Unit) => $subProducer)
       nonRecursiveProducers := nonRecursiveProducers.push term
     for (_, schedule) in indSched.recSchedules do
       let (steps, sort) := schedule
@@ -839,19 +840,18 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
         let mexp ← MExp.scheduleToMExp rewrittenSchedule (.MId `size) (.MId `initSize) outputType
           (fuelPrimeName := freshFuelPrimeName) (sizePrimeName := freshSizePrimeName)
         MExp.mexpToTSyntax mexp key.deriveSort)
-      let term ← match producerSort with
+      let term ← match key.deriveSort with
         | .Generator => `( ($(Lean.mkIdent ``Nat.succ) $freshSize', $subProducer) )
         | .Enumerator => pure subProducer
+        | .Checker | .Theorem => `(fun (_ : Unit) => $subProducer)
       recursiveProducers := recursiveProducers.push term
     let baseProducers ← `([$nonRecursiveProducers,*])
     let inductiveProducers ← `([$nonRecursiveProducers,*, $recursiveProducers,*])
-    -- Build the output pieces using existing infrastructure
-    -- freshArgIdents: include all args (mkConstrainedProducerMutualPieces handles Sort filtering)
     let freshArgIdents : TSyntaxArray `term := argNameTypes.map (fun (n, _) => Lean.mkIdent n)
     let freshenedOutputNames := outputIndicesNonSort.filterMap (fun i => argNameTypes[i]?.map (·.1))
     mkConstrainedProducerMutualPieces baseProducers inductiveProducers
       key.inductiveName indLevels freshArgIdents freshenedOutputNames.toArray
-      outputTypes.toArray producerSort (← getLCtx) globalName
+      outputTypes.toArray producerSort (← getLCtx) globalName key.deriveSort
 
 /-- Recursively derives the best schedule for a SpecKey, populating the memo with
     all transitive dependencies. Returns the score for this spec.
@@ -1491,7 +1491,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
                 defCmds := defCmds.push defCmd
                 instCmds := instCmds.push instCmd
               catch e =>
-                logWarning m!"Failed to compile {key.inductiveName}{key.outputIndices}: {e.toMessageData}"
+                logWarning m!"Failed to compile {key.inductiveName}{key.outputIndices}{repr key.deriveSort}: {e.toMessageData}"
             | _ => logWarning m!"No schedule found for {key.inductiveName}{key.outputIndices}"
           -- Emit: mutual block for multi-element, standalone for singletons
           let specDescs ← compMeta.toList.mapM fun (k, _) => do
@@ -1530,7 +1530,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
               let (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, outputTypes, localCtx, _, inductiveLevels, producerSort) := parts
               mkConstrainedProducerMutualPieces baseProducers inductiveProducers
                 indName inductiveLevels freshArgIdents freshenedOutputNames
-                outputTypes producerSort localCtx globalName
+                outputTypes producerSort localCtx globalName .Generator
           defCmds := defCmds.push defCmd
           instCmds := instCmds.push instCmd
         let mutualCmd ← `(command| mutual $defCmds* end)

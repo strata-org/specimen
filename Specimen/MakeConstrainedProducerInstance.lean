@@ -228,7 +228,8 @@ def mkConstrainedProducerMutualPieces
   (inductiveName : Name) (inductiveLevels : List Level)
   (args : TSyntaxArray `term) (targetVars : Array Name)
   (targetTypes : Array Expr) (producerSort : ProducerSort)
-  (topLevelLocalCtx : LocalContext) (globalDefName : Name) :
+  (topLevelLocalCtx : LocalContext) (globalDefName : Name)
+  (deriveSort : DeriveSort) :
   TermElabM (TSyntax `command × TSyntax `command) := do
     -- Reuse the same computation as mkConstrainedProducerTypeClassInstance
     let freshSizeIdent := mkFreshAccessibleIdent topLevelLocalCtx `size
@@ -293,9 +294,10 @@ def mkConstrainedProducerMutualPieces
         | v :: vs => do let rest ← mkProdPat vs; `(($(Lean.mkIdent v), $rest))
       mkProdPat targetVars.toList
 
-    let optionTProducerType ← match producerSort with
+    let optionTProducerType ← match deriveSort with
       | .Generator => `($genTypeConstructor $targetTypeSyntax)
       | .Enumerator => `($exceptTTypeConstructor $genErrorType $enumTypeConstructor $targetTypeSyntax)
+      | .Checker | .Theorem => `($exceptTypeConstructor $genErrorType $boolIdent)
 
     -- Build the full function type for the def
     let mut fullType ← pure optionTProducerType
@@ -309,24 +311,31 @@ def mkConstrainedProducerMutualPieces
     let defIdent := mkIdent globalDefName
     let defCmd ← `(command| def $defIdent : $fullType := $lambdaBody)
 
-    -- Emit the instance
-    let producerTypeClass := match producerSort with
-      | .Generator => arbitrarySizedSuchThatTypeclass
-      | .Enumerator => enumSizedSuchThatTypeclass
-    let producerTypeClassFunction := match producerSort with
-      | .Generator => unqualifiedArbitrarySizedSTFn
-      | .Enumerator => unqualifiedEnumSizedSTFn
-    let producerUnconstrainedClass := match producerSort with
-      | .Generator => ``Plausible.Arbitrary
-      | .Enumerator => ``Enum
-    let arbitraryTypeParamInstances ← mkTypeClassInstanceBinders typeParams #[producerUnconstrainedClass, ``DecidableEq]
+    -- Emit the instance (differs by deriveSort)
     let fuelVal := Lean.Option.get (← getOptions) specimen.fuel
     let fuelLit := Syntax.mkNumLit (toString fuelVal)
     let callArgs : TSyntaxArray `term := #[(⟨fuelLit⟩ : TSyntax `term), (freshSizeIdent : TSyntax `term), (freshSizeIdent : TSyntax `term)] ++ (TSyntaxArray.mk outerParams)
     let callExpr ← `($defIdent $callArgs*)
-    let instCmd ← `(command|
-      instance $arbitraryTypeParamInstances:bracketedBinder* : $producerTypeClass $targetTypeSyntax (fun $targetVarPattern => @$(mkIdent inductiveName) $args*) where
-        $producerTypeClassFunction:ident := fun $freshSizeIdent => $callExpr)
+    let instCmd ← match deriveSort with
+      | .Checker | .Theorem => do
+        let arbitraryTypeParamInstances ← mkTypeClassInstanceBinders typeParams #[``Enum, ``DecidableEq]
+        `(command|
+          instance $arbitraryTypeParamInstances:bracketedBinder* : $decOptTypeclass (@$(mkIdent inductiveName) $args*) where
+            $unqualifiedDecOptFn:ident := fun $freshSizeIdent => $callExpr)
+      | _ => do
+        let producerTypeClass := match producerSort with
+          | .Generator => arbitrarySizedSuchThatTypeclass
+          | .Enumerator => enumSizedSuchThatTypeclass
+        let producerTypeClassFunction := match producerSort with
+          | .Generator => unqualifiedArbitrarySizedSTFn
+          | .Enumerator => unqualifiedEnumSizedSTFn
+        let producerUnconstrainedClass := match producerSort with
+          | .Generator => ``Plausible.Arbitrary
+          | .Enumerator => ``Enum
+        let arbitraryTypeParamInstances ← mkTypeClassInstanceBinders typeParams #[producerUnconstrainedClass, ``DecidableEq]
+        `(command|
+          instance $arbitraryTypeParamInstances:bracketedBinder* : $producerTypeClass $targetTypeSyntax (fun $targetVarPattern => @$(mkIdent inductiveName) $args*) where
+            $producerTypeClassFunction:ident := fun $freshSizeIdent => $callExpr)
 
     return (defCmd, instCmd)
 
