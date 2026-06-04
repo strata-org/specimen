@@ -740,7 +740,71 @@ The practical upshot for this plan:
 
 ### Performance considerations
 
-`BacktrackGen` adds an `Option` wrapper at every bind within backtracking branches. For deeply nested generators this means more allocations and pattern-matches compared to today's exception-based approach. In practice this overhead is negligible — the dominant cost is in `choose` calls and the retries themselves, not the `Option` wrapping. If profiling reveals otherwise, the `toPlausibleGen` boundary could be pushed deeper (converting to exception-based execution earlier), at the cost of limiting provability.
+`BacktrackGen` adds an `Option` wrapper at every bind within backtracking branches. For deeply nested generators this means more allocations and pattern-matches compared to today's exception-based approach. Benchmarking (see `SpecimenTest/BridgeBenchmark.lean`) shows:
+
+**Benchmark results** (bridge/legacy ratio, lower = bridge is faster):
+
+| Scenario | Ratio | Notes |
+|---|---|---|
+| Recursive generator (5-ary `nary` constructor, sizes 2–4) | 97–101% | Dominant cost is recursion; `Option` overhead invisible |
+| Backtracking on guards (`isPos`, DecOpt check) | 100–105% | Within noise |
+| Stress test: 5 branches × 5 `liftGen`s, 4 always fail | **118%** | Worst case: cheap branches that fail frequently |
+| Same stress test with batched `liftGen`s | **106%** | Batching cuts overhead by ~2/3 |
+
+The 18% worst-case overhead arises when branches consist almost entirely of `liftGen` calls (no recursive sub-generator calls) and multiple branches are tried per iteration (due to frequent failure and retry), amplifying the per-`liftGen` `Option` wrap/unwrap cost across many executed branches. In realistic generators (like Cedar's `HasType` with 23 constructors and recursive sub-generators), branch bodies are dominated by recursive calls — the `Option` overhead is amortized to < 3%.
+
+**IR verification:** The Lean 4 compiler erases the `BacktrackGen` newtype (no `.mk`/`.run` in compiled IR), and `@[specialize]` eliminates the `[Gen G]` dictionary when instantiated at `Plausible.Gen` (producing `spec_0._redArg` variants).
+
+#### Optimization: batching consecutive `liftGen` calls
+
+When Specimen emits code where multiple unconstrained field generations appear consecutively (before any backtracking operation), they can be batched into a single `liftGen`:
+
+```lean
+-- Before (3 Option wraps + 3 Option checks):
+let a ← BacktrackGen.liftGen (GenFor.gen : G Nat)
+let b ← BacktrackGen.liftGen (GenFor.gen : G Nat)
+let c ← BacktrackGen.liftGen (GenFor.gen : G Nat)
+
+-- After (1 Option wrap + 1 Option check):
+let (a, b, c) ← BacktrackGen.liftGen (do
+  let a ← (GenFor.gen : G Nat)
+  let b ← (GenFor.gen : G Nat)
+  let c ← (GenFor.gen : G Nat)
+  pure (a, b, c))
+```
+
+The inner `do` block runs in `G` directly (no `Option` overhead). This is purely a code-emission optimization in Specimen — the generated code's semantics are unchanged. The batching boundary is any operation that can fail: a `BacktrackGenFor.gen` call, a `DecOpt` check, or `BacktrackGen.fail`.
+
+#### Optimization: `liftBind` for interleaved non-backtracking operations
+
+When a `liftGen` is followed by a backtracking continuation (not another `liftGen`), batching doesn't apply. For this case, a fused combinator eliminates the intermediate `Option`:
+
+```lean
+/-- Fused liftGen + bind: runs a non-failing G α and passes the result directly
+    to a backtracking continuation, without wrapping in some and immediately unwrapping. -/
+@[inline] def BacktrackGen.liftBind [Gen G] (g : G α) (f : α → BacktrackGen G β) : BacktrackGen G β :=
+  ⟨do let a ← g; (f a).run⟩
+```
+
+This handles patterns like:
+```lean
+-- Without liftBind: wraps n in some, then bind unwraps it
+let n ← BacktrackGen.liftGen (GenFor.gen : G Nat)
+let e ← BacktrackGenFor.gen (P := fun e => HasType e τ) initSize  -- may fail
+
+-- With liftBind: no intermediate Option
+BacktrackGen.liftBind (GenFor.gen : G Nat) (fun n => do
+  let e ← BacktrackGenFor.gen (P := fun e => HasType e τ) initSize
+  ...)
+```
+
+In practice, Specimen's emission order places all unconstrained generations before constrained sub-generator calls, so **batching handles the common case**. `liftBind` covers the remaining interleaved cases (e.g., generating a type `τ`, calling a sub-generator parameterized by `τ`, then generating another unconstrained field). Both optimizations are purely in Specimen's code emission — they require no changes to the `BacktrackGen` API or Basalt infrastructure.
+
+Neither optimization affects provability: `liftBind g f` has the same denotation as `bind (liftGen g) f` at all Basalt interpretations (the `some` wrap/unwrap is semantically invisible). The proof lemma is trivial:
+```lean
+theorem liftBind_eq_bind_liftGen [Gen G] (g : G α) (f : α → BacktrackGen G β) :
+    liftBind g f = bind (liftGen g) f
+```
 
 ### Proving correctness (at `SetGen.Set`)
 
