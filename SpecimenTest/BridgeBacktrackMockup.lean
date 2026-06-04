@@ -106,22 +106,35 @@ end BacktrackGen
 
 /-! ## Combinators -/
 
-def backtrack [Gen G] (gs : List (Nat × (Unit → BacktrackGen G α))) : BacktrackGen G α :=
-  ⟨go gs.length gs⟩
-where
-  go : Nat → List (Nat × (Unit → BacktrackGen G α)) → G (Option α)
-  | _, [] => pure none
-  | 0, _ => pure none
-  | fuel + 1, gs@(_ :: _) => do
-    let idx ← RandomChoice.choose 0 (gs.length - 1) (by omega)
-    let i := idx.down
-    if hi : i < gs.length then
-      let (_, g) := gs[i]
-      match ← (g ()).run with
-      | some a => pure (some a)
-      | none => go fuel (gs.eraseIdx i)
+/-- Sum of weights in a weighted generator list. -/
+def sumWeights (gs : List (Nat × β)) : Nat :=
+  gs.map Prod.fst |>.sum
+
+/-- Weighted selection with drop: given `n ∈ [0, total-1]`, find the element whose weight
+    interval contains `n`, return its weight, the element, and the remaining list. -/
+def pickDrop [Inhabited β] (gs : List (Nat × β)) (n : Nat) : Nat × β × List (Nat × β) :=
+  match gs with
+  | [] => (0, default, [])
+  | (k, g) :: rest =>
+    if n < k then (k, g, rest)
     else
-      pure none
+      let (k', g', rest') := pickDrop rest (n - k)
+      (k', g', (k, g) :: rest')
+
+/-- Weighted backtracking: randomly pick a branch by weight, try it, retry remaining on failure.
+    Uses fuel (initially gs.length) for termination, matching Specimen's backtrackFuel. -/
+def backtrack [Gen G] (gs : List (Nat × (Unit → BacktrackGen G α))) : BacktrackGen G α :=
+  ⟨go gs.length (sumWeights gs) gs⟩
+where
+  go : Nat → Nat → List (Nat × (Unit → BacktrackGen G α)) → G (Option α)
+  | _, _, [] => pure none
+  | 0, _, _ => pure none
+  | fuel + 1, total, gs@(_ :: _) => do
+    let n ← RandomChoice.choose 0 (total - 1) (by omega)
+    let (k, g, gs') := pickDrop gs n.down
+    match ← (g ()).run with
+    | some a => pure (some a)
+    | none => go fuel (total - k) gs'
 
 /-! ## Typeclasses -/
 
