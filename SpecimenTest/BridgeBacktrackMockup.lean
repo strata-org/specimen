@@ -278,15 +278,24 @@ def genWellFormed [Gen G] [GenFor Nat (fun _ => True)] [GenFor Ty (fun _ => True
 
 /-! ## frequency combinator (for non-backtracking generators) -/
 
-/-- Weighted random selection without retry. For non-backtracking generators. -/
+/-- Weighted selection by interval: given `n ∈ [0, total-1]`, find the element whose weight
+    interval contains `n`. -/
+def pick (default : β) (gs : List (Nat × β)) (n : Nat) : Nat × β :=
+  match gs with
+  | [] => (0, default)
+  | (k, g) :: rest =>
+    if n < k then (k, g)
+    else pick default rest (n - k)
+
+/-- Weighted random selection without retry (matches GeneratorCombinators.frequency).
+    Picks a generator from `gs` by weight interval. Returns `default` if `gs` is empty. -/
 def frequency [Gen G] (default : G α) (gs : List (Nat × (Unit → G α))) : G α :=
   match gs with
   | [] => default
-  | [(_, g)] => g ()
-  | gs => do
-    let idx ← RandomChoice.choose 0 (gs.length - 1) (by omega)
-    let (_, g) := gs[idx.down]!
-    g ()
+  | _ => do
+    let total := sumWeights gs
+    let n ← RandomChoice.choose 0 (total - 1) (by omega)
+    (pick (fun () => default) gs n.down).snd ()
 
 /-! ## Unconstrained generator example (derive Arbitrary → GenFor) -/
 
