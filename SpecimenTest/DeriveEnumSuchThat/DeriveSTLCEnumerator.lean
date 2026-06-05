@@ -8,6 +8,13 @@ import SpecimenTest.DeriveEnum.DeriveSTLCTermTypeEnumerators
 
 /-! Snapshot test: derived constrained enumerator for well-typed STLC terms. -/
 
+
+set_option specimen.autoDeriveDeps true
+set_option specimen.multiOutput true
+
+derive_mutual enumerator
+  (fun Γ τ => ∃ (e : term), typing Γ e τ)
+
 set_option guard_msgs.diff true
 
 #guard_msgs(drop info, drop warning) in

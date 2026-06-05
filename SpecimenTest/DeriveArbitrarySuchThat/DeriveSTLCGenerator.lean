@@ -13,6 +13,13 @@ open ArbitrarySizedSuchThat
 
 set_option guard_msgs.diff true
 
+set_option specimen.autoDeriveDeps true
+set_option specimen.multiOutput true
+
+derive_mutual
+  (fun G t => ∃ (e : term), typing G e t)
+
+
 #guard_msgs(drop info, drop warning) in
 derive_generator (fun Γ τ => ∃ (x : Nat), lookup Γ x τ)
 

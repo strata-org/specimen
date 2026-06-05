@@ -61,6 +61,13 @@ def r0 : RegExp :=
 
 -- Generator for strings that match the regexp `re`
 
+set_option specimen.autoDeriveDeps true
+set_option specimen.multiOutput true
+
+derive_mutual
+  (fun re => ∃ (s : List Nat), ExpMatch s re)
+
+
 #guard_msgs(drop info, drop warning) in
 derive_generator (fun re => ∃ (s : List Nat), ExpMatch s re)
 
