@@ -876,8 +876,31 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
   | some (.failed _) => return { unconstrained := 1 }  -- user must provide; assume partial quality
   | none => pure ()
 
-  -- 2. Check if instance already exists — skip derivation if so
-  -- Uses getCorrectTypes pattern: apply inductive to args one at a time for proper dependent types
+  -- 2. Non-inductive heads (e.g. LE.le, Not) — try to find an existing instance
+  unless (← isInductive key.inductiveName) do
+    -- For non-inductives, check if a Decidable instance exists (gives DecOpt via [Decidable P] : DecOpt P)
+    let hasInstance ← try
+      Meta.withNewMCtxDepth do
+        -- Build a proposition with metavar args and check Decidable
+        let info ← getConstInfo key.inductiveName
+        let mut t := .const key.inductiveName (info.levelParams.map fun _ => .zero)
+        let arity := (← getComponentsOfArrowType info.type).size - 1
+        for _ in List.range arity do
+          let argTy := (← inferType t).bindingDomain!
+          let mv ← Meta.mkFreshExprMVar (some argTy)
+          t := .app t mv
+        let result ← Meta.synthInstance? (← mkAppM ``Decidable #[t])
+        pure result.isSome
+    catch _ => pure false
+    if hasInstance then
+      let trivialSched : InductiveSchedule := { key, argNames := [], recFnName := `_, baseSchedules := [], recSchedules := [], score := {}, alreadyExists := true }
+      memo.modify (·.insert key (.done trivialSched))
+      return {}
+    else
+      memo.modify (·.insert key (.failed s!"{key.inductiveName} is not inductive and has no Decidable instance"))
+      return { unconstrained := 1 }
+
+  -- Check if instance already exists — skip derivation if so
   let indInfo ← getConstInfoInduct key.inductiveName
   let indLevels := indInfo.levelParams.map (Level.param ·)
   let indTypeComponents ← getComponentsOfArrowType indInfo.type
@@ -983,10 +1006,7 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
   memo.modify (·.insert key .inProgress)
   let startTime ← IO.monoNanosNow
 
-  -- 3. Non-inductive heads (e.g. `Not` if still unwrapped) are resolved via DecOpt at elaboration time
-  unless (← isInductive key.inductiveName) do
-    memo.modify (·.insert key (.failed s!"{key.inductiveName} is not inductive"))
-    return { unconstrained := 1 }
+
 
   -- Derive schedules for each constructor
   let indInfo ← getConstInfoInduct key.inductiveName

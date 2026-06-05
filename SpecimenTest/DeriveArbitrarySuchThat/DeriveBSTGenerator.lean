@@ -13,13 +13,15 @@ open ArbitrarySizedSuchThat
 
 set_option guard_msgs.diff true
 
-#guard_msgs(drop info, drop warning) in
-derive_generator (fun lo hi => ∃ (x : Nat), Between lo x hi)
-
 deriving instance Arbitrary for BinaryTree
 
+-- derive_mutual auto-discovers Between as a dep of BST (Between uses ≤ via LE.le,
+-- which is non-inductive but has Decidable — handled by the non-inductive guard)
+set_option specimen.multiOutput true in
+set_option specimen.autoDeriveDeps true in
 #guard_msgs(drop info, drop warning) in
-derive_generator (fun lo hi => ∃ (t : BinaryTree), BST lo hi t)
+derive_mutual
+  (fun (lo hi : Nat) => ∃ (t : BinaryTree), BST lo hi t)
 
 
 /-- Inserts an element into a tree, respecting the BST invariants -/
