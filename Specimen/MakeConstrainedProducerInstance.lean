@@ -330,12 +330,24 @@ def mkConstrainedProducerMutualPieces
       | .Enumerator => ``Enum
     let defTypeParamInstances ← mkTypeClassInstanceBinders typeParams #[producerUnconstrainedClass, ``DecidableEq]
 
-    -- Emit the def with named Pi type + lambda (no instance binders in type for now)
+    -- Emit the def with ∀ type (supports instance binders inline)
     let defIdent := mkIdent globalDefName
+    -- Build ∀ type with instance binders interleaved after Sort-typed params
     let mut defType ← pure optionTProducerType
-    for (name, ty) in allParamNamesAndTypes.reverse do
+    -- Add non-Sort value params (from right)
+    let insertIdx := 3 + typeParams.size
+    for (name, ty) in allParamNamesAndTypes[insertIdx:].toArray.reverse do
       defType ← `(($name : $ty) → $defType)
-    let lambdaBody ← `(fun $innerParamBinders* => $matchExpr)
+    -- Add instance binders (referencing the Sort-typed params)
+    for instBinder in defTypeParamInstances.reverse do
+      defType ← `(∀ $instBinder:bracketedBinder, $defType)
+    -- Add Sort-typed params + fuel/initSize/size (from right)
+    for (name, ty) in allParamNamesAndTypes[:insertIdx].toArray.reverse do
+      defType ← `(($name : $ty) → $defType)
+    -- Lambda includes instance binders at the same position
+    let instParams : Array (TSyntax `term) := defTypeParamInstances.map (fun b => ⟨b.raw⟩)
+    let allInnerParams := innerParamBinders[:insertIdx].toArray ++ instParams ++ innerParamBinders[insertIdx:].toArray
+    let lambdaBody ← `(fun $allInnerParams* => $matchExpr)
     let defCmd ← `(command| def $defIdent : $defType := $lambdaBody)
 
     -- Emit the instance (differs by deriveSort)
