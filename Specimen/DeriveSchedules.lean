@@ -116,6 +116,13 @@ structure ScheduleEnv where
   /-- When true, each hypothesis produces all available outputs at once -/
   multiOutput : Bool := false
 
+  /-- Sibling specs in a mutual derivation block.
+      Each entry is (inductiveName, outputIndices, auxFnName, siblingDeriveSort).
+      When a hypothesis matches a sibling (exact same inductive + output positions + compatible sort),
+      it emits Source.MutRec instead of Source.NonRec.
+      Currently only same-sort mutual calls are supported (gen↔gen, checker↔enum). -/
+  mutualSiblings : List (Name × List Nat × Name × DeriveSort) := []
+
 /-- A monad for deriving generator schedules. Under the hood,
     `ScheduleM` is just a reader monad stacked on top of `MetaM`,
     with `ScheduleEnv` serving as the environment for the reader monad. -/
@@ -1280,7 +1287,7 @@ private def possiblePreSchedules (vars : List TypedVar) (hypotheses : List Hypot
   let sortedHypotheses := mkSortedHypothesesVariablesMap hypotheses
   let varNames := vars.map (fun x => x.var)
   let prodSort := convertDeriveSortToProducerSort deriveSort
-  let scheduleEnv := ⟨ vars, sortedHypotheses, deriveSort, prodSort, recCall, fixedVars, recFnName, false ⟩
+  let scheduleEnv := ⟨ vars, sortedHypotheses, deriveSort, prodSort, recCall, fixedVars, recFnName, false, [] ⟩
   let remainingVars := List.filter (fun v => not <| fixedVars.contains v) varNames
   let (newCheckedIdxs, newCheckedHyps) := List.unzip <| (collectCheckedHypotheses scheduleEnv fixedVars [])
   let remainingSortedHypotheses := filterWithIndex (fun i _ => i ∉ newCheckedIdxs) sortedHypotheses
@@ -1315,7 +1322,7 @@ private def possiblePreSchedulesWithAdvancedPruning (vars : List TypedVar) (hypo
   let sortedHypotheses := mkSortedHypothesesVariablesMap hypotheses
   let varNames := vars.map (fun x => x.var)
   let prodSort := convertDeriveSortToProducerSort deriveSort
-  let scheduleEnv := ⟨ vars, sortedHypotheses, deriveSort, prodSort, recCall, fixedVars, recFnName, multiOutput ⟩
+  let scheduleEnv := ⟨ vars, sortedHypotheses, deriveSort, prodSort, recCall, fixedVars, recFnName, multiOutput, [] ⟩
   let remainingVars := List.filter (fun v => not <| fixedVars.contains v) varNames
   let (newCheckedIdxs, newCheckedHyps) := List.unzip <| (collectCheckedHypotheses scheduleEnv fixedVars [])
   let remainingSortedHypotheses := filterWithIndex (fun i _ => i ∉ newCheckedIdxs) sortedHypotheses
@@ -1357,7 +1364,7 @@ private def possibleSchedules' (ctorName : Name) (vars : List TypedVar) (hypothe
   let sortedHypotheses := mkSortedHypothesesVariablesMap hypotheses
   let varNames := vars.map (fun x => x.var)
   let prodSort := convertDeriveSortToProducerSort deriveSort
-  let scheduleEnv := ⟨ vars, sortedHypotheses, deriveSort, prodSort, recCall, fixedVars, recFnName, false ⟩
+  let scheduleEnv := ⟨ vars, sortedHypotheses, deriveSort, prodSort, recCall, fixedVars, recFnName, false, [] ⟩
   let remainingVars := List.filter (fun v => not <| fixedVars.contains v) varNames
   let (newCheckedIdxs, newCheckedHyps) := List.unzip <| (collectCheckSteps scheduleEnv fixedVars [])
   let remainingSortedHypotheses := filterWithIndex (fun i _ => i ∉ newCheckedIdxs) sortedHypotheses

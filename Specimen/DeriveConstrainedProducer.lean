@@ -687,6 +687,7 @@ def deriveConstrainedProducer
       let mut nonRecursiveProducers := #[]
       let mut recursiveProducers := #[]
 
+      let freshFuelPrimeName := localCtx.getUnusedName `fuel'
       let freshSizePrimeName := localCtx.getUnusedName `size'
       let freshSize' := mkIdent freshSizePrimeName
 
@@ -711,7 +712,7 @@ def deriveConstrainedProducer
           -- This is all done in a state monad: when we detect that a new instance is required, we append it to an array of `TSyntax term`s
           -- (where each term represents a typeclass instance)
           let (subProducer, instances) ← StateT.run (s := #[]) (do
-            let mexp ← MExp.scheduleToMExp schedule (.MId `size) (.MId `initSize) outputType freshSizePrimeName
+            let mexp ← MExp.scheduleToMExp schedule (.MId `size) (.MId `initSize) outputType (fuelPrimeName := freshFuelPrimeName) (sizePrimeName := freshSizePrimeName)
             MExp.mexpToTSyntax mexp deriveSort)
 
           requiredInstances := requiredInstances ++ instances
@@ -768,6 +769,92 @@ def deriveConstrainedProducer
     outputTypes.toList
     producerSort
     localCtx
+
+/-- Like `deriveConstrainedProducer` but returns the components needed for assembly
+    into either a standalone instance or a mutual def block.
+    Returns: (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, outputTypes, localCtx, inductiveName, inductiveLevels, producerSort) -/
+def deriveConstrainedProducerParts
+  (_args : Array Expr) (outputVars : Array Expr) (outputTypes : Array Expr)
+  (constrainingInductive : Name) (inductiveLevels : List Level)
+  (constrArgs : Array Expr) (deriveSort : DeriveSort)
+  (scheduleRewriter : List ScheduleStep → List ScheduleStep := id)
+  (recFnNameOverride : Option Name := none) :
+  TermElabM (TSyntax `term × TSyntax `term × Array Name × TSyntaxArray `term × Array Expr × LocalContext × Name × List Level × ProducerSort) := do
+  let producerSort := convertDeriveSortToProducerSort deriveSort
+  let inductiveName := constrainingInductive
+  let outputFVars := outputVars.map Expr.fvarId!
+  let mut outputIdxs : Array Nat := #[]
+  for i in [:constrArgs.size] do
+    let arg := constrArgs[i]!
+    if arg.isFVar && outputFVars.contains arg.fvarId! then
+      outputIdxs := outputIdxs.push i
+  if outputIdxs.isEmpty then
+    throwError m!"cannot find output indices, try specifying the implicit arguments"
+  let inductiveVal ← getConstInfoInduct inductiveName
+  let inductiveTypeComponents ← getComponentsOfArrowType inductiveVal.type
+  let argTypes := inductiveTypeComponents.pop
+  let argNames ← constrArgs.mapIdxM
+    (fun i (ident : Expr) =>
+      if ident.isFVar then ident.fvarId!.getUserName
+      else if let some outIdx := outputIdxs.findIdx? (· == i) then
+        outputVars[outIdx]!.fvarId!.getUserName
+      else throwError m!"{ident} is expected to be a variable.")
+  let argNamesTypes := argNames.zip argTypes
+  let _outputType ← tupleOfListM (throwError "no output types")
+    (fun t rest => mkAppM ``Prod #[t, rest]) outputTypes.toList
+  let (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, localCtx) ←
+    withLocalDeclsDND argNamesTypes (fun _ => do
+      let mut localCtx ← getLCtx
+      let mut freshUnknowns := #[]
+      for argName in argNames do
+        let freshArgName := localCtx.getUnusedName argName
+        localCtx := localCtx.renameUserName argName freshArgName
+        freshUnknowns := freshUnknowns.push freshArgName
+      let freshenedOutputNames := outputIdxs.map (fun idx => freshUnknowns[idx]!)
+      let freshenedInputNamesExcludingOutput := freshUnknowns.toList.filter
+        (fun n => freshenedOutputNames.toList.all (· != n))
+      let outputNamesTypesIndices : List (Name × Expr × Nat) :=
+        (List.range outputIdxs.size).map (fun i =>
+          (freshenedOutputNames[i]!, outputTypes[i]!, outputIdxs[i]!))
+      let mut nonRecursiveProducers := #[]
+      let mut recursiveProducers := #[]
+      let freshFuelPrimeName := localCtx.getUnusedName `fuel'
+      let freshSizePrimeName := localCtx.getUnusedName `size'
+      let freshSize' := mkIdent freshSizePrimeName
+      let freshRecFnName := recFnNameOverride.getD (localCtx.getUnusedName (match deriveSort with
+        | .Generator => `aux_arb | .Enumerator => `aux_enum | _ => `aux_dec))
+      for ctorName in inductiveVal.ctors do
+        let scheduleOption ← (UnifyM.runInMetaM
+          (getProducerScheduleForInductiveConstructor inductiveName ctorName outputNamesTypesIndices
+            freshenedInputNamesExcludingOutput freshUnknowns deriveSort localCtx freshRecFnName)
+            emptyUnifyState)
+        match scheduleOption with
+        | some (scheduleSteps, scheduleSort) =>
+          let rewrittenSteps := scheduleRewriter scheduleSteps
+          let schedule := (rewrittenSteps, scheduleSort)
+          let (subProducer, _instances) ← StateT.run (s := #[]) (do
+            let mexp ← MExp.scheduleToMExp schedule (.MId `size) (.MId `initSize) _outputType (fuelPrimeName := freshFuelPrimeName) (sizePrimeName := freshSizePrimeName)
+            MExp.mexpToTSyntax mexp deriveSort)
+          let isRecursive ← (isConstructorRecursive inductiveName ctorName) <||> pure (scheduleUsesMutualCall rewrittenSteps)
+          if isRecursive then
+            let subProducerTerm ← match producerSort with
+              | .Generator => `( ($(mkIdent ``Nat.succ) $freshSize', $subProducer) )
+              | .Enumerator => pure subProducer
+            recursiveProducers := recursiveProducers.push subProducerTerm
+          else
+            let subGeneratorTerm ← match producerSort with
+              | .Generator => `( (1, $subProducer) )
+              | .Enumerator => pure subProducer
+            nonRecursiveProducers := nonRecursiveProducers.push subGeneratorTerm
+        | none => throwError m!"Unable to derive producer schedule for constructor {ctorName}"
+      if nonRecursiveProducers.isEmpty && recursiveProducers.isEmpty then
+        throwError "Cannot derive constrained producer for '{inductiveName}': no constructor schedules were generated"
+      if nonRecursiveProducers.isEmpty then
+        throwError "Cannot derive constrained producer for '{inductiveName}': all constructors are recursive (no finite base case)"
+      let baseProducers ← `([$nonRecursiveProducers,*])
+      let inductiveProducers ← `([$nonRecursiveProducers,*, $recursiveProducers,*])
+      return (baseProducers, inductiveProducers, freshenedOutputNames, Lean.mkIdent <$> freshUnknowns, localCtx))
+  return (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, outputTypes, localCtx, inductiveName, inductiveLevels, producerSort)
 
 
 private def deriveArbitrarySuchThatInstance'
@@ -893,4 +980,105 @@ def elabDeriveScheduledEnumerator : CommandElab := fun stx => do
 
     elabCommand typeClassInstance
 
+  | _ => throwUnsupportedSyntax
+
+/-! ## Mutual derivation command
+
+`derive_mutual` derives multiple constrained producers/checkers/enumerators simultaneously,
+allowing them to call each other for recursive/mutual-recursive relations.
+
+### Syntax:
+```
+derive_mutual
+  generator (fun τ => ∃ (Γ : List type) (e : term), typing Γ e τ),
+  generator_multi (∃ (Γ : List type) (e : term) (τ : type), typing Γ e τ),
+  checker (fun Γ e τ => typing Γ e τ)
+```
+
+Each entry is either `generator`, `generator_multi`, `enumerator`, or `checker` followed by
+a term describing the constraint. Currently each entry is derived independently in sequence.
+
+### TODO for true mutual recursion:
+To support cases where the derived functions need to call each other (e.g., "all outputs"
+typing depends on "fixed type" typing and vice versa), the following changes are needed:
+
+1. **Scheduler**: Generalize `recCall : Name × List Nat` to
+   `recCalls : List (Name × List Nat × Name)` where the third component is the
+   aux function name of the sibling spec to call.
+
+2. **isRecCall**: Check against ALL sibling specs. When a hypothesis matches a sibling
+   spec (same inductive, compatible output positions), emit `Source.Rec siblingAuxName args`.
+
+3. **Code generation**: Emit a `mutual ... end` block of top-level `def`s instead of
+   `let rec` inside an instance. Each instance then references its corresponding `def`.
+
+4. **MExp → TSyntax**: `Source.Rec` already handles calling by name, so no changes needed
+   once the schedule correctly identifies mutual calls.
+-/
+
+/-- Command for deriving multiple constrained generators in sequence,
+    each with multi-output hypothesis steps enabled.
+    Later entries can use instances derived by earlier ones. -/
+syntax (name := mutual_deriver) "derive_mutual" term,+ : command
+
+@[command_elab mutual_deriver]
+def elabDeriveMutual : CommandElab := fun stx => do
+  match stx with
+  | `(derive_mutual $entries,*) => do
+    withScope (fun scope => { scope with opts := scope.opts.set `specimen.multiOutput true }) do
+      let specEntries := entries.getElems
+
+      -- Step 1: Parse all specs to get (inductiveName, outputIdxs) and assign global def names
+      let mut specMeta : Array (Name × List Nat × Name) := #[]
+      for i in [:specEntries.size] do
+        let entry := specEntries[i]!
+        let (indName, outIdxs) ← liftTermElabM do
+          let e ← elabTerm entry .none
+          lambdaTelescope e fun _args body => do
+            peelExistentialsAux body #[] #[] fun innerBody outVars _outTypes => do
+              innerBody.withApp fun ind indArgs => do
+                if !ind.isConst then throwError "Expected constant in derive_mutual spec"
+                let indName := ind.constName!
+                let outputFVars := outVars.map Expr.fvarId!
+                let mut idxs : Array Nat := #[]
+                for j in [:indArgs.size] do
+                  if indArgs[j]!.isFVar && outputFVars.contains indArgs[j]!.fvarId! then
+                    idxs := idxs.push j
+                return (indName, idxs.toList)
+        let globalName := Name.mkSimple s!"specimen_mutual_{indName.toString.replace "." "_"}_{i}"
+        specMeta := specMeta.push (indName, outIdxs, globalName)
+
+      let siblings := specMeta.toList
+
+      -- Step 2: Derive each spec, collecting (def, instance) pairs.
+      -- Uses mkConstrainedProducerMutualPieces which emits a standalone `def` + thin `instance`.
+      let mut defCmds : Array (TSyntax `command) := #[]
+      let mut instCmds : Array (TSyntax `command) := #[]
+      for i in [:specEntries.size] do
+        let entry := specEntries[i]!
+        let (_, _, globalName) := specMeta[i]!
+        let rewriter := fun steps => rewriteMutualCalls steps siblings
+        let (defCmd, instCmd) ← liftTermElabM do
+          let e ← elabTerm entry .none
+          withParsedDerivingArgs e fun args outVars outTypes indName indLevels indArgs => do
+            let parts ← deriveConstrainedProducerParts args outVars outTypes indName indLevels indArgs .Generator rewriter globalName
+            let (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, outputTypes, localCtx, _, inductiveLevels, producerSort) := parts
+            mkConstrainedProducerMutualPieces baseProducers inductiveProducers
+              indName inductiveLevels freshArgIdents freshenedOutputNames
+              outputTypes producerSort localCtx globalName
+        defCmds := defCmds.push defCmd
+        instCmds := instCmds.push instCmd
+
+      -- Step 3: Emit a `mutual ... end` block with all defs, then instances
+      let mutualCmd ← `(command| mutual $defCmds* end)
+      let mutualFormat ← liftCoreM (PrettyPrinter.ppCommand mutualCmd)
+      liftTermElabM $ Tactic.TryThis.addSuggestion stx
+        (Format.pretty mutualFormat) (header := "Mutual block: ")
+      elabCommand mutualCmd
+
+      for instCmd in instCmds do
+        let genFormat ← liftCoreM (PrettyPrinter.ppCommand instCmd)
+        liftTermElabM $ Tactic.TryThis.addSuggestion stx
+          (Format.pretty genFormat) (header := "Try this instance: ")
+        elabCommand instCmd
   | _ => throwUnsupportedSyntax

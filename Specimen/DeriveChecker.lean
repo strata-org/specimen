@@ -39,32 +39,40 @@ def getCheckerScheduleForInductiveConstructor (inductiveName : Name) (ctorName :
 def mkDecOptInstance (baseCheckers : TSyntax `term) (inductiveCheckers : TSyntax `term)
   (inductiveName : Name) (inductiveLevels : List Level) (args : TSyntaxArray `term) (topLevelLocalCtx : LocalContext) : TermElabM (TSyntax `command) := do
 
-  -- Produce a fresh name for the `size` argument for the lambda
-  -- at the end of the checker function, as well as the `aux_dec` inner helper function
+  -- Produce fresh names for function parameters
   let freshSizeIdent := mkFreshAccessibleIdent topLevelLocalCtx `size
   let freshSize' := mkFreshAccessibleIdent topLevelLocalCtx `size'
+  let freshFuel' := mkFreshAccessibleIdent topLevelLocalCtx `fuel'
   let auxDecIdent := mkFreshAccessibleIdent topLevelLocalCtx `aux_dec
   let checkerType ← `($exceptTypeConstructor $genErrorType $boolIdent)
 
-  -- Create the cases for the pattern-match on the size argument
-  let mut caseExprs := #[]
+  -- Create the inner match on size
+  let mut sizeCaseExprs := #[]
   let zeroCase ← `(Term.matchAltExpr| | $(mkIdent ``Nat.zero) => $checkerBacktrackFn $baseCheckers)
-  caseExprs := caseExprs.push zeroCase
-
+  sizeCaseExprs := sizeCaseExprs.push zeroCase
   let succCase ← `(Term.matchAltExpr| | $(mkIdent ``Nat.succ) $freshSize' => $checkerBacktrackFn $inductiveCheckers)
-  caseExprs := caseExprs.push succCase
+  sizeCaseExprs := sizeCaseExprs.push succCase
+  let sizeMatchExpr ← mkMatchExpr sizeIdent sizeCaseExprs
 
-  -- Create function arguments for the checker's `size` & `initSize` parameters
-  -- (former is the generator size, latter is the size argument with which to invoke other auxiliary generators/checkers)
+  -- Wrap with outer fuel match
+  let mut fuelCaseExprs := #[]
+  let fuelZeroCase ← `(Term.matchAltExpr| | $(mkIdent ``Nat.zero) => $failFn $outOfFuelError)
+  fuelCaseExprs := fuelCaseExprs.push fuelZeroCase
+  let fuelSuccCase ← `(Term.matchAltExpr| | $(mkIdent ``Nat.succ) $freshFuel' => $sizeMatchExpr)
+  fuelCaseExprs := fuelCaseExprs.push fuelSuccCase
+  let matchExpr ← mkMatchExpr fuelIdent fuelCaseExprs
+
+  -- Create function arguments for the checker's `fuel`, `initSize` & `size` parameters
+  let fuelParam ← `(Term.letIdBinder| ($fuelIdent : $natIdent))
   let initSizeParam ← `(Term.letIdBinder| ($initSizeIdent : $natIdent))
   let sizeParam ← `(Term.letIdBinder| ($sizeIdent : $natIdent))
-  let matchExpr ← mkMatchExpr sizeIdent caseExprs
 
   -- Add parameters for each argument to the inductive relation
   let paramInfo ← analyzeInductiveArgs inductiveName inductiveLevels args
 
   -- Inner params are for the inner `aux_dec` function
   let mut innerParams := #[]
+  innerParams := innerParams.push fuelParam
   innerParams := innerParams.push initSizeParam
   innerParams := innerParams.push sizeParam
 
@@ -88,11 +96,13 @@ def mkDecOptInstance (baseCheckers : TSyntax `term) (inductiveCheckers : TSyntax
   let arbitraryTypeParamInstances ← mkTypeClassInstanceBinders typeParams #[``Enum, ``DecidableEq]
 
   -- Produces an instance of the `DecOpt` typeclass containing the definition for the derived generator
+  let fuelVal := Lean.Option.get (← getOptions) specimen.fuel
+  let fuelLit := Syntax.mkNumLit (toString fuelVal)
   `(instance $arbitraryTypeParamInstances:bracketedBinder* : $decOptTypeclass (@$(mkIdent inductiveName) $args*) where
       $unqualifiedDecOptFn:ident :=
         let rec $auxDecIdent:ident $innerParams* $arbitraryTypeParamInstances:bracketedBinder* : $checkerType :=
           $matchExpr
-        fun $freshSizeIdent => $auxDecIdent $freshSizeIdent $freshSizeIdent $outerParams*)
+        fun $freshSizeIdent => $auxDecIdent $fuelLit $freshSizeIdent $freshSizeIdent $outerParams*)
 
 
 def deriveScheduledChecker' (_args : Array Expr)
@@ -145,6 +155,7 @@ def deriveScheduledChecker' (_args : Array Expr)
       -- so they can be threaded through schedule derivation and MExp compilation.
       -- These must match the names used by `mkDecOptInstance`.
       let freshAuxDecName := localCtx.getUnusedName `aux_dec
+      let freshFuelPrimeName := localCtx.getUnusedName `fuel'
       let freshSizePrimeName := localCtx.getUnusedName `size'
 
       for ctorName in inductiveVal.ctors do
@@ -159,7 +170,7 @@ def deriveScheduledChecker' (_args : Array Expr)
           -- (where each term represents a typeclass instance)
           let (subChecker, instances) ← StateT.run (s := #[]) (do
             let recType := unifyState.outputTypes.headD (mkConst ``Bool)
-            let mexp ← MExp.scheduleToMExp schedule (.MId `size) (.MId `initSize) recType freshSizePrimeName
+            let mexp ← MExp.scheduleToMExp schedule (.MId `size) (.MId `initSize) recType (fuelPrimeName := freshFuelPrimeName) (sizePrimeName := freshSizePrimeName)
             MExp.mexpToTSyntax mexp (deriveSort := .Checker))
 
           requiredInstances := requiredInstances ++ instances

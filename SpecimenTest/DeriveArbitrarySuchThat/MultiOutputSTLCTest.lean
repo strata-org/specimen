@@ -5,46 +5,34 @@ import SpecimenTest.DeriveArbitrary.DeriveSTLCTermTypeGenerators
 import SpecimenTest.DeriveDecOpt.DeriveSTLCChecker
 import SpecimenTest.DeriveArbitrarySuchThat.DeriveSTLCGenerator
 
-/-! Test: multi-output constrained generation for STLC.
-    Generate both a well-typed term AND its type given a context. -/
+/-! Test: mutual multi-output constrained generation for STLC.
+
+    Uses derive_mutual to derive all input/output splits of `typing` and `lookup`
+    simultaneously. The mutual block handles circular dependencies between
+    "all outputs" typing (needs "τ fixed" for TAdd) and
+    "τ fixed" typing (needs "all outputs" for TApp). -/
 
 open Plausible
 
 set_option guard_msgs.diff true
 
--- Generate both a term and its type given a context Γ (standard mode)
+-- Derive all mutual dependencies together
 #guard_msgs(drop info) in
-derive_generator (fun Γ => ∃ (e : term) (τ : type), typing Γ e τ)
+derive_mutual
+  (∃ (Γ : List type) (x : Nat) (τ : type), lookup Γ x τ),
+  (fun τ => ∃ (Γ : List type) (x : Nat), lookup Γ x τ),
+  (∃ (Γ : List type) (e : term) (τ : type), typing Γ e τ),
+  (fun τ => ∃ (Γ : List type) (e : term), typing Γ e τ)
 
-/-! ## Multi-output mode for non-recursive relations -/
-
--- Multi-output lookup: all three as outputs
+-- Verify instances
 #guard_msgs(drop info) in
-derive_generator_multi (∃ (Γ : List type) (x : Nat) (τ : type), lookup Γ x τ)
+#check (inferInstance : ArbitrarySizedSuchThat (List type × term × type) (fun (Γ, e, τ) => typing Γ e τ))
 
--- Multi-output lookup: τ as input, Γ and x as outputs
 #guard_msgs(drop info) in
-derive_generator_multi (fun τ => ∃ (Γ : List type) (x : _), lookup Γ x τ)
+#check (inferInstance : ArbitrarySizedSuchThat (List type × term) (fun (Γ, e) => typing Γ e .Nat))
 
--- Verify the instance type
-#guard_msgs(drop info) in
-#check (inferInstance : ArbitrarySizedSuchThat (term × type) (fun (e, τ) => typing [] e τ))
-
--- Sample: generate a well-typed closed term along with its type
-#guard_msgs(drop info) in
-#eval do
+-- Sample: generate a well-typed term with its context and type
+#eval! do
   let sample ← Gen.run
-    (ArbitrarySizedSuchThat.arbitrarySizedST (fun (p : term × type) => typing [] p.1 p.2) 5) 10
-  return repr sample
-
--- Generate both an index and a type from a lookup judgment given a context
-#guard_msgs(drop info) in
-derive_generator (fun Γ => ∃ (x : Nat) (τ : type), lookup Γ x τ)
-
--- Sample: generate a valid (index, type) pair for a non-empty context
-#guard_msgs(drop info) in
-#eval do
-  let ctx : List type := [.Nat, .Fun .Nat .Nat, .Nat]
-  let sample ← Gen.run
-    (ArbitrarySizedSuchThat.arbitrarySizedST (fun (p : Nat × type) => lookup ctx p.1 p.2) 5) 10
+    (ArbitrarySizedSuchThat.arbitrarySizedST (fun (p : List type × term × type) => typing p.1 p.2.1 p.2.2) 3) 10
   return repr sample
