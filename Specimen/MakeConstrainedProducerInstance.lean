@@ -310,7 +310,6 @@ def mkConstrainedProducerMutualPieces
       | .Checker | .Theorem => `($exceptTypeConstructor $genErrorType $boolIdent)
 
     -- Build full function type with named Pi binders (handles dependent types)
-    -- Collect (name, type syntax) for all params including fuel/initSize/size
     let mut allParamNamesAndTypes : Array (TSyntax `ident × TSyntax `term) := #[]
     allParamNamesAndTypes := allParamNamesAndTypes.push (fuelIdent, natIdent)
     allParamNamesAndTypes := allParamNamesAndTypes.push (initSizeIdent, natIdent)
@@ -325,10 +324,26 @@ def mkConstrainedProducerMutualPieces
     for (name, ty) in allParamNamesAndTypes.reverse do
       fullType ← `(($name : $ty) → $fullType)
 
-    -- Emit the def
+    -- Add instance binders for type params (Arbitrary + DecidableEq)
+    let producerUnconstrainedClass := match producerSort with
+      | .Generator => ``Plausible.Arbitrary
+      | .Enumerator => ``Enum
+    let defTypeParamInstances ← mkTypeClassInstanceBinders typeParams #[producerUnconstrainedClass, ``DecidableEq]
+
+    -- Emit the def with named Pi binders and instance binders interleaved
     let defIdent := mkIdent globalDefName
-    let lambdaBody ← `(fun $innerParamBinders* => $matchExpr)
-    let defCmd ← `(command| def $defIdent : $fullType := $lambdaBody)
+    -- Insert instance binders into innerParamBinders after the last Sort-typed param
+    let mut allInnerParams := innerParamBinders
+    -- Find insertion point: after fuel/initSize/size (3) + all Sort-typed params
+    let insertIdx := 3 + typeParams.size
+    let instParams : Array (TSyntax `term) := defTypeParamInstances.map (fun b => ⟨b.raw⟩)
+    allInnerParams := allInnerParams[:insertIdx].toArray ++ instParams ++ allInnerParams[insertIdx:].toArray
+    -- Build the type with all named Pi binders
+    let mut defType ← pure optionTProducerType
+    for (name, ty) in allParamNamesAndTypes.reverse do
+      defType ← `(($name : $ty) → $defType)
+    let lambdaBody ← `(fun $allInnerParams* => $matchExpr)
+    let defCmd ← `(command| def $defIdent : $defType := $lambdaBody)
 
     -- Emit the instance (differs by deriveSort)
     let fuelVal := Lean.Option.get (← getOptions) specimen.fuel
