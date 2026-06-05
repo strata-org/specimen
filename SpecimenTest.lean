@@ -41,6 +41,8 @@ import SpecimenTest.DeriveArbitrary.ParameterizedTypeTest
 import SpecimenTest.DeriveArbitrary.MutuallyRecursiveTypeTest
 import SpecimenTest.DeriveArbitrarySuchThat.DeriveSTLCGenerator
 import SpecimenTest.DeriveArbitrarySuchThat.NonLinearPatternsTest
+import SpecimenTest.DeriveArbitrarySuchThat.MultiOutputTest
+import SpecimenTest.DeriveArbitrarySuchThat.MultiOutputSTLCTest
 
 -- Tests for instances of `Enum` for simple types and for correctness of enumerator combinators
 import SpecimenTest.Enum.EnumInstancesTest

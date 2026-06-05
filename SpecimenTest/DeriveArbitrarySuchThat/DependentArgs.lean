@@ -31,13 +31,13 @@ derive_generator (fun α l => ∃ n, @HasDep α l n)
 inductive HasClassDep {α : Type} [h : DecidableEq α] : Nat → Prop where
 | foo (a b : α) : a = b → HasClassDep 0
 
-#guard_msgs(drop info, error) in
+#guard_msgs(drop info, drop warning) in
 derive_generator (fun α inst => ∃ n, @HasClassDep α inst n)
 
-#guard_msgs(error, drop warning, drop info) in
+#guard_msgs(drop info, drop warning) in
 derive_checker fun α inst n => @HasClassDep α inst n
 
-#guard_msgs(drop info, error) in
+#guard_msgs(drop info, drop warning) in
 derive_enumerator (fun α inst => ∃ n, @HasClassDep α inst n)
 
 def f : Nat → Nat := fun _ => 0

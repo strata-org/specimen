@@ -26,13 +26,13 @@ open Idents Schedules
 -- https://github.com/QuickChick/QuickChick/blob/internal-rewrite/plugin/newUnifyQC.ml.cppo
 ----------------------------------------------------------------------------------------------------------------------------------
 
-/-- Creates the initial constraint map where all inputs are `Fixed`, while the output & all universally-quantified variables are `Undef`.
+/-- Creates the initial constraint map where all inputs are `Fixed`, while the outputs & all universally-quantified variables are `Undef`.
     - `forAllVariables` is a list of (variable name, variable type) pairs -/
 def mkInitialUnknownMap (inputNames: List Name)
-  (outputName : Name) (outputType : Expr)
+  (outputNamesTypes : List (Name × Expr))
   (forAllVariables : List (Name × Expr)) : UnknownMap :=
   let inputConstraints := inputNames.map (fun n => (n, .Fixed))
-  let outputConstraints := [(outputName, .Undef outputType)]
+  let outputConstraints := outputNamesTypes.map (fun (n, ty) => (n, .Undef ty))
   let filteredForAllVariables := forAllVariables.filter (fun (x, _) => x ∉ inputNames)
   let forAllVarsConstraints := (fun (x, ty) => (x, .Undef ty)) <$> filteredForAllVariables
   Std.HashMap.ofList $ inputConstraints ++ outputConstraints ++ forAllVarsConstraints
@@ -40,23 +40,24 @@ def mkInitialUnknownMap (inputNames: List Name)
 /-- Creates the initial `UnifyState` for a producer, with the `UnifyState` corresponding to a constructor of an inductive relation.
     The arguments to this function are:
     - `inputNames`: the names of all inputs to the producer
-    - `outputName`, `outputType`: name & type of the output (variable to be produced)
-  - `forAllVariables`: the names & types for universally-quantified variables in the constructor's type
+    - `outputNamesTypes`: names & types of the outputs (variables to be produced)
+    - `forAllVariables`: the names & types for universally-quantified variables in the constructor's type
     - `hypotheses`: the hypotheses for the constructor (represented as a constructor name applied to some list of arguments) -/
 def mkProducerInitialUnifyState (inputNames : List Name)
-  (outputName : Name)
-  (outputType : Expr)
+  (outputNamesTypes : List (Name × Expr))
   (forAllVariables : List (Name × Expr))
   (hypotheses : List (Name × List ConstructorExpr)) : UnifyState :=
+  let outputNames := outputNamesTypes.map Prod.fst
+  let outputTypes := outputNamesTypes.map Prod.snd
   let forAllVarNames := Prod.fst <$> forAllVariables
-  let constraints := mkInitialUnknownMap inputNames outputName outputType forAllVariables
-  let unknowns := Std.HashSet.ofList (outputName :: (inputNames ++ forAllVarNames))
+  let constraints := mkInitialUnknownMap inputNames outputNamesTypes forAllVariables
+  let unknowns := Std.HashSet.ofList (outputNames ++ inputNames ++ forAllVarNames)
   { constraints := constraints
     equalities := ∅
     patterns := []
     unknowns := unknowns
-    outputName := outputName
-    outputType := outputType
+    outputNames := outputNames
+    outputTypes := outputTypes
     inputNames := inputNames
     hypotheses := hypotheses }
 
@@ -81,7 +82,8 @@ def mkCheckerInitialUnifyState (inputNames : List Name)
     constraints := constraints
     unknowns := unknowns
     inputNames := inputNames
-    hypotheses := hypotheses }
+    hypotheses := hypotheses
+  }
 
 /-- Converts a expression `e` to a *constructor expression* `C r1 … rn`,
     where `C` is a constructor and the `ri` are arguments,
@@ -262,7 +264,7 @@ def getScheduleSort (conclusion : HypothesisExpr)
     - Note: it is the caller's responsibility to check that `conclusion` does indeed contain
       a non-trivial function application (e.g. by using `containsNonTrivialFuncApp`) -/
 def linearizeAndFlatten
-  (hypotheses : Array Expr) (conclusion : Expr) (outputIndex : Option Nat) (localCtx : LocalContext) :
+  (hypotheses : Array Expr) (conclusion : Expr) (outputIndices : List Nat) (localCtx : LocalContext) :
   UnifyM (Array Expr × Expr × List (Name × Expr) × LocalContext) := do
   -- Find all sub-terms which are non-trivial function applications
   let funcAppExprs ← collectUnmatchableProperSubterms conclusion
@@ -293,16 +295,16 @@ def linearizeAndFlatten
       additionalHyps := additionalHyps.push newHyp
 
     trace[plausible.deriving.arbitrary] m!"Original Conclusion: {conclusion}"
-    let conclusion := replaceExprsRecursivelyOnce conclusion funcCallEqualities none
+    let conclusion := replaceExprsRecursivelyOnce conclusion funcCallEqualities []
     trace[plausible.deriving.arbitrary] m!"Rewritten Conclusion after flattening: {conclusion}"
 
     let functionsNewTypedVars := freshUnknownsAndTypes
     let functionsNewHyps := additionalHyps
 
     -- Count variable occurrences to find nonlinear patterns
-    let varOccurrences := collectFVarOccurrences conclusion outputIndex
+    let varOccurrences := collectFVarOccurrences conclusion outputIndices
 
-    trace[plausible.deriving.arbitrary] m!"varOccurences: {repr varOccurrences.toList} \n expr: {conclusion} \n outputIndex {outputIndex}"
+    trace[plausible.deriving.arbitrary] m!"varOccurences: {repr varOccurrences.toList} \n expr: {conclusion} \n outputIndices {outputIndices}"
 
     let nonlinearVars := varOccurrences.toList.filter (fun (_, count) => count > 1)
 
@@ -338,7 +340,7 @@ def linearizeAndFlatten
     let updatedHypotheses := hypotheses ++ additionalHyps ++ functionsNewHyps
 
     trace[plausible.deriving.arbitrary] m!"Flattened Conclusion: {conclusion}"
-    let rewrittenConclusion := replaceExprsRecursivelyOnce conclusion nonlinearVarEqualities outputIndex
+    let rewrittenConclusion := replaceExprsRecursivelyOnce conclusion nonlinearVarEqualities outputIndices
     trace[plausible.deriving.arbitrary] m!"Rewritten Conclusion after linearizing: {rewrittenConclusion}"
 
 
@@ -393,8 +395,8 @@ def scheduleLT (a b : List ScheduleStep) := scheduleStepsScore a < scheduleSteps
         listed in order, which coincides with `inputNames ∪ { outputName }` -/
 def getScheduleForInductiveRelationConstructor
   (inductiveName : Name) (ctorName : Name) (inputNames : List Name)
-  (deriveSort : DeriveSort) (outputNameTypeOption : Option (Name × Expr × Nat)) (unknownsArray : Array Unknown) (localCtx : LocalContext) (recFnName : Name := defaultRecFnName deriveSort) : UnifyM Schedule := do
-  trace[plausible.deriving.arbitrary] "Schedule requested for inductive {inductiveName}'s constructor, {ctorName} with inputs: {inputNames} and variables: {unknownsArray}, outputInfo: {outputNameTypeOption}"
+  (deriveSort : DeriveSort) (outputNameTypeOption : Option (List (Name × Expr × Nat))) (unknownsArray : Array Unknown) (localCtx : LocalContext) (recFnName : Name := defaultRecFnName deriveSort) : UnifyM Schedule := do
+  trace[plausible.deriving.arbitrary] "Schedule requested for inductive {inductiveName}'s constructor, {ctorName} with inputs: {inputNames} and variables: {unknownsArray}"
 
   let ctorInfo ← getConstInfoCtor ctorName
   let ctorType := ctorInfo.type
@@ -427,14 +429,16 @@ def getScheduleForInductiveRelationConstructor
       | none => some tyExpr
       | some _ => none)
 
-    let outputIndex := (fun a => a.snd.snd) <$> outputNameTypeOption
+    let outputIndices := match outputNameTypeOption with
+      | some outputs => outputs.map (fun (_, _, idx) => idx)
+      | none => []
 
     -- For each function call in the cocnlusion, rewrite it by introducing a fresh variable
     -- equal to the result of the function call, and adding an extra hypothesis asserting equality
     -- between the function call and the variable.
     -- `freshNamesAndTypes` is a list containing the names & types of the fresh variables produced during this procedure.
     let (updatedHypotheses, updatedConclusion, freshNamesAndTypes, updatedLocalCtx) ←
-      linearizeAndFlatten hypotheses conclusion outputIndex (← getLCtx)
+      linearizeAndFlatten hypotheses conclusion outputIndices (← getLCtx)
     -- Enter the updated `LocalContext` containing the fresh variable that was created when rewriting the conclusion
     withLCtx' updatedLocalCtx (do
       let hypothesisExprs := (← monadLift (updatedHypotheses.toList.mapM (exprToHypothesisExpr ctorName))).toArray
@@ -447,7 +451,9 @@ def getScheduleForInductiveRelationConstructor
         | .Generator | .Enumerator =>
            match outputNameTypeOption with
           | none => throwError "Output name & type not specified when deriving producer"
-          | some (outputName, outputType, _outputIndex) => pure $ mkProducerInitialUnifyState inputNames outputName outputType forAllVars hypothesisExprs.toList
+          | some outputs =>
+            let outputNamesTypes := outputs.map (fun (n, ty, _) => (n, ty))
+            pure $ mkProducerInitialUnifyState inputNames outputNamesTypes forAllVars hypothesisExprs.toList
         | .Checker | .Theorem => pure $ mkCheckerInitialUnifyState inputNames forAllVars hypothesisExprs.toList
 
 
@@ -494,9 +500,10 @@ def getScheduleForInductiveRelationConstructor
         | .Generator | .Enumerator =>
           match outputNameTypeOption with
           | none => throwError "Error: output name & type not specified when deriving producer"
-          | some (outputName, _) =>
-          let outputIdx := unknowns.idxOf outputName
-          pure ([outputName], (inductiveName, [outputIdx]))
+          | some outputs =>
+          let outputNames := outputs.map (fun (n, _, _) => n)
+          let outputIdxs := outputNames.map (fun n => unknowns.idxOf n)
+          pure (outputNames, (inductiveName, outputIdxs))
         | .Checker | .Theorem => pure ([], (inductiveName, []))
 
       -- Determine the appropriate `ScheduleSort` (right now we only produce `ScheduleSort`s for `Generator`s)
@@ -524,6 +531,7 @@ def getScheduleForInductiveRelationConstructor
       trace[plausible.deriving.arbitrary] m!"Fixed Vars: {repr fixedVars}"
 
       -- Compute all possible checker schedules for this constructor
+      let multiOutput := Lean.Option.get (← getOptions) specimen.multiOutput
       let possibleSchedules := possibleSchedules
         (vars := updatedForAllVars)
         (hypotheses := hypothesisExprs.toList)
@@ -532,6 +540,7 @@ def getScheduleForInductiveRelationConstructor
         recCall
         fixedVars
         recFnName
+        multiOutput
 
       match possibleSchedules with
       | .lnil => throwError m!"Unable to compute any possible schedules"
@@ -577,28 +586,28 @@ def getScheduleForInductiveRelationConstructor
     This function takes the following as arguments:
     - The name of the inductive relation `inductiveName`
     - The constructor name `ctorName`
-    - The name (`outputName`) and type (`outputType`) of the output (value to be generated)
+    - The names, types, and indices of the outputs (values to be generated)
     - The names of inputs `inputNames` (arguments to the generator)
     - An array of `unknowns` (the arguments to the inductive relation)
-      + Note: `unknowns == inputNames ∪ { outputName }`, i.e. `unknowns` contains all args to the inductive relation
-        listed in order, which coincides with `inputNames ∪ { outputName }` -/
+      + Note: `unknowns == inputNames ∪ outputNames`, i.e. `unknowns` contains all args to the inductive relation
+        listed in order, which coincides with `inputNames ∪ outputNames` -/
 def getProducerScheduleForInductiveConstructor
-  (inductiveName : Name) (ctorName : Name) (outputName : Name) (outputType : Expr) (outputIndex : Nat) (inputNames : List Name)
+  (inductiveName : Name) (ctorName : Name) (outputNamesTypesIndices : List (Name × Expr × Nat)) (inputNames : List Name)
   (unknowns : Array Unknown) (deriveSort : DeriveSort) (localCtx : LocalContext) (recFnName : Name := defaultRecFnName deriveSort) : UnifyM Schedule :=
-  getScheduleForInductiveRelationConstructor inductiveName ctorName inputNames deriveSort (some (outputName, outputType, outputIndex)) unknowns localCtx recFnName
+  getScheduleForInductiveRelationConstructor inductiveName ctorName inputNames deriveSort (some outputNamesTypesIndices) unknowns localCtx recFnName
 
 
 /-- Produces an instance of a typeclass for a constrained producer (either `ArbitrarySizedSuchThat` or `EnumSizedSuchThat`).
     The arguments to this function are:
 
-    - `outputVar` and `outputType` are the name & type of the value to be generated,
+    - `outputVars` and `outputTypes` are the names & types of the values to be generated,
     - `constrainingInductive` is the inductive predicate constraining the generated values need to satisfy
     - `constrArgs` are the arguments of the inductive predicate
     - `deriveSort` is the sort of function we are deriving (either `.Generator` or `.Enumerator`) -/
 def deriveConstrainedProducer
   (_args : Array Expr)
-  (outputVar : Expr)
-  (outputType : Expr)
+  (outputVars : Array Expr)
+  (outputTypes : Array Expr)
   (constrainingInductive : Name)
   (inductiveLevels : List Level)
   (constrArgs : Array Expr)
@@ -608,16 +617,15 @@ def deriveConstrainedProducer
 
   let inductiveName := constrainingInductive
 
-  -- Figure out the name and type of the value we wish to generate (the "output")
-  let _outputName := outputVar.fvarId!
-  -- Find the index of the output variable in the inductive application.
-  -- The output is the argument that is not one of the fun-bound input variables.
-  let inputFVars := _args.map Expr.fvarId!
-  let outputIdxOpt := constrArgs.findIdx? fun arg =>
-    !arg.isFVar || !inputFVars.contains arg.fvarId!
-  if let .none := outputIdxOpt then
-    throwError m!"cannot find index of {outputVar}, try specifying the implicit arguments"
-  let outputIdx := Option.get! outputIdxOpt
+  -- Find the indices of the output variables in the inductive application.
+  let outputFVars := outputVars.map Expr.fvarId!
+  let mut outputIdxs : Array Nat := #[]
+  for i in [:constrArgs.size] do
+    let arg := constrArgs[i]!
+    if arg.isFVar && outputFVars.contains arg.fvarId! then
+      outputIdxs := outputIdxs.push i
+  if outputIdxs.isEmpty then
+    throwError m!"cannot find output indices, try specifying the implicit arguments"
 
   -- Obtain Lean's `InductiveVal` data structure, which contains metadata about the inductive relation
   let inductiveVal ← getConstInfoInduct inductiveName
@@ -629,23 +637,30 @@ def deriveConstrainedProducer
   -- we pop the last element (`Prop`) from `inductiveTypeComponents`
   let argTypes := inductiveTypeComponents.pop
 
-  -- Extract the name of each argument. The output position may not be an fvar
+  -- Extract the name of each argument. Output positions may not be fvars
   -- (e.g., when the output type depends on fun-bound variables), so use the
   -- output variable's name there.
   let argNames ← constrArgs.mapIdxM
     (fun i (ident : Expr) =>
       if ident.isFVar then
         ident.fvarId!.getUserName
-      else if i == outputIdx then
-        outputVar.fvarId!.getUserName
+      else if let some outIdx := outputIdxs.findIdx? (· == i) then
+        outputVars[outIdx]!.fvarId!.getUserName
       else throwError m!"{ident} is expected to be a variable.")
   let argNamesTypes := argNames.zip argTypes
+
+  -- The output type for code generation — for multiple outputs, use a right-nested product type
+  let rec mkProdType : List Expr → TermElabM Expr
+    | [] => throwError "no output types"
+    | [t] => pure t
+    | t :: ts => do let rest ← mkProdType ts; mkAppM ``Prod #[t, rest]
+  let outputType ← mkProdType outputTypes.toList
 
   -- Add the name & type of each argument of the inductive relation to the `LocalContext`
   -- Then, derive `baseProducers` & `inductiveProducers` (the code for the sub-producers
   -- that are invoked when `size = 0` and `size > 0` respectively),
-  -- and obtain freshened versions of the output variable / arguments (`freshenedOutputName`, `freshArgIdents`)
-  let (baseProducers, inductiveProducers, freshenedOutputName, freshArgIdents, localCtx) ←
+  -- and obtain freshened versions of the output variables / arguments (`freshenedOutputNames`, `freshArgIdents`)
+  let (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, localCtx) ←
     withLocalDeclsDND argNamesTypes (fun _ => do
       let mut localCtx ← getLCtx
       let mut freshUnknowns := #[]
@@ -658,13 +673,19 @@ def deriveConstrainedProducer
         localCtx := localCtx.renameUserName argName freshArgName
         freshUnknowns := freshUnknowns.push freshArgName
 
-      -- Since the `output` also appears as an argument to the inductive relation,
-      -- we also need to freshen its name
-      let freshenedOutputName := freshUnknowns[outputIdx]!
+      -- Since the outputs also appear as arguments to the inductive relation,
+      -- we also need to freshen their names
+      let freshenedOutputNames := outputIdxs.map (fun idx => freshUnknowns[idx]!)
 
-      -- Each argument to the inductive relation (except the one at `outputIdx`)
+      -- Each argument to the inductive relation (except those at output indices)
       -- is treated as an input
-      let freshenedInputNamesExcludingOutput := (Array.eraseIdx! freshUnknowns outputIdx).toList
+      let freshenedInputNamesExcludingOutput := freshUnknowns.toList.filter
+        (fun n => freshenedOutputNames.toList.all (· != n))
+
+      -- Build the list of (outputName, outputType, outputIndex) triples
+      let outputNamesTypesIndices : List (Name × Expr × Nat) :=
+        (List.range outputIdxs.size).map (fun i =>
+          (freshenedOutputNames[i]!, outputTypes[i]!, outputIdxs[i]!))
 
       let mut nonRecursiveProducers := #[]
       let mut recursiveProducers := #[]
@@ -683,8 +704,8 @@ def deriveConstrainedProducer
       let mut requiredInstances := #[]
       for ctorName in inductiveVal.ctors do
         let scheduleOption ← (UnifyM.runInMetaM
-          (getProducerScheduleForInductiveConstructor inductiveName ctorName freshenedOutputName
-            outputType outputIdx freshenedInputNamesExcludingOutput freshUnknowns deriveSort localCtx freshRecFnName)
+          (getProducerScheduleForInductiveConstructor inductiveName ctorName outputNamesTypesIndices
+            freshenedInputNamesExcludingOutput freshUnknowns deriveSort localCtx freshRecFnName)
             emptyUnifyState)
         match scheduleOption with
         | some schedule =>
@@ -737,7 +758,7 @@ def deriveConstrainedProducer
       let baseProducers ← `([$nonRecursiveProducers,*])
       let inductiveProducers ← `([$nonRecursiveProducers,*, $recursiveProducers,*])
 
-      return (baseProducers, inductiveProducers, freshenedOutputName, Lean.mkIdent <$> freshUnknowns, localCtx))
+      return (baseProducers, inductiveProducers, freshenedOutputNames, Lean.mkIdent <$> freshUnknowns, localCtx))
 
   -- Create an instance of the appropriate producer typeclass
   mkConstrainedProducerTypeClassInstance
@@ -746,40 +767,53 @@ def deriveConstrainedProducer
     constrainingInductive
     inductiveLevels
     freshArgIdents
-    freshenedOutputName
-    outputType
+    freshenedOutputNames
+    outputTypes
     producerSort
     localCtx
 
 
 private def deriveArbitrarySuchThatInstance'
   (args : Array Expr)
-  (outputVar : Expr)
-  (outputType : Expr)
+  (outVars : Array Expr)
+  (outTypes : Array Expr)
   (constrainingInductive : Name)
   (inductiveLevels : List Level)
   (constrArgs : Array Expr) :
   TermElabM (TSyntax `command) := do
-  deriveConstrainedProducer args outputVar outputType constrainingInductive inductiveLevels constrArgs (deriveSort := .Generator)
+  deriveConstrainedProducer args outVars outTypes constrainingInductive inductiveLevels constrArgs (deriveSort := .Generator)
 
+/-- Peels nested existentials from `∃ x₁, ∃ x₂, ..., P x₁ x₂ ...`, calling `action` inside
+    the nested lambdaTelescope scopes so that fvars remain in scope. -/
+private partial def peelExistentialsAux (body : Expr) (outVars : Array Expr) (outTypes : Array Expr)
+    (action : Expr → Array Expr → Array Expr → TermElabM α) : TermElabM α := do
+  match body.app2? ``Exists with
+  | .some (outTy, innerBody) =>
+    let innerBody ← whnf innerBody
+    lambdaTelescope innerBody fun binders innerBody' => do
+      if h : binders.size > 0 then
+        peelExistentialsAux innerBody' (outVars.push binders[0]) (outTypes.push outTy) action
+      else
+        action body outVars outTypes
+  | .none => action body outVars outTypes
+
+/-- Parses the user-supplied derivation constraint, extracting the input args, output vars, output types,
+    constraining inductive name, its levels, and its arguments. Supports multiple existential outputs. -/
 private def withParsedDerivingArgs (input : Expr)
   (action :
-    (args : Array Expr) → (out : Expr) → (outTy : Expr) →
+    (args : Array Expr) → (outVars : Array Expr) → (outTypes : Array Expr) →
     (constrInd : Name) → (constrLevels : List Level) → (constrArgs : Array Expr) → TermElabM α) : TermElabM α :=
   lambdaTelescope input <|
   fun args body => do
-  let .some (outTy, body) := body.app2? ``Exists | throwError m!"Error in parsing constraint: {body} is not of the form ∃ x, P."
-  let body ← whnf body
-  lambdaTelescope body <|
-  fun outVars body =>
-  body.withApp <|
+  peelExistentialsAux body #[] #[] fun innerBody outVars outTypes => do
+  if outVars.isEmpty then
+    throwError m!"Error in parsing constraint: {body} is not of the form ∃ x, P."
+  innerBody.withApp <|
   fun ind indArgs => do
-  if outVars.size ≠ 1 then throwError m!"Error in parsing constraint: Expected a single output variable, got {outVars}."
-  let out := outVars[0]!
   if !ind.isConst then throwError m!"Error in parsing constraint: {ind} is expected to be a constant."
   let indName := ind.constName!
   let indLevels := ind.constLevels!
-  action args out outTy indName indLevels indArgs
+  action args outVars outTypes indName indLevels indArgs
 
 /-- Derives an instance of the `ArbitrarySuchThat` typeclass,
     where `outputVar` and `outputTypeSyntax` are the name & type of the value to be generated,
@@ -788,9 +822,9 @@ def deriveArbitrarySuchThatInstance (tm : Term) : TermElabM Command := do
   let e ← elabTerm tm .none
   withParsedDerivingArgs e deriveArbitrarySuchThatInstance'
 
-def deriveEnumSuchThatInstance' (args : Array Expr) (outputVar : Expr) (outputType : Expr)
+def deriveEnumSuchThatInstance' (args : Array Expr) (outVars : Array Expr) (outTypes : Array Expr)
   (constrainingProp : Name) (inductiveLevels : List Level) (constrArgs : Array Expr) : TermElabM (TSyntax `command) :=
-  deriveConstrainedProducer args outputVar outputType constrainingProp inductiveLevels constrArgs (deriveSort := .Enumerator)
+  deriveConstrainedProducer args outVars outTypes constrainingProp inductiveLevels constrArgs (deriveSort := .Enumerator)
 
 /-- Derives an instance of the `EnumSuchThat` typeclass,
     where `outputVar` and `outputTypeSyntax` are the name & type of the value to be generated,
@@ -823,7 +857,24 @@ def elabDeriveGenerator : CommandElab := fun stx => do
 
   | _ => throwUnsupportedSyntax
 
-/-- Command for deriving a constrained generator for an inductive relation -/
+/-- Command for deriving a constrained generator with multi-output hypothesis steps -/
+syntax (name := generator_multi_deriver) "derive_generator_multi" term : command
+
+/-- Elaborator for `derive_generator_multi` — same as `derive_generator` but allows each
+    hypothesis to produce maximally many outputs at once (requires multi-output instances). -/
+@[command_elab generator_multi_deriver]
+def elabDeriveGeneratorMulti : CommandElab := fun stx => do
+  match stx with
+  | `(derive_generator_multi $descr:term) => do
+    withScope (fun scope => { scope with opts := scope.opts.set `specimen.multiOutput true }) do
+      let typeClassInstance ← liftTermElabM <| deriveArbitrarySuchThatInstance descr
+      let genFormat ← liftCoreM (PrettyPrinter.ppCommand typeClassInstance)
+      liftTermElabM $ Tactic.TryThis.addSuggestion stx
+        (Format.pretty genFormat) (header := "Try this generator: ")
+      elabCommand typeClassInstance
+  | _ => throwUnsupportedSyntax
+
+/-- Command for deriving a constrained enumerator for an inductive relation -/
 syntax (name := enumerator_deriver) "derive_enumerator" term : command
 
 /-- Elaborator for the `derive_generator` command which derives a constrained generator

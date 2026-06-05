@@ -9,6 +9,12 @@ register_option specimen.debug : Bool := {
   descr := "enable debug messages from Specimen"
 }
 
+/-- When true, the scheduler produces maximally many outputs per hypothesis step -/
+register_option specimen.multiOutput : Bool := {
+  defValue := false
+  descr := "allow multi-output production steps in derived generators"
+}
+
 /-- Global flag for enabling/diabling debug messages -/
 def globalDebugFlag : Bool := false
 

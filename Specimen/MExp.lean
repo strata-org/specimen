@@ -133,16 +133,13 @@ def okFalse : MExp :=
   ok (.MConst ``false)
 
 
-/-- Converts a `List α` to a "tuple", where the function `pair`
-    is used to create tuples. The `default` element is used when
-    the input list `l` is empty, although for most use-cases,
-    this function will be called with non-empty lists `l`, so `default`
-    will be `none`. -/
+/-- Converts a `List α` to a right-nested "tuple", where the function `pair`
+    is used to create tuples. Produces `(a, (b, c))` for `[a, b, c]`. -/
 def tupleOfList [Inhabited α] (pair : α → α → α) (l : List α) (default : Option α) : α :=
   match l with
   | [] => default.get!
   | [x] => x
-  | x :: xs => List.foldl pair x xs
+  | x :: xs => pair x (tupleOfList pair xs default)
 
 /-- Converts a list of `Pattern`s to a one single `Pattern` expressed
     as a tuple -/
@@ -474,7 +471,7 @@ def scheduleToMExp (schedule : Schedule) (mfuel : MExp) (defFuel : MExp) (recTyp
       match conclusionMExps with
       | [] => panic! "No outputs being returned in producer schedule"
       | [output] => MExp.MRet output
-      | outputs => tupleOfList (fun e1 e2 => .MApp .allowImplicit (.MConst ``Prod.mk) [e1, e2]) outputs outputs[0]?
+      | outputs => MExp.MRet (tupleOfList (fun e1 e2 => .MApp .allowImplicit (.MConst ``Prod.mk) [e1, e2]) outputs outputs[0]?)
     | .CheckerSchedule => okTrue
     | .TheoremSchedule conclusion typeClassUsed =>
       -- Create a pattern-match on the result of hte checker
