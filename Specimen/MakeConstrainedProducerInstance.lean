@@ -330,19 +330,12 @@ def mkConstrainedProducerMutualPieces
       | .Enumerator => ``Enum
     let defTypeParamInstances ← mkTypeClassInstanceBinders typeParams #[producerUnconstrainedClass, ``DecidableEq]
 
-    -- Emit the def with named Pi binders and instance binders interleaved
+    -- Emit the def with named Pi type + lambda (no instance binders in type for now)
     let defIdent := mkIdent globalDefName
-    -- Insert instance binders into innerParamBinders after the last Sort-typed param
-    let mut allInnerParams := innerParamBinders
-    -- Find insertion point: after fuel/initSize/size (3) + all Sort-typed params
-    let insertIdx := 3 + typeParams.size
-    let instParams : Array (TSyntax `term) := defTypeParamInstances.map (fun b => ⟨b.raw⟩)
-    allInnerParams := allInnerParams[:insertIdx].toArray ++ instParams ++ allInnerParams[insertIdx:].toArray
-    -- Build the type with all named Pi binders
     let mut defType ← pure optionTProducerType
     for (name, ty) in allParamNamesAndTypes.reverse do
       defType ← `(($name : $ty) → $defType)
-    let lambdaBody ← `(fun $allInnerParams* => $matchExpr)
+    let lambdaBody ← `(fun $innerParamBinders* => $matchExpr)
     let defCmd ← `(command| def $defIdent : $defType := $lambdaBody)
 
     -- Emit the instance (differs by deriveSort)
