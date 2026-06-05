@@ -90,28 +90,106 @@ inductive ScheduleStep
   | Match : Explicit → Name → Pattern → ScheduleStep
   deriving Repr, BEq
 
+/-- Pretty-print a ConstructorExpr in readable form -/
+partial def ppConstructorExpr : ConstructorExpr → String
+  | .Unknown name => name.toString
+  | .Lit (.natVal n) => toString n
+  | .Lit (.strVal s) => s!"\"{s}\""
+  | .CSort _ => "Sort"
+  | .Ctor ``Prod.mk [_, _, a, b] => s!"({ppConstructorExpr a}, {ppConstructorExpr b})"
+  | .Ctor ``Prod.mk [a, b] => s!"({ppConstructorExpr a}, {ppConstructorExpr b})"
+  | .Ctor ``List.nil _ => "[]"
+  | .Ctor ``List.cons [_, h, t] => s!"{ppConstructorExpr h} :: {ppConstructorExpr t}"
+  | .Ctor ``List.cons [h, t] => s!"{ppConstructorExpr h} :: {ppConstructorExpr t}"
+  | .Ctor ``Bool.true [] => "true"
+  | .Ctor ``Bool.false [] => "false"
+  | .Ctor name args =>
+    let shortName := name.componentsRev.head?.getD name |>.toString
+    if args.isEmpty then shortName else s!"{shortName} {" ".intercalate (args.map ppConstructorExpr)}"
+  | .TyCtor name args =>
+    let shortName := name.componentsRev.head?.getD name |>.toString
+    if args.isEmpty then shortName else s!"{shortName} {" ".intercalate (args.map ppConstructorExpr)}"
+  | .FuncApp name args =>
+    let shortName := name.componentsRev.head?.getD name |>.toString
+    if args.isEmpty then shortName else s!"({shortName} {" ".intercalate (args.map ppConstructorExpr)})"
+
+/-- Pretty-print a HypothesisExpr -/
+def ppHypothesisExpr (hyp : HypothesisExpr) : String :=
+  let (name, args) := hyp
+  if name == ``Eq then
+    match args with
+    | [_, lhs, rhs] => s!"{ppConstructorExpr lhs} = {ppConstructorExpr rhs}"
+    | [lhs, rhs] => s!"{ppConstructorExpr lhs} = {ppConstructorExpr rhs}"
+    | _ => s!"Eq {" ".intercalate (args.map ppConstructorExpr)}"
+  else
+    let shortName := name.componentsRev.head?.getD name |>.toString
+    if args.isEmpty then shortName else s!"{shortName} {" ".intercalate (args.map ppConstructorExpr)}"
+
 /-- Stringifier for `Source` -/
 def sourceToString source := match source with
-  | Source.Rec name ctrArgs => s!"{ToExpr.toExpr (name,ctrArgs)}"
-  | Source.MutRec name ctrArgs => s!"mut:{ToExpr.toExpr (name,ctrArgs)}"
-  | Source.NonRec hyp => s!"{ToExpr.toExpr hyp}"
+  | Source.Rec name ctrArgs =>
+    let shortName := name.componentsRev.head?.getD name |>.toString
+    s!"{shortName} {" ".intercalate (ctrArgs.map ppConstructorExpr)}"
+  | Source.MutRec name ctrArgs =>
+    let shortName := name.componentsRev.head?.getD name |>.toString
+    s!"⟳ {shortName} {" ".intercalate (ctrArgs.map ppConstructorExpr)}"
+  | Source.NonRec hyp => ppHypothesisExpr hyp
 
-def patternToString pat := s!"{ToExpr.toExpr $ constructorExprOfPattern pat}"
+def patternToString pat := ppConstructorExpr (constructorExprOfPattern pat)
 
 /-- Stringifier for `step` -/
 def stepToString step := match step with
     | ScheduleStep.Unconstrained name src _ => s!"{name} ← {sourceToString src}"
-    | .SuchThat vars src _ => s!"{vars.map (fun ((name : Name), (_ : Option ConstructorExpr)) => name)} ← {sourceToString src}"
+    | .SuchThat vars src _ =>
+      let varNames := vars.map (fun (n : Name × Option ConstructorExpr) => ToString.toString n.1)
+      s!"[{", ".intercalate varNames}] ← {sourceToString src}"
     | .Check src true => s!"check {sourceToString src}"
-    | .Check src false => s!"check ¬{sourceToString src}"
-    | .Match explicit name pattern => s!"match {repr explicit} {name} with {patternToString pattern}"
+    | .Check src false => s!"check ¬({sourceToString src})"
+    | .Match _ name pattern => s!"match {name} with {patternToString pattern}"
 
-/-- Stringifier for lists of steps. -/
-def scheduleStepsToString (steps : List ScheduleStep) := "do\n  " ++ String.intercalate "\n  " (stepToString <$> steps)
+/-- Stringifier for lists of steps (without conclusion). -/
+def scheduleStepsToString (steps : List ScheduleStep) := "do\n    " ++ String.intercalate "\n    " (stepToString <$> steps)
+
+structure ScheduleScore where
+  checks : Nat
+  length : Nat
+  unconstrained : Nat
+  deriving Ord, Repr
+
+def scheduleStepsScore (schedule : List ScheduleStep) : ScheduleScore :=
+  Id.run do
+    let mut checks := 0
+    let mut length := 0
+    let mut unconstrained := 0
+    for step in schedule do
+      length := length + 1
+      match step with
+      | .Check .. => checks := checks + 1
+      | .Unconstrained .. => unconstrained := unconstrained + 1
+      | _ => ()
+    ⟨checks, length, unconstrained⟩
+
+instance : LT ScheduleScore := ltOfOrd
+
+def scheduleLT (a b : List ScheduleStep) := scheduleStepsScore a < scheduleStepsScore b
 
 /-- A schedule is a pair consisting of an ordered list of `ScheduleStep`s,
     and the sort of schedule we're dealing with (the latter is the "conclusion" of the schedule) -/
 abbrev Schedule := List ScheduleStep × ScheduleSort
+
+/-- Stringifier for a full schedule (steps + conclusion). -/
+def scheduleToString (schedule : Schedule) : String :=
+  let (steps, sort) := schedule
+  let stepsStr := String.intercalate "\n    " (stepToString <$> steps)
+  let conclusionStr := match sort with
+    | .ProducerSchedule _ conclusion =>
+      let outputStr := match conclusion with
+        | [e] => ppConstructorExpr e
+        | es => s!"({String.intercalate ", " (es.map ppConstructorExpr)})"
+      s!"\n    return {outputStr}"
+    | .CheckerSchedule => s!"\n    return ok"
+    | .TheoremSchedule hyp _ => s!"\n    check_conclusion {ppHypothesisExpr hyp}"
+  s!"do\n    {stepsStr}{conclusionStr}"
 
 /-- Each `ScheduleStep` is associated with a `Density`, which represents a failure mode of a generator -/
 inductive Density
@@ -322,34 +400,32 @@ structure SpecKey where
   inductiveName : Name
   outputIndices : List Nat
   deriveSort : DeriveSort
-  deriving Repr, BEq, Hashable
+  deriving Repr, BEq, Hashable, Inhabited
 
 /-- Pretty-prints a SpecKey as a spec form like "fun τ => ∃ Γ e, typing Γ e τ".
     Requires knowing the inductive's arg types (number of args). -/
 def SpecKey.prettyPrint (key : SpecKey) (numArgs : Nat) : String :=
-  let inputVarNames := #["a", "b", "c", "d", "e", "f", "g", "h"]
-  let outputVarNames := #["x", "y", "z", "w", "u", "v", "p", "q"]
+  let varPool := #["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"]
   let (inputs, outputs, appArgs) := Id.run do
     let mut inputs : List String := []
     let mut outputs : List String := []
     let mut appArgs : List String := []
-    let mut inpIdx := 0
-    let mut outIdx := 0
     for i in List.range numArgs do
+      let name := varPool.getD i s!"v{i}"
       if i ∈ key.outputIndices then
-        let name := outputVarNames.getD outIdx s!"o{outIdx}"
         outputs := outputs ++ [name]
-        appArgs := appArgs ++ [name]
-        outIdx := outIdx + 1
       else
-        let name := inputVarNames.getD inpIdx s!"i{inpIdx}"
         inputs := inputs ++ [name]
-        appArgs := appArgs ++ [name]
-        inpIdx := inpIdx + 1
+      appArgs := appArgs ++ [name]
     (inputs, outputs, appArgs)
   let inputsStr := if inputs.isEmpty then "" else s!"fun {String.intercalate " " inputs} => "
   let outputsStr := if outputs.isEmpty then "" else s!"∃ {String.intercalate " " outputs}, "
-  s!"{inputsStr}{outputsStr}{key.inductiveName} {String.intercalate " " appArgs}"
+  let sortStr := match key.deriveSort with
+    | .Generator => "[generator] "
+    | .Enumerator => "[enumerator] "
+    | .Checker => "[checker] "
+    | .Theorem => "[theorem] "
+  s!"{sortStr}{inputsStr}{outputsStr}{key.inductiveName} {String.intercalate " " appArgs}"
 
 /-- Score for a derived schedule (used for selecting best schedule). -/
 structure SpecScore where
@@ -377,6 +453,10 @@ structure InductiveSchedule where
   score : SpecScore
   /-- True if this spec already has an instance in the environment (no need to compile) -/
   alreadyExists : Bool := false
+  /-- Time taken to derive the full spec (in microseconds, includes dep derivation) -/
+  derivationTimeUs : Nat := 0
+  /-- Per-constructor stats: (name, time in μs, schedules considered, score) -/
+  ctorStats : List (Name × Nat × Nat × ScheduleScore) := []
   deriving Repr
 
 /-- Result of deriving a schedule, stored in the dependency memo. -/
@@ -414,7 +494,7 @@ structure ScheduleDep where
   deriving Repr, BEq
 
 /-- Computes output indices: which positions in hypArgs are output variables -/
-private def computeOutputIndices (hypArgs : List ConstructorExpr) (outputVarNames : List Name) : List Nat :=
+def computeOutputIndices (hypArgs : List ConstructorExpr) (outputVarNames : List Name) : List Nat :=
   filterMapWithIndex (fun i arg =>
     match arg with
     | .Unknown name => if name ∈ outputVarNames then some i else none
@@ -462,7 +542,7 @@ partial def collectUsedDeps (root : SpecKey) (memo : Std.HashMap SpecKey MemoEnt
     | some (.done indSched) =>
       let allSchedules := indSched.baseSchedules ++ indSched.recSchedules
       let deps := allSchedules.flatMap (fun (_, (steps, _)) => collectNonRecDeps steps)
-      let relDeps := deps.filter (·.kind == .relation)
+      let relDeps := deps.filter (fun d => d.kind == .relation || d.kind == .checker)
       relDeps.foldl (fun acc dep =>
         let depKey : SpecKey := { inductiveName := dep.inductiveName, outputIndices := dep.outputIndices, deriveSort := dep.deriveSort }
         collectUsedDeps depKey memo acc) visited
@@ -476,7 +556,7 @@ def computeSpecSCC (usedKeys : List SpecKey) (memo : Std.HashMap SpecKey MemoEnt
     | some (.done indSched) =>
       let allScheds := indSched.baseSchedules ++ indSched.recSchedules
       let deps := allScheds.flatMap (fun (_, (steps, _)) => collectNonRecDeps steps)
-      let relDeps := deps.filter (·.kind == .relation)
+      let relDeps := deps.filter (fun d => d.kind == .relation || d.kind == .checker)
       let depKeys := relDeps.map (fun d => SpecKey.mk d.inductiveName d.outputIndices d.deriveSort)
       depKeys.filter (usedKeys.contains ·)
     | _ => []

@@ -89,7 +89,8 @@ deriving instance DecidableEq for PathSet
 
 set_option specimen.autoDeriveDeps true in
 set_option specimen.multiOutput true in
-derive_mutual
+set_option specimen.richOutput true in
+#time derive_mutual
   (fun a v t => ∃ (ex : (CedarExpr × PathSet)), Cedar.HasType a v ex t)
 
 --------------------------------------------------

@@ -236,9 +236,10 @@ def mkConstrainedProducerMutualPieces
     let freshSize' := mkFreshAccessibleIdent topLevelLocalCtx `size'
     let freshFuel' := mkFreshAccessibleIdent topLevelLocalCtx `fuel'
 
-    let combinatorFn := match producerSort with
+    let combinatorFn := match deriveSort with
       | .Generator => genBacktrackFn
       | .Enumerator => enumerateFn
+      | .Checker | .Theorem => checkerBacktrackFn
 
     let mut sizeCaseExprs := #[]
     sizeCaseExprs := sizeCaseExprs.push (← `(Term.matchAltExpr| | $(mkIdent ``Nat.zero) => $combinatorFn $baseGenerators))
@@ -278,21 +279,27 @@ def mkConstrainedProducerMutualPieces
         outputTypeSyntaxes := outputTypeSyntaxes.push paramTypeSyntax
 
     let targetTypeSyntax ← do
-      let syns ← if outputTypeSyntaxes.isEmpty then
-        targetTypes.mapM (fun ty => PrettyPrinter.delab ty)
-      else pure outputTypeSyntaxes
-      let rec mkProdType : List (TSyntax `term) → TermElabM (TSyntax `term)
-        | [] => throwError "no output types found"
-        | [t] => pure t
-        | t :: ts => do let rest ← mkProdType ts; `($t × $rest)
-      mkProdType syns.toList
+      if deriveSort == .Checker || deriveSort == .Theorem then
+        `(Bool)
+      else
+        let syns ← if outputTypeSyntaxes.isEmpty then
+          targetTypes.mapM (fun ty => PrettyPrinter.delab ty)
+        else pure outputTypeSyntaxes
+        let rec mkProdType : List (TSyntax `term) → TermElabM (TSyntax `term)
+          | [] => throwError "no output types found"
+          | [t] => pure t
+          | t :: ts => do let rest ← mkProdType ts; `($t × $rest)
+        mkProdType syns.toList
 
     let targetVarPattern : TSyntax `term ← do
-      let rec mkProdPat : List Name → TermElabM (TSyntax `term)
-        | [] => throwError "no output variables"
-        | [v] => `($(Lean.mkIdent v))
-        | v :: vs => do let rest ← mkProdPat vs; `(($(Lean.mkIdent v), $rest))
-      mkProdPat targetVars.toList
+      if deriveSort == .Checker || deriveSort == .Theorem then
+        `(Unit.unit)
+      else
+        let rec mkProdPat : List Name → TermElabM (TSyntax `term)
+          | [] => throwError "no output variables"
+          | [v] => `($(Lean.mkIdent v))
+          | v :: vs => do let rest ← mkProdPat vs; `(($(Lean.mkIdent v), $rest))
+        mkProdPat targetVars.toList
 
     let optionTProducerType ← match deriveSort with
       | .Generator => `($genTypeConstructor $targetTypeSyntax)

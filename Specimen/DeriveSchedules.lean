@@ -1204,11 +1204,24 @@ private def preScheduleStepToScheduleStep (ctorName : Name) (preStep : PreSchedu
   let env ← read
   match preStep with
   | .Checks hyps => return (hyps.map (fun hyp =>
-    let src := if env.deriveSort == DeriveSort.Checker && env.recCall.fst == hyp.fst then
-      Source.Rec env.recFnName hyp.snd
+    -- Unwrap nested negation: peel `Not` layers, flipping polarity each time
+    let (innerHyp, polarity) := Id.run do
+      let mut h := hyp
+      let mut pol := true
+      for _ in List.range 10 do  -- bounded iteration
+        if h.fst == ``Not then
+          match h.snd with
+          | [.Ctor name args] => h := (name, args); pol := !pol
+          | [.TyCtor name args] => h := (name, args); pol := !pol
+          | [.FuncApp name args] => h := (name, args); pol := !pol
+          | _ => break
+        else break
+      return (h, pol)
+    let src := if env.deriveSort == DeriveSort.Checker && env.recCall.fst == innerHyp.fst then
+      Source.Rec env.recFnName innerHyp.snd
     else
-      Source.NonRec hyp;
-    ScheduleStep.Check src true))
+      Source.NonRec innerHyp;
+    ScheduleStep.Check src polarity))
   | .Produce outs hyp =>
     let (newMatches, hyp', newOutputs) ← handleConstrainedOutputs hyp outs
     let typedOutputs ← newOutputs.mapM

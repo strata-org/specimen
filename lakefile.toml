@@ -22,3 +22,8 @@ rev = "main"
 name = "plausible"
 scope = "leanprover-community"
 rev = "main"
+
+[[require]]
+name = "proofwidgets"
+scope = "leanprover-community"
+rev = "main"

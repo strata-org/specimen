@@ -28,6 +28,13 @@ register_option specimen.autoDeriveDeps : Bool := {
   descr := "automatically derive dependency instances in derive_mutual"
 }
 
+/-- When true, derive_mutual emits a rich HTML widget in the infoview with interactive
+    schedule details. When false, only plain text output is emitted (faster). -/
+register_option specimen.richOutput : Bool := {
+  defValue := true
+  descr := "emit rich HTML widget output in derive_mutual (disable for faster builds)"
+}
+
 /-- Global flag for enabling/diabling debug messages -/
 def globalDebugFlag : Bool := false
 
