@@ -229,7 +229,8 @@ def mkConstrainedProducerMutualPieces
   (args : TSyntaxArray `term) (targetVars : Array Name)
   (targetTypes : Array Expr) (producerSort : ProducerSort)
   (topLevelLocalCtx : LocalContext) (globalDefName : Name)
-  (deriveSort : DeriveSort) :
+  (deriveSort : DeriveSort)
+  (precomputedParamInfo : Option (Array (Name × Expr × TSyntax `term)) := none) :
   TermElabM (TSyntax `command × TSyntax `command) := do
     -- Reuse the same computation as mkConstrainedProducerTypeClassInstance
     let freshSizeIdent := mkFreshAccessibleIdent topLevelLocalCtx `size
@@ -251,7 +252,9 @@ def mkConstrainedProducerMutualPieces
     fuelCaseExprs := fuelCaseExprs.push (← `(Term.matchAltExpr| | $(mkIdent ``Nat.succ) $freshFuel' => $sizeMatchExpr))
     let matchExpr ← mkMatchExpr fuelIdent fuelCaseExprs
 
-    let paramInfo ← analyzeInductiveArgs inductiveName inductiveLevels args
+    let paramInfo ← match precomputedParamInfo with
+      | some info => pure info
+      | none => analyzeInductiveArgs inductiveName inductiveLevels args
     let targetVarsList := targetVars.toList
 
     -- Build the function type: Nat → Nat → Nat → param types → Gen α

@@ -845,9 +845,15 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
     let argNames := (List.range allFVars.size).map (fun i => indSched.argNames.getD i (Name.mkSimple s!"arg_{i}"))
     let freshArgIdents : TSyntaxArray `term := argNames.toArray.map (fun n => Lean.mkIdent n)
     let freshenedOutputNames := outputIndicesNonSort.filterMap (fun i => argNames[i]?)
+    -- Compute paramInfo using the live fvars (handles dependent types correctly)
+    let liveTypes ← getCorrectTypes allFVars key.inductiveName indLevels
+    let liveTypesSyntax ← liveTypes.mapM (fun ty => PrettyPrinter.delab ty)
+    let mut paramInfo : Array (Name × Expr × TSyntax `term) := #[]
+    for i in [:liveTypes.size] do
+      paramInfo := paramInfo.push (argNames.getD i `x, liveTypes[i]!, liveTypesSyntax[i]!)
     mkConstrainedProducerMutualPieces baseProducers inductiveProducers
       key.inductiveName indLevels freshArgIdents freshenedOutputNames.toArray
-      outputTypes.toArray producerSort (← getLCtx) globalName key.deriveSort
+      outputTypes.toArray producerSort (← getLCtx) globalName key.deriveSort paramInfo
 
 /-- Recursively derives the best schedule for a SpecKey, populating the memo with
     all transitive dependencies. Returns the score for this spec.
