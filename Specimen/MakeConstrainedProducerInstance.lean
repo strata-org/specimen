@@ -309,16 +309,25 @@ def mkConstrainedProducerMutualPieces
       | .Enumerator => `($exceptTTypeConstructor $genErrorType $enumTypeConstructor $targetTypeSyntax)
       | .Checker | .Theorem => `($exceptTypeConstructor $genErrorType $boolIdent)
 
-    -- Build the full function type for the def
+    -- Build full function type with named Pi binders (handles dependent types)
+    -- Collect (name, type syntax) for all params including fuel/initSize/size
+    let mut allParamNamesAndTypes : Array (TSyntax `ident × TSyntax `term) := #[]
+    allParamNamesAndTypes := allParamNamesAndTypes.push (fuelIdent, natIdent)
+    allParamNamesAndTypes := allParamNamesAndTypes.push (initSizeIdent, natIdent)
+    allParamNamesAndTypes := allParamNamesAndTypes.push (sizeIdent, natIdent)
+    for (paramName, paramType, paramTypeSyntax) in paramInfo do
+      if paramName ∉ targetVarsList then
+        if paramType.isSort then
+          allParamNamesAndTypes := allParamNamesAndTypes.push (mkIdent paramName, ← `(Sort _))
+        else
+          allParamNamesAndTypes := allParamNamesAndTypes.push (mkIdent paramName, paramTypeSyntax)
     let mut fullType ← pure optionTProducerType
-    for pt in paramTypes.reverse do
-      fullType ← `($pt → $fullType)
-
-    -- Build the lambda body
-    let lambdaBody ← `(fun $innerParamBinders* => $matchExpr)
+    for (name, ty) in allParamNamesAndTypes.reverse do
+      fullType ← `(($name : $ty) → $fullType)
 
     -- Emit the def
     let defIdent := mkIdent globalDefName
+    let lambdaBody ← `(fun $innerParamBinders* => $matchExpr)
     let defCmd ← `(command| def $defIdent : $fullType := $lambdaBody)
 
     -- Emit the instance (differs by deriveSort)
