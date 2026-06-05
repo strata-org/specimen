@@ -765,30 +765,32 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
   let key := indSched.key
   let indInfo ← getConstInfoInduct key.inductiveName
   let indLevels := indInfo.levelParams.map (Level.param ·)
-  let indTypeComponents ← getComponentsOfArrowType indInfo.type
-  let argTypes := indTypeComponents.pop
-  -- Use the SAME freshened names that derivation used (stored in indSched.argNames)
+  -- Get arg types using getCorrectTypes (handles dependent types like Eq's α correctly)
+  let numArgs := (← getComponentsOfArrowType indInfo.type).size - 1
+  let argNames := (List.range numArgs).map (fun i => indSched.argNames.getD i (Name.mkSimple s!"arg_{i}"))
   let argNameTypes : Array (Name × Expr) := Id.run do
     let mut r := #[]
-    for i in [:argTypes.size] do
-      let name := indSched.argNames.getD i (Name.mkSimple s!"arg_{i}")
-      r := r.push (name, argTypes[i]!)
+    for i in [:numArgs] do
+      r := r.push (argNames.getD i `x, mkSort .zero)  -- placeholder types
     r
+  -- Create fvars with placeholder types, then fix with getCorrectTypes
   withLocalDeclsDND argNameTypes fun allFVars => do
+  let argTypesLive ← getCorrectTypes allFVars key.inductiveName indLevels
+  do
     let inputFVars := Id.run do
       let mut r := #[]
-      for i in [:argTypes.size] do
+      for i in [:argTypesLive.size] do
         if i ∉ key.outputIndices then r := r.push allFVars[i]!
       r
     let outputFVars := Id.run do
       let mut r := #[]
-      for i in [:argTypes.size] do
+      for i in [:argTypesLive.size] do
         if i ∈ key.outputIndices then r := r.push allFVars[i]!
       r
     -- Filter out Sort-typed positions from outputs (those are type params, handled by instance binders)
     let outputIndicesNonSort := key.outputIndices.filter (fun i =>
-      match argTypes[i]? with | some ty => !ty.isSort | none => true)
-    let outputTypes := outputIndicesNonSort.filterMap (fun i => argTypes[i]?)
+      match argTypesLive[i]? with | some ty => !ty.isSort | none => true)
+    let outputTypes := outputIndicesNonSort.filterMap (fun i => argTypesLive[i]?)
     -- Compile each constructor schedule to a sub-producer term
     let rec mkProdType : List Expr → TermElabM Expr
       | [] => throwError "no output types"
@@ -840,8 +842,9 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
       recursiveProducers := recursiveProducers.push term
     let baseProducers ← `([$nonRecursiveProducers,*])
     let inductiveProducers ← `([$nonRecursiveProducers,*, $recursiveProducers,*])
-    let freshArgIdents : TSyntaxArray `term := argNameTypes.map (fun (n, _) => Lean.mkIdent n)
-    let freshenedOutputNames := outputIndicesNonSort.filterMap (fun i => argNameTypes[i]?.map (·.1))
+    let argNames := (List.range allFVars.size).map (fun i => indSched.argNames.getD i (Name.mkSimple s!"arg_{i}"))
+    let freshArgIdents : TSyntaxArray `term := argNames.toArray.map (fun n => Lean.mkIdent n)
+    let freshenedOutputNames := outputIndicesNonSort.filterMap (fun i => argNames[i]?)
     mkConstrainedProducerMutualPieces baseProducers inductiveProducers
       key.inductiveName indLevels freshArgIdents freshenedOutputNames.toArray
       outputTypes.toArray producerSort (← getLCtx) globalName key.deriveSort
