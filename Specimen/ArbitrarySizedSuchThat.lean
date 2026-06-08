@@ -39,6 +39,12 @@ instance {α : Type u} {val : α} : ArbitrarySizedSuchThat α (fun x => x = val)
 instance {α : Type u} {val : α} : ArbitrarySizedSuchThat α (fun x => val = x) where
   arbitrarySizedST _ := return val
 
+instance {α : Type u} [Arbitrary α] : ArbitrarySizedSuchThat (α × α) (fun (l,r) => l = r) where
+  arbitrarySizedST _ :=
+    do
+      let a ← Arbitrary.arbitrary
+      return (a,a)
+
 /-- `Arbitrary` instance for decidable predicates. It's expected that every (successfully) generated element for am `ArbitrarySuchThat α P` will satisfy  `P`.
   We therefore try to return an element of the relevant subset type.
 -/

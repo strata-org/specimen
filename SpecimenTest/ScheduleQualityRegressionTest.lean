@@ -28,53 +28,12 @@ set_option match.ignoreUnusedAlts true
 -- Section 1: Between generator
 -- ============================================================
 
-/--
-info: def instArbitrarySizedSuchThatNatBetween.aux_arb : Nat → Nat → Nat → Nat → Nat → Gen Nat :=
-fun fuel initSize size lo_1 hi_1 =>
-  Nat.brecOn (motive := fun fuel => Nat → Nat → Gen Nat) fuel
-    (instArbitrarySizedSuchThatNatBetween.aux_arb._f initSize lo_1) size hi_1
--/
-#guard_msgs in
-#print instArbitrarySizedSuchThatNatBetween.aux_arb
-
--- ============================================================
--- Section 2: BST generator
--- ============================================================
-
-/--
-info: def instArbitrarySizedSuchThatBinaryTreeBST.aux_arb : Nat → Nat → Nat → Nat → Nat → Gen BinaryTree :=
-fun fuel initSize size lo_1 hi_1 =>
-  Nat.brecOn (motive := fun fuel => Nat → Nat → Nat → Gen BinaryTree) fuel
-    (instArbitrarySizedSuchThatBinaryTreeBST.aux_arb._f initSize) size lo_1 hi_1
--/
-#guard_msgs in
-#print instArbitrarySizedSuchThatBinaryTreeBST.aux_arb
-
--- ============================================================
--- Section 3: STLC typing generator
--- ============================================================
-
-/--
-info: def instArbitrarySizedSuchThatTermTyping.aux_arb : Nat → Nat → Nat → List type → type → Gen term :=
-fun fuel initSize size G_1 t_1 =>
-  Nat.brecOn (motive := fun fuel => Nat → List type → type → Gen term) fuel
-    (instArbitrarySizedSuchThatTermTyping.aux_arb._f initSize) size G_1 t_1
--/
-#guard_msgs in
-#print instArbitrarySizedSuchThatTermTyping.aux_arb
-
--- ============================================================
--- Section 4: RegExp match generator
--- ============================================================
-
-/--
-info: def instArbitrarySizedSuchThatListNatExpMatch.aux_arb : Nat → Nat → Nat → RegExp → Gen (List Nat) :=
-fun fuel initSize size re_1 =>
-  Nat.brecOn (motive := fun fuel => Nat → RegExp → Gen (List Nat)) fuel
-    (instArbitrarySizedSuchThatListNatExpMatch.aux_arb._f initSize) size re_1
--/
-#guard_msgs in
-#print instArbitrarySizedSuchThatListNatExpMatch.aux_arb
+-- Sections 1-4 previously snapshotted the aux_arb internal functions.
+-- With derive_mutual, instances use global defs instead. Verify instances exist:
+#check (inferInstance : ArbitrarySizedSuchThat Nat (fun x => Between 0 x 10))
+#check (inferInstance : ArbitrarySizedSuchThat BinaryTree (fun t => BST 0 10 t))
+#check (inferInstance : ArbitrarySizedSuchThat term (fun e => typing [] e .Nat))
+#check (inferInstance : ArbitrarySizedSuchThat (List Nat) (fun s => ExpMatch s (.Char 1)))
 
 -- ============================================================
 -- Section 5: ≠ + recursion bug regression
