@@ -1,18 +1,26 @@
 import Specimen.LazyRoseTree
 import Specimen.LazyList
 namespace SearchTree
--- Chunks structure for dependency-aware ordering
+-- An "anchor" is a hypothesis that does NOT commute freely with the hypothesis being
+-- inserted — it shares variables that haven't been instantiated by a more-leftward
+-- hypothesis. When inserting, we must consider positions both before and after each anchor,
+-- splitting the search into chunks between anchor points.
 structure Chunks' α where
   beforeAnchor : List α
   anchors : List (List α)
   numAnchors : Nat
   deriving Repr
 
-private def getNeighbors {α v} [BEq α] [BEq v] (hyps : List (α × List v)) : List (α × List α) :=
+private def getNeighbors {α v} [BEq α] [BEq v] (hyps : List (α × List v)) : List (α × List (α × List v)) :=
   hyps.map (fun (hyp, vars) =>
-    let neighbors := hyps.filter (fun (otherHyp, otherVars) =>
-      hyp != otherHyp && vars.any (otherVars.contains ·))
-    (hyp, neighbors.map Prod.fst))
+    let neighbors := hyps.filterMap (fun (otherHyp, otherVars) =>
+      if hyp == otherHyp then .none else
+      let vars' := vars.filter (otherVars.contains ·)
+      if vars'.isEmpty then
+        .none
+      else
+        .some (otherHyp, vars'))
+    (hyp, neighbors))
 
 private def splitIntoChunks {α} [BEq α] (order : List α) (anchors : List α) : Chunks' α :=
   let (beforeAnchor, rest) := order.span (!anchors.contains ·)
@@ -36,12 +44,21 @@ def enumDependencySatisfyingOrderingsTree {α v} [BEq α] [Repr α] [Repr v] [BE
   (hyps : List (α × List v)) : LazyRoseTree (List α) :=
   let neighbors := getNeighbors hyps
 
-  let rec buildTree (remaining : List (α × List α)) (currentOrder : List α) : LazyRoseTree (List α) :=
+  let rec buildTree (remaining : List (α × List (α × List v))) (currentOrder : List α) : LazyRoseTree (List α) :=
     -- dbg_trace s!"leaking info on {repr currentOrder}\n"
     match remaining with
     | [] => ⟨currentOrder, ⟨fun _ => []⟩⟩
     | (h, deps) :: rest =>
-      let inOrder := deps.filter (currentOrder.contains ·)
+      let inOrder := Id.run do
+        let mut inOrder := []
+        let mut env := []
+        for (h', vs) in deps do
+          if !(vs.removeAll env).isEmpty then
+            inOrder := h' :: inOrder
+          env := vs ++ env
+        return inOrder
+
+      -- let inOrder := deps.filter (currentOrder.contains ·)
       let chunks := splitIntoChunks currentOrder inOrder
       let insertionPositions := List.range (chunks.numAnchors + 1)
 
@@ -344,21 +361,30 @@ partial def countLeaves {α} (tree : LazyRoseTree α) : Nat :=
   let children := tree.children.get
   if children.isEmpty then 1 else (children.map countLeaves).foldl (· + ·) 0
 
--- Analytical tree size calculation without building the tree
+-- Analytical tree size calculation matching buildTree's dynamic anchor computation
 def calculateTreeSize {α v} [BEq α] [BEq v] (hyps : List (α × List v)) : Nat × Nat :=
   let neighbors := getNeighbors hyps
 
-  let rec countTree (remaining : List (α × List α)) (currentOrder : List α) : Nat × Nat :=
+  let rec countTree (remaining : List (α × List (α × List v))) (currentOrder : List α) : Nat × Nat :=
     match remaining with
-    | [] => (1, 1)  -- Leaf: 1 node, 1 leaf
+    | [] => (1, 1)
     | (h, deps) :: rest =>
-      let inOrder := deps.filter (currentOrder.contains ·)
-      let branchingFactor := inOrder.length + 1
-
-      let (childNodes, childLeaves) := countTree rest (h :: currentOrder)
-      let totalChildNodes := branchingFactor * childNodes
-      let totalChildLeaves := branchingFactor * childLeaves
-      (1 + totalChildNodes, totalChildLeaves)
+      let inOrder := Id.run do
+        let mut inOrder := []
+        let mut env := []
+        for (h', vs) in deps do
+          if !(vs.removeAll env).isEmpty then
+            inOrder := h' :: inOrder
+          env := vs ++ env
+        return inOrder
+      let chunks := splitIntoChunks currentOrder inOrder
+      let insertionPositions := List.range (chunks.numAnchors + 1)
+      insertionPositions.foldl (fun (accNodes, accLeaves) pos =>
+        let newChunks := {chunks with anchors := chunks.anchors.insertIdx pos [h], numAnchors := chunks.numAnchors + 1}
+        let newOrder := newChunks.beforeAnchor ++ newChunks.anchors.flatten
+        let (childNodes, childLeaves) := countTree rest newOrder
+        (accNodes + childNodes, accLeaves + childLeaves)
+      ) (1, 0)
 
   countTree neighbors []
 

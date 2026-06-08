@@ -9,7 +9,6 @@ import Specimen.Utils
 import Specimen.Schedules
 import Specimen.Debug
 
-
 open Lean Elab Command Meta Term Parser Std
 open Idents Schedules
 
@@ -163,7 +162,6 @@ def mkConstrainedProducerTypeClassInstance
       else pure outputTypeSyntaxes.toList
       tupleOfListM (throwError "no output types found")
         (fun t rest => `($t × $rest)) syns
-
     -- Build the lambda pattern for the typeclass predicate
     -- For a single output: `fun x => @P args*`
     -- For multiple outputs: `fun (x₁, (x₂, x₃)) => @P args*` (right-nested)
@@ -226,16 +224,18 @@ def mkConstrainedProducerMutualPieces
   (args : TSyntaxArray `term) (targetVars : List Name)
   (targetTypes : List Expr) (producerSort : ProducerSort)
   (topLevelLocalCtx : LocalContext) (globalDefName : Name)
-  (deriveSort : DeriveSort) :
+  (deriveSort : DeriveSort)
+  (precomputedParamInfo : Option (Array (Name × Expr × TSyntax `term)) := none) :
   TermElabM (TSyntax `command × TSyntax `command) := do
     -- Reuse the same computation as mkConstrainedProducerTypeClassInstance
     let freshSizeIdent := mkFreshAccessibleIdent topLevelLocalCtx `size
     let freshSize' := mkFreshAccessibleIdent topLevelLocalCtx `size'
     let freshFuel' := mkFreshAccessibleIdent topLevelLocalCtx `fuel'
 
-    let combinatorFn := match producerSort with
+    let combinatorFn := match deriveSort with
       | .Generator => genBacktrackFn
       | .Enumerator => enumerateFn
+      | .Checker | .Theorem => checkerBacktrackFn
 
     let mut sizeCaseExprs := #[]
     sizeCaseExprs := sizeCaseExprs.push (← `(Term.matchAltExpr| | $(mkIdent ``Nat.zero) => $combinatorFn $baseGenerators))
@@ -247,7 +247,9 @@ def mkConstrainedProducerMutualPieces
     fuelCaseExprs := fuelCaseExprs.push (← `(Term.matchAltExpr| | $(mkIdent ``Nat.succ) $freshFuel' => $sizeMatchExpr))
     let matchExpr ← mkMatchExpr fuelIdent fuelCaseExprs
 
-    let paramInfo ← analyzeInductiveArgs inductiveName inductiveLevels args
+    let paramInfo ← match precomputedParamInfo with
+      | some info => pure info
+      | none => analyzeInductiveArgs inductiveName inductiveLevels args
     let targetVarsList := targetVars
 
     -- Build the function type: Nat → Nat → Nat → param types → Gen α
@@ -275,38 +277,69 @@ def mkConstrainedProducerMutualPieces
         outputTypeSyntaxes := outputTypeSyntaxes.push paramTypeSyntax
 
     let targetTypeSyntax ← do
-      let syns ← if outputTypeSyntaxes.isEmpty then
-        targetTypes.mapM (fun ty => PrettyPrinter.delab ty)
-      else pure outputTypeSyntaxes.toList
-      let rec mkProdType : List (TSyntax `term) → TermElabM (TSyntax `term)
-        | [] => throwError "no output types found"
-        | [t] => pure t
-        | t :: ts => do let rest ← mkProdType ts; `($t × $rest)
-      mkProdType syns
-
+      if deriveSort == .Checker || deriveSort == .Theorem then
+        `(Bool)
+      else
+        let syns ← if outputTypeSyntaxes.isEmpty then
+          targetTypes.mapM (fun ty => PrettyPrinter.delab ty)
+        else pure outputTypeSyntaxes.toList
+        tupleOfListM (throwError "no output types found")
+          (fun t rest => `($t × $rest)) syns
     let targetVarPattern : TSyntax `term ← do
-      let rec mkProdPat : List Name → TermElabM (TSyntax `term)
-        | [] => throwError "no output variables"
-        | [v] => `($(Lean.mkIdent v))
-        | v :: vs => do let rest ← mkProdPat vs; `(($(Lean.mkIdent v), $rest))
-      mkProdPat targetVars
+      if deriveSort == .Checker || deriveSort == .Theorem then
+        `(Unit.unit)
+      else
+        let rec mkProdPat : List Name → TermElabM (TSyntax `term)
+          | [] => throwError "no output variables"
+          | [v] => `($(Lean.mkIdent v))
+          | v :: vs => do let rest ← mkProdPat vs; `(($(Lean.mkIdent v), $rest))
+        mkProdPat targetVars
 
     let optionTProducerType ← match deriveSort with
       | .Generator => `($genTypeConstructor $targetTypeSyntax)
       | .Enumerator => `($exceptTTypeConstructor $genErrorType $enumTypeConstructor $targetTypeSyntax)
       | .Checker | .Theorem => `($exceptTypeConstructor $genErrorType $boolIdent)
 
-    -- Build the full function type for the def
+    -- Build full function type with named Pi binders (handles dependent types)
+    let mut allParamNamesAndTypes : Array (TSyntax `ident × TSyntax `term) := #[]
+    allParamNamesAndTypes := allParamNamesAndTypes.push (fuelIdent, natIdent)
+    allParamNamesAndTypes := allParamNamesAndTypes.push (initSizeIdent, natIdent)
+    allParamNamesAndTypes := allParamNamesAndTypes.push (sizeIdent, natIdent)
+    for (paramName, paramType, paramTypeSyntax) in paramInfo do
+      if paramName ∉ targetVarsList then
+        if paramType.isSort then
+          allParamNamesAndTypes := allParamNamesAndTypes.push (mkIdent paramName, ← `(Sort _))
+        else
+          allParamNamesAndTypes := allParamNamesAndTypes.push (mkIdent paramName, paramTypeSyntax)
     let mut fullType ← pure optionTProducerType
-    for pt in paramTypes.reverse do
-      fullType ← `($pt → $fullType)
+    for (name, ty) in allParamNamesAndTypes.reverse do
+      fullType ← `(($name : $ty) → $fullType)
 
-    -- Build the lambda body
-    let lambdaBody ← `(fun $innerParamBinders* => $matchExpr)
+    -- Add instance binders for type params (Arbitrary + DecidableEq)
+    let producerUnconstrainedClass := match producerSort with
+      | .Generator => ``Plausible.Arbitrary
+      | .Enumerator => ``Enum
+    let defTypeParamInstances ← mkTypeClassInstanceBinders typeParams #[producerUnconstrainedClass, ``DecidableEq]
 
-    -- Emit the def
+    -- Emit the def with ∀ type (supports instance binders inline)
     let defIdent := mkIdent globalDefName
-    let defCmd ← `(command| def $defIdent : $fullType := $lambdaBody)
+    -- Build ∀ type with instance binders interleaved after Sort-typed params
+    let mut defType ← pure optionTProducerType
+    -- Add non-Sort value params (from right)
+    let insertIdx := 3 + typeParams.size
+    for (name, ty) in allParamNamesAndTypes[insertIdx:].toArray.reverse do
+      defType ← `(($name : $ty) → $defType)
+    -- Add instance binders (referencing the Sort-typed params)
+    for instBinder in defTypeParamInstances.reverse do
+      defType ← `(∀ $instBinder:bracketedBinder, $defType)
+    -- Add Sort-typed params + fuel/initSize/size (from right)
+    for (name, ty) in allParamNamesAndTypes[:insertIdx].toArray.reverse do
+      defType ← `(($name : $ty) → $defType)
+    -- Lambda includes instance binders at the same position
+    let instParams : Array (TSyntax `term) := defTypeParamInstances.map (fun b => ⟨b.raw⟩)
+    let allInnerParams := innerParamBinders[:insertIdx].toArray ++ instParams ++ innerParamBinders[insertIdx:].toArray
+    let lambdaBody ← `(fun $allInnerParams* => $matchExpr)
+    let defCmd ← `(command| def $defIdent : $defType := $lambdaBody)
 
     -- Emit the instance (differs by deriveSort)
     let fuelVal := Lean.Option.get (← getOptions) specimen.fuel

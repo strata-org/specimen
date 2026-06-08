@@ -8,5 +8,12 @@ import SpecimenTest.DeriveArbitrarySuchThat.DeriveBalancedTreeGenerator
 
 set_option guard_msgs.diff true
 
+
+set_option specimen.autoDeriveDeps true
+set_option specimen.multiOutput true
+
+derive_mutual enumerator
+  (fun n => ∃ (t : BinaryTree), balancedTree n t)
+
 #guard_msgs(drop info) in
 derive_enumerator (fun n => ∃ (t : BinaryTree), balancedTree n t)

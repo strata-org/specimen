@@ -13,6 +13,7 @@ import Specimen.Debug
 import Plausible.Arbitrary
 
 import Lean.Elab.Command
+
 import Lean.Meta.Basic
 
 open Lean Elab Command Meta Term Parser
@@ -239,9 +240,7 @@ def getScheduleSort (conclusion : HypothesisExpr)
   | .Theorem => return (.TheoremSchedule conclusion (typeClassUsed := true))
   | _ => do
     let outputValues ← outputVars.mapM UnifyM.evaluateUnknown
-    let producerSort :=
-      if let .Enumerator := deriveSort then ProducerSort.Enumerator
-      else ProducerSort.Generator
+    let producerSort := convertDeriveSortToProducerSort deriveSort
     let conclusion ← do
       if returnOption then
         pure outputValues
@@ -266,7 +265,7 @@ def getScheduleSort (conclusion : HypothesisExpr)
 def linearizeAndFlatten
   (hypotheses : Array Expr) (conclusion : Expr) (outputIndices : List Nat) (localCtx : LocalContext) :
   UnifyM (Array Expr × Expr × List (Name × Expr) × LocalContext) := do
-  -- Find all sub-terms which are non-trivial function applications
+  -- Phase 1: flatten function calls into fresh unknowns with equality hypotheses
   let funcAppExprs ← collectUnmatchableProperSubterms conclusion
   trace[plausible.deriving.arbitrary] m!"Unmatchable exprs: {funcAppExprs} In conclusion: {conclusion}"
   withLCtx' localCtx do
@@ -301,7 +300,7 @@ def linearizeAndFlatten
     let functionsNewTypedVars := freshUnknownsAndTypes
     let functionsNewHyps := additionalHyps
 
-    -- Count variable occurrences to find nonlinear patterns
+    -- Phase 2: linearize repeated variables — each extra occurrence gets a fresh unknown + equality
     let varOccurrences := collectFVarOccurrences conclusion outputIndices
 
     trace[plausible.deriving.arbitrary] m!"varOccurences: {repr varOccurrences.toList} \n expr: {conclusion} \n outputIndices {outputIndices}"
@@ -350,29 +349,6 @@ def linearizeAndFlatten
     )
   )
 
-structure ScheduleScore where
-  checks : Nat
-  length : Nat
-  unconstrained : Nat
-  deriving Ord, Repr
-
-def scheduleStepsScore (schedule : List ScheduleStep) : ScheduleScore :=
-  let steps := schedule
-  Id.run do
-    let mut checks := 0
-    let mut length := 0
-    let mut unconstrained := 0
-    for step in steps do
-      length := length + 1
-      match step with
-      | .Check .. => checks := checks + 1
-      | .Unconstrained .. => unconstrained := unconstrained + 1
-      | _ => ()
-    ⟨checks, length, unconstrained⟩
-
-instance : LT ScheduleScore := ltOfOrd
-
-def scheduleLT (a b : List ScheduleStep) := scheduleStepsScore a < scheduleStepsScore b
 
 /-- Unifies each argument in the conclusion of an inductive relation with the top-level arguments to the relation
     (using the unification algorithm from Generating Good Generations),
@@ -391,11 +367,17 @@ def scheduleLT (a b : List ScheduleStep) := scheduleStepsScore a < scheduleSteps
     - An array of unknowns (`unknownsArray`), which are provided to the unification algorithm
       + This array should be non-empty if `deriveSort = .Generator` or `.Enumerator`, and empty otherwise
       + Note: when `deriveSort == .Generator / .Enumerator`, it is the caller's responsibility to ensure that
-        `unknowns == inputNames ∪ { outputName }`, i.e. `unknowns` contains all args to the inductive relation
-        listed in order, which coincides with `inputNames ∪ { outputName }` -/
+        `unknowns == inputNames ∪ outputNames`, i.e. `unknowns` contains all args to the inductive relation
+        listed in order, which coincides with `inputNames ∪ outputNames` -/
+structure ScheduleResult where
+  schedule : Schedule
+  schedulesConsidered : Nat
+  score : ScheduleScore
+  deriving Repr
+
 def getScheduleForInductiveRelationConstructor
   (inductiveName : Name) (ctorName : Name) (inputNames : List Name)
-  (deriveSort : DeriveSort) (outputNameTypeOption : Option (List (Name × Expr × Nat))) (unknownsArray : Array Unknown) (localCtx : LocalContext) (recFnName : Name := defaultRecFnName deriveSort) : UnifyM Schedule := do
+  (deriveSort : DeriveSort) (outputNameTypeOption : Option (List (Name × Expr × Nat))) (unknownsArray : Array Unknown) (localCtx : LocalContext) (recFnName : Name := defaultRecFnName deriveSort) : UnifyM ScheduleResult := do
   trace[plausible.deriving.arbitrary] "Schedule requested for inductive {inductiveName}'s constructor, {ctorName} with inputs: {inputNames} and variables: {unknownsArray}"
 
   let ctorInfo ← getConstInfoCtor ctorName
@@ -530,7 +512,7 @@ def getScheduleForInductiveRelationConstructor
       trace[plausible.deriving.arbitrary] m!"Updated ForAll Vars: {repr updatedForAllVars}"
       trace[plausible.deriving.arbitrary] m!"Fixed Vars: {repr fixedVars}"
 
-      -- Compute all possible checker schedules for this constructor
+      -- Enumerate candidate schedules and select the best by score (checks < length < unconstrained)
       let multiOutput := Lean.Option.get (← getOptions) specimen.multiOutput
       let possibleSchedules := possibleSchedules
         (vars := updatedForAllVars)
@@ -546,13 +528,14 @@ def getScheduleForInductiveRelationConstructor
       | .lnil => throwError m!"Unable to compute any possible schedules"
       | .lcons fstSchdM rest =>
 
+      let searchStart ← IO.monoNanosNow
       let (fstSchd, countSeen) ← fstSchdM
 
       let mut countProcessed  := 1
       let mut bestScore := scheduleStepsScore fstSchd
       let mut bestSchedule   := fstSchd
 
-      trace[plausible.deriving.results] m!"First Schedule: {scheduleStepsToString bestSchedule} \nScore: {repr bestScore}\nSchedules Considered: {repr countSeen}\nSchedules Processed: {repr countProcessed}"
+      trace[plausible.deriving.results] m!"First Schedule: {ppScheduleSteps bestSchedule} \nScore: {repr bestScore}\nSchedules Considered: {repr countSeen}\nSchedules Processed: {repr countProcessed}"
       let limit := 200000
       for schdM in rest.get do
         let (schd, countSeen) ← schdM
@@ -561,20 +544,26 @@ def getScheduleForInductiveRelationConstructor
         if score < bestScore then
           bestSchedule := schd
           bestScore := score
-          trace[plausible.deriving.results] m!"Better Schedule: {scheduleStepsToString bestSchedule} \nScore: {repr bestScore}\nSchedules Considered: {repr countSeen}\nSchedules Processed: {repr countProcessed}"
+          trace[plausible.deriving.results] m!"Better Schedule: {ppScheduleSteps bestSchedule} \nScore: {repr bestScore}\nSchedules Considered: {repr countSeen}\nSchedules Processed: {repr countProcessed}"
         if countProcessed > limit then
           break
+      let searchEnd ← IO.monoNanosNow
 
-      trace[plausible.deriving.results] m!"Chosen Schedule: {scheduleStepsToString bestSchedule} \nScore: {repr bestScore}\nSchedules Considered: {repr countSeen}\nSchedules Processed: {repr countProcessed}"
+      trace[plausible.deriving.results] m!"Chosen Schedule: {ppScheduleSteps bestSchedule} \nScore: {repr bestScore}\nSchedules Considered: {repr countSeen}\nSchedules Processed: {repr countProcessed}"
+      trace[plausible.deriving.results] m!"  Search time: {(searchEnd - searchStart) / 1000000}ms"
 
       -- Update the best schedule with the result of unification
+      let unifyStart ← IO.monoNanosNow
       let updatedBestSchedule ← updateScheduleSteps bestSchedule
+      let unifyEnd ← IO.monoNanosNow
+      trace[plausible.deriving.results] m!"  Unify time: {(unifyEnd - unifyStart) / 1000000}ms"
       let finalState ← get
 
       -- Takes the `patterns` and `equalities` fields from `UnifyState` (created after
       -- the conclusion of a constructor has been unified with the top-level arguments to the inductive relation),
       -- convert them to the appropriate `ScheduleStep`s, and prepends them to the `naiveSchedule`
-      pure $ addConclusionPatternsAndEqualitiesToSchedule finalState.patterns finalState.equalities (updatedBestSchedule, scheduleSort))
+      let finalSchedule := addConclusionPatternsAndEqualitiesToSchedule finalState.patterns finalState.equalities (updatedBestSchedule, scheduleSort)
+      pure { schedule := finalSchedule, schedulesConsidered := countProcessed, score := bestScore })
   )
 
 
@@ -593,7 +582,7 @@ def getScheduleForInductiveRelationConstructor
         listed in order, which coincides with `inputNames ∪ outputNames` -/
 def getProducerScheduleForInductiveConstructor
   (inductiveName : Name) (ctorName : Name) (outputNamesTypesIndices : List (Name × Expr × Nat)) (inputNames : List Name)
-  (unknowns : Array Unknown) (deriveSort : DeriveSort) (localCtx : LocalContext) (recFnName : Name := defaultRecFnName deriveSort) : UnifyM Schedule :=
+  (unknowns : Array Unknown) (deriveSort : DeriveSort) (localCtx : LocalContext) (recFnName : Name := defaultRecFnName deriveSort) : UnifyM ScheduleResult :=
   getScheduleForInductiveRelationConstructor inductiveName ctorName inputNames deriveSort (some outputNamesTypesIndices) unknowns localCtx recFnName
 
 
@@ -618,6 +607,7 @@ def deriveConstrainedProducer
   let inductiveName := constrainingInductive
 
   -- Find the indices of the output variables in the inductive application.
+  -- Identify which argument positions are outputs (to be generated)
   let outputFVars := outputVars.map Expr.fvarId!
   let mut outputIdxs : Array Nat := #[]
   for i in [:constrArgs.size] do
@@ -650,17 +640,23 @@ def deriveConstrainedProducer
   let argNamesTypes := argNames.zip argTypes
 
   -- The output type for code generation — for multiple outputs, use a right-nested product type
+  -- Build the output product type (e.g., α × β for two outputs)
   let outputType ← tupleOfListM (throwError "no output types")
-    (fun t rest => mkAppM ``Prod #[t, rest]) outputTypes.toList
+    (fun t rest => do
+      let u ← Meta.mkFreshLevelMVar
+      let v ← Meta.mkFreshLevelMVar
+      pure (Lean.mkApp2 (Lean.mkConst ``Prod [u, v]) t rest)) outputTypes.toList
 
   -- Add the name & type of each argument of the inductive relation to the `LocalContext`
   -- Then, derive `baseProducers` & `inductiveProducers` (the code for the sub-producers
   -- that are invoked when `size = 0` and `size > 0` respectively),
   -- and obtain freshened versions of the output variables / arguments (`freshenedOutputNames`, `freshArgIdents`)
   let (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, localCtx) ←
+  -- Freshen argument names to avoid capture, then derive schedules per constructor
     withLocalDeclsDND argNamesTypes (fun _ => do
       let mut localCtx ← getLCtx
       let mut freshUnknowns := #[]
+      -- For each constructor: derive schedule → compile to MExp → emit TSyntax term
 
       -- For each arg to the inductive relation (as specified to the user),
       -- create a fresh name (to avoid clashing with names that may appear in constructors
@@ -701,12 +697,13 @@ def deriveConstrainedProducer
 
       let mut requiredInstances := #[]
       for ctorName in inductiveVal.ctors do
-        let scheduleOption ← (UnifyM.runInMetaM
+        let resultOption ← (UnifyM.runInMetaM
           (getProducerScheduleForInductiveConstructor inductiveName ctorName outputNamesTypesIndices
             freshenedInputNamesExcludingOutput freshUnknowns deriveSort localCtx freshRecFnName)
             emptyUnifyState)
-        match scheduleOption with
-        | some schedule =>
+        match resultOption with
+        | some result =>
+          let schedule := result.schedule
           -- Obtain a sub-producer for this constructor, along with an array of all typeclass instances that need to be defined beforehand.
           -- (Under the hood, we compile the schedule to an `MExp`, then compile the `MExp` to a Lean term containing the code for the sub-producer.
           -- This is all done in a state monad: when we detect that a new instance is required, we append it to an array of `TSyntax term`s
@@ -759,16 +756,9 @@ def deriveConstrainedProducer
       return (baseProducers, inductiveProducers, freshenedOutputNames, Lean.mkIdent <$> freshUnknowns, localCtx))
 
   -- Create an instance of the appropriate producer typeclass
-  mkConstrainedProducerTypeClassInstance
-    baseProducers
-    inductiveProducers
-    constrainingInductive
-    inductiveLevels
-    freshArgIdents
-    freshenedOutputNames.toList
-    outputTypes.toList
-    producerSort
-    localCtx
+  mkConstrainedProducerTypeClassInstance baseProducers inductiveProducers
+    constrainingInductive inductiveLevels freshArgIdents freshenedOutputNames.toList
+    outputTypes.toList producerSort localCtx
 
 /-- Compiles an InductiveSchedule from the memo into (def, instance) commands.
     Uses the pre-derived schedules directly (no re-derivation).
@@ -779,23 +769,31 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
   let key := indSched.key
   let indInfo ← getConstInfoInduct key.inductiveName
   let indLevels := indInfo.levelParams.map (Level.param ·)
-  let indTypeComponents ← getComponentsOfArrowType indInfo.type
-  let argTypes := indTypeComponents.pop
-  -- Use the SAME freshened names that derivation used (stored in indSched.argNames)
+  -- Get arg types using getCorrectTypes (handles dependent types like Eq's α correctly)
+  let numArgs := (← getComponentsOfArrowType indInfo.type).size - 1
+  let argNames := (List.range numArgs).map (fun i => indSched.argNames.getD i (Name.mkSimple s!"arg_{i}"))
   let argNameTypes : Array (Name × Expr) := Id.run do
     let mut r := #[]
-    for i in [:argTypes.size] do
-      let name := indSched.argNames.getD i (Name.mkSimple s!"arg_{i}")
-      r := r.push (name, argTypes[i]!)
+    for i in [:numArgs] do
+      r := r.push (argNames.getD i `x, mkSort .zero)  -- placeholder types
     r
-  withLocalDeclsDND argNameTypes fun _allFVars => do
+  -- Create fvars with placeholder types, then fix with getCorrectTypes
+  withLocalDeclsDND argNameTypes fun allFVars => do
+  let argTypesLive ← getCorrectTypes allFVars key.inductiveName indLevels
+  do
     -- Filter out Sort-typed positions from outputs (those are type params, handled by instance binders)
     let outputIndicesNonSort := key.outputIndices.filter (fun i =>
-      match argTypes[i]? with | some ty => !ty.isSort | none => true)
-    let outputTypes := outputIndicesNonSort.filterMap (fun i => argTypes[i]?)
+      match argTypesLive[i]? with | some ty => !ty.isSort | none => true)
+    let outputTypes := outputIndicesNonSort.filterMap (fun i => argTypesLive[i]?)
     -- Compile each constructor schedule to a sub-producer term
-    let outputType ← tupleOfListM (throwError "no output types")
-      (fun t rest => mkAppM ``Prod #[t, rest]) outputTypes
+    let outputType ← if key.deriveSort == .Checker then
+        pure (Lean.mkConst ``Bool)
+      else
+        tupleOfListM (throwError "no output types")
+          (fun t rest => do
+            let u ← Meta.mkFreshLevelMVar
+            let v ← Meta.mkFreshLevelMVar
+            pure (Lean.mkApp2 (Lean.mkConst ``Prod [u, v]) t rest)) outputTypes
     let producerSort := convertDeriveSortToProducerSort key.deriveSort
     let freshFuelPrimeName := `fuel'
     let freshSizePrimeName := `size'
@@ -838,11 +836,18 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
       recursiveProducers := recursiveProducers.push term
     let baseProducers ← `([$nonRecursiveProducers,*])
     let inductiveProducers ← `([$nonRecursiveProducers,*, $recursiveProducers,*])
-    let freshArgIdents : TSyntaxArray `term := argNameTypes.map (fun (n, _) => Lean.mkIdent n)
-    let freshenedOutputNames := outputIndicesNonSort.filterMap (fun i => argNameTypes[i]?.map (·.1))
+    let argNames := (List.range allFVars.size).map (fun i => indSched.argNames.getD i (Name.mkSimple s!"arg_{i}"))
+    let freshArgIdents : TSyntaxArray `term := argNames.toArray.map (fun n => Lean.mkIdent n)
+    let freshenedOutputNames := outputIndicesNonSort.filterMap (fun i => argNames[i]?)
+    -- Compute paramInfo using the live fvars (handles dependent types correctly)
+    let liveTypes ← getCorrectTypes allFVars key.inductiveName indLevels
+    let liveTypesSyntax ← liveTypes.mapM (fun ty => PrettyPrinter.delab ty)
+    let mut paramInfo : Array (Name × Expr × TSyntax `term) := #[]
+    for i in [:liveTypes.size] do
+      paramInfo := paramInfo.push (argNames.getD i `x, liveTypes[i]!, liveTypesSyntax[i]!)
     mkConstrainedProducerMutualPieces baseProducers inductiveProducers
       key.inductiveName indLevels freshArgIdents freshenedOutputNames
-      outputTypes producerSort (← getLCtx) globalName key.deriveSort
+      outputTypes producerSort (← getLCtx) globalName key.deriveSort paramInfo
 
 /-- Recursively derives the best schedule for a SpecKey, populating the memo with
     all transitive dependencies. Returns the score for this spec.
@@ -865,8 +870,31 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
   | some (.failed _) => return { unconstrained := 1 }  -- user must provide; assume partial quality
   | none => pure ()
 
-  -- 2. Check if instance already exists — skip derivation if so
-  -- Uses getCorrectTypes pattern: apply inductive to args one at a time for proper dependent types
+  -- 2. Non-inductive heads (e.g. LE.le, Not) — try to find an existing instance
+  unless (← isInductive key.inductiveName) do
+    -- For non-inductives, check if a Decidable instance exists (gives DecOpt via [Decidable P] : DecOpt P)
+    let hasInstance ← try
+      Meta.withNewMCtxDepth do
+        -- Build a proposition with metavar args and check Decidable
+        let info ← getConstInfo key.inductiveName
+        let mut t := .const key.inductiveName (info.levelParams.map fun _ => .zero)
+        let arity := (← getComponentsOfArrowType info.type).size - 1
+        for _ in List.range arity do
+          let argTy := (← inferType t).bindingDomain!
+          let mv ← Meta.mkFreshExprMVar (some argTy)
+          t := .app t mv
+        let result ← Meta.synthInstance? (← mkAppM ``Decidable #[t])
+        pure result.isSome
+    catch _ => pure false
+    if hasInstance then
+      let trivialSched : InductiveSchedule := { key, argNames := [], recFnName := `_, baseSchedules := [], recSchedules := [], score := {}, alreadyExists := true }
+      memo.modify (·.insert key (.done trivialSched))
+      return {}
+    else
+      memo.modify (·.insert key (.failed s!"{key.inductiveName} is not inductive and has no Decidable instance"))
+      return { unconstrained := 1 }
+
+  -- Check if instance already exists — skip derivation if so
   let indInfo ← getConstInfoInduct key.inductiveName
   let indTypeComponents ← getComponentsOfArrowType indInfo.type
   let argTypes := indTypeComponents.pop
@@ -875,6 +903,32 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
   let instanceExists ← Meta.withNewMCtxDepth do
     try
       if nonSortOutputIndices.isEmpty && key.outputIndices.length > 0 then pure true
+      else if key.deriveSort == .Checker then
+        -- For checkers: synthesize DecOpt (@ind args*) with all args as metavars
+        let indLevelsForCheck ← indInfo.levelParams.mapM (fun _ => do
+          let lv ← Meta.mkFreshLevelMVar
+          pure (.succ lv))
+        let numArgs := argTypes.size
+        let rec buildAndCheckChecker (idx : Nat) (t : Expr) (fvars : Array Expr) (instIdx : Nat) : TermElabM Bool :=
+          if idx >= numArgs then do
+            let body := mkAppN (.const key.inductiveName indLevelsForCheck) fvars
+            let ty ← mkAppM ``DecOpt #[body]
+            let result ← Meta.synthInstance? ty
+            pure result.isSome
+          else do
+            let argTy := (← inferType t).bindingDomain!
+            let name := Name.mkSimple s!"arg_{idx}"
+            let bi := if argTy.isSort then BinderInfo.implicit else .default
+            withLocalDecl name bi argTy fun fv => do
+              if argTy.isSort then
+                let enumTy ← mkAppM ``Enum #[fv]
+                let decEqTy ← mkAppM ``DecidableEq #[fv]
+                withLocalDecl (Name.mkSimple s!"inst_enum_{instIdx}") .instImplicit enumTy fun _ =>
+                withLocalDecl (Name.mkSimple s!"inst_deceq_{instIdx}") .instImplicit decEqTy fun _ =>
+                  buildAndCheckChecker (idx + 1) (.app t fv) (fvars.push fv) (instIdx + 1)
+              else
+                buildAndCheckChecker (idx + 1) (.app t fv) (fvars.push fv) instIdx
+        buildAndCheckChecker 0 (.const key.inductiveName indLevelsForCheck) #[] 0
       else if nonSortOutputIndices.isEmpty then pure false
       else
         -- Build properly-typed fvars by applying the inductive one arg at a time
@@ -890,7 +944,10 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
             let outputFVars := nonSortOutputIndices.filterMap (fun i => fvars[i]?)
             let outputTypes ← outputFVars.mapM (fun e => inferType e)
             let outType ← tupleOfListM (throwError "empty")
-              (fun t' rest => mkAppM ``Prod #[t', rest]) outputTypes
+              (fun t' rest => do
+                let u ← Meta.mkFreshLevelMVar
+                let v ← Meta.mkFreshLevelMVar
+                pure (Lean.mkApp2 (Lean.mkConst ``Prod [u, v]) t' rest)) outputTypes
             withLocalDecl `x .default outType fun xFvar => do
               let mut projections : Array Expr := #[]
               let mut currentExpr := xFvar
@@ -910,7 +967,11 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
                   appArgs := appArgs.push fvars[i]!
               let body := mkAppN (.const key.inductiveName indLevelsForCheck) appArgs
               let pred ← mkLambdaFVars #[xFvar] body
-              let ty ← mkAppM ``ArbitrarySizedSuchThat #[outType, pred]
+              let tcName ← match key.deriveSort with
+                | .Generator => pure ``ArbitrarySizedSuchThat
+                | .Enumerator => pure ``EnumSizedSuchThat
+                | .Checker | .Theorem => throwError "synthInstance check: checker case should be handled above"
+              let ty ← mkAppM tcName #[outType, pred]
               let result ← Meta.synthInstance? ty
               pure result.isSome
           else do
@@ -937,12 +998,14 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
 
   -- 3. Insert inProgress placeholder (cycle detection)
   memo.modify (·.insert key .inProgress)
+  let startTime ← IO.monoNanosNow
 
   -- 4. Derive schedules for each constructor
   let indInfo ← getConstInfoInduct key.inductiveName
   let indTypeComponents ← getComponentsOfArrowType indInfo.type
   let argTypes := indTypeComponents.pop
-  let argNames := (List.range argTypes.size).map (fun i => Name.mkSimple s!"arg_{i}")
+  let varPool := #["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"]
+  let argNames := (List.range argTypes.size).map (fun i => Name.mkSimple (varPool.getD i s!"v{i}"))
   let argNamesTypes := argNames.toArray.zip argTypes
 
 
@@ -968,17 +1031,22 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
       let mut base : List (Name × Schedule) := []
       let mut rec_ : List (Name × Schedule) := []
       let mut deps : Array ScheduleDep := #[]
+      let mut ctorStats : List (Name × Nat × Nat × ScheduleScore) := []
 
-      -- Per-constructor: derive schedule, collect deps, classify as base vs recursive
       for ctorName in indInfo.ctors do
         try
-          let scheduleOption ← (UnifyM.runInMetaM
+          let ctorStart ← IO.monoNanosNow
+          let resultOption ← (UnifyM.runInMetaM
             (getProducerScheduleForInductiveConstructor key.inductiveName ctorName
               freshenedOutputNamesTypesIndices freshenedInputNames freshUnknowns
               key.deriveSort localCtx freshRecFnName)
               emptyUnifyState)
-          match scheduleOption with
-          | some (scheduleSteps, scheduleSort) =>
+          let ctorEnd ← IO.monoNanosNow
+          let ctorElapsed := (ctorEnd - ctorStart) / 1000
+          match resultOption with
+          | some result =>
+            let (scheduleSteps, scheduleSort) := result.schedule
+            ctorStats := ctorStats ++ [(ctorName, ctorElapsed, result.schedulesConsidered, result.score)]
             let rewrittenSteps := scheduleRewriter scheduleSteps
             let schedule := (rewrittenSteps, scheduleSort)
             let ctorDeps := collectNonRecDeps rewrittenSteps
@@ -991,20 +1059,21 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
             else
               base := base ++ [(ctorName, schedule)]
           | none => pure ()
-        catch _ => pure ()  -- skip constructors that fail to schedule
-      return (base, rec_, deps, freshUnknowns.toList, freshRecFnName)
+        catch _ => pure ()
+      return (base, rec_, deps, freshUnknowns.toList, freshRecFnName, ctorStats)
 
-    -- Unpack results from the withLocalDeclsDND scope
-    let (base, rec_, deps, fNames, rFnName) := results
+    let (base, rec_, deps, fNames, (rFnName, ctorStats)) := results
     baseSchedules := base
     recSchedules := rec_
     allDeps := deps
     -- 5. Recursively derive deps
     for dep in deps do
-      if dep.kind == .relation then
+      if dep.kind == .relation || dep.kind == .checker then
         let depKey : SpecKey := { inductiveName := dep.inductiveName, outputIndices := dep.outputIndices, deriveSort := dep.deriveSort }
         let _ ← deriveBestInductiveSchedule depKey memo scheduleRewriter
     -- 6. Store result
+    let endTime ← IO.monoNanosNow
+    let elapsed := (endTime - startTime) / 1000
     let score : SpecScore := { checks := 0, unconstrained := 0, backtracking := 0 }
     let indSched : InductiveSchedule := {
       key := key
@@ -1013,11 +1082,14 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
       baseSchedules := base
       recSchedules := rec_
       score := score
+      derivationTimeUs := elapsed
+      ctorStats := ctorStats
     }
     memo.modify (·.insert key (.done indSched))
     return score
-  catch _ =>
-    memo.modify (·.insert key (.failed s!"Failed to derive schedules for {key.inductiveName}"))
+  catch e =>
+    let msg ← e.toMessageData.toString
+    memo.modify (·.insert key (.failed s!"Failed to derive schedules for {key.inductiveName}: {msg}"))
     return { unconstrained := 1 }
 
 /-- Derives schedules for a spec and returns the dependencies (Source.NonRec calls)
@@ -1029,7 +1101,6 @@ def collectSpecDependencies
   (scheduleRewriter : List ScheduleStep → List ScheduleStep := id)
   (recFnNameOverride : Option Name := none) :
   TermElabM (Array ScheduleDep) := do
-
   let inductiveName := constrainingInductive
   let outputFVars := outputVars.map Expr.fvarId!
   let mut outputIdxs : Array Nat := #[]
@@ -1048,7 +1119,6 @@ def collectSpecDependencies
       else if let some outIdx := outputIdxs.findIdx? (· == i) then
         outputVars[outIdx]!.fvarId!.getUserName
       else throwError m!"{ident} is expected to be a variable.")
-    -- Freshen arg names, then derive schedule per constructor to collect deps
   let argNamesTypes := argNames.zip argTypes
   withLocalDeclsDND argNamesTypes (fun _ => do
     let mut localCtx ← getLCtx
@@ -1063,16 +1133,16 @@ def collectSpecDependencies
     let outputNamesTypesIndices : List (Name × Expr × Nat) :=
       (List.range outputIdxs.size).map (fun i =>
         (freshenedOutputNames[i]!, outputTypes[i]!, outputIdxs[i]!))
-    -- Accumulate all unique non-recursive deps across constructors
     let freshRecFnName := recFnNameOverride.getD (localCtx.getUnusedName `aux_arb)
     let mut allDeps : Array ScheduleDep := #[]
     for ctorName in inductiveVal.ctors do
-      let scheduleOption ← (UnifyM.runInMetaM
+      let resultOption ← (UnifyM.runInMetaM
         (getProducerScheduleForInductiveConstructor inductiveName ctorName outputNamesTypesIndices
           freshenedInputNamesExcludingOutput freshUnknowns deriveSort localCtx freshRecFnName)
           emptyUnifyState)
-      match scheduleOption with
-      | some (scheduleSteps, _) =>
+      match resultOption with
+      | some result =>
+        let (scheduleSteps, _) := result.schedule
         let rewrittenSteps := scheduleRewriter scheduleSteps
         let deps := collectNonRecDeps rewrittenSteps
         for dep in deps do
@@ -1092,8 +1162,8 @@ def deriveConstrainedProducerParts
   (recFnNameOverride : Option Name := none) :
   TermElabM (TSyntax `term × TSyntax `term × Array Name × TSyntaxArray `term × Array Expr × LocalContext × Name × List Level × ProducerSort) := do
   let producerSort := convertDeriveSortToProducerSort deriveSort
-  let inductiveName := constrainingInductive
   -- Identify which argument positions are outputs (to be generated)
+  let inductiveName := constrainingInductive
   let outputFVars := outputVars.map Expr.fvarId!
   let mut outputIdxs : Array Nat := #[]
   for i in [:constrArgs.size] do
@@ -1115,9 +1185,12 @@ def deriveConstrainedProducerParts
   let argNamesTypes := argNames.zip argTypes
   -- Build the output product type (e.g., α × β for two outputs)
   let _outputType ← tupleOfListM (throwError "no output types")
-    (fun t rest => mkAppM ``Prod #[t, rest]) outputTypes.toList
-  -- Freshen argument names to avoid capture, then derive schedules per constructor
+    (fun t rest => do
+      let u ← Meta.mkFreshLevelMVar
+      let v ← Meta.mkFreshLevelMVar
+      pure (Lean.mkApp2 (Lean.mkConst ``Prod [u, v]) t rest)) outputTypes.toList
   let (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, localCtx) ←
+  -- Freshen argument names to avoid capture, then derive schedules per constructor
     withLocalDeclsDND argNamesTypes (fun _ => do
       let mut localCtx ← getLCtx
       let mut freshUnknowns := #[]
@@ -1140,12 +1213,13 @@ def deriveConstrainedProducerParts
         | .Generator => `aux_arb | .Enumerator => `aux_enum | _ => `aux_dec))
       -- For each constructor: derive a schedule, compile to syntax
       for ctorName in inductiveVal.ctors do
-        let scheduleOption ← (UnifyM.runInMetaM
+        let resultOption ← (UnifyM.runInMetaM
           (getProducerScheduleForInductiveConstructor inductiveName ctorName outputNamesTypesIndices
             freshenedInputNamesExcludingOutput freshUnknowns deriveSort localCtx freshRecFnName)
             emptyUnifyState)
-        match scheduleOption with
-        | some (scheduleSteps, scheduleSort) =>
+        match resultOption with
+        | some result =>
+          let (scheduleSteps, scheduleSort) := result.schedule
           let rewrittenSteps := scheduleRewriter scheduleSteps
           let schedule := (rewrittenSteps, scheduleSort)
           let (subProducer, requiredInsts) ← StateT.run (s := #[]) (do
@@ -1394,8 +1468,8 @@ def elabDeriveMutual : CommandElab := fun stx => do
             if kw.isOfKind `null && kw.getArgs.isEmpty then
               (.Generator, ⟨tm⟩)
             else
-              let sort := if kw.getArgs.any (fun a => a.isIdent && a.getId == `checker) then .Checker
-                else if kw.getArgs.any (fun a => a.isIdent && a.getId == `enumerator) then .Enumerator
+              let sort := if kw.getArgs.any (fun a => a.getKind == `token.checker) then .Checker
+                else if kw.getArgs.any (fun a => a.getKind == `token.enumerator) then .Enumerator
                 else .Generator
               (sort, ⟨tm⟩)
           else
@@ -1434,8 +1508,8 @@ def elabDeriveMutual : CommandElab := fun stx => do
           usedKeys := collectUsedDeps key finalMemo usedKeys
         -- Add all used deps to specMeta (so they're included in the mutual block)
         for key in usedKeys.toList do
-          let inBlock := specMeta.any fun (sIndName, sOutIdxs, _, _) =>
-            sIndName == key.inductiveName && sOutIdxs == key.outputIndices
+          let inBlock := specMeta.any fun (sIndName, sOutIdxs, _, sDs) =>
+            sIndName == key.inductiveName && sOutIdxs == key.outputIndices && sDs == key.deriveSort
           if !inBlock then
             let uid ← liftTermElabM (Lean.Core.mkFreshUserName `specimen_mutual)
             let globalName := Name.mkSimple s!"{uid}_{key.inductiveName.toString.replace "." "_"}_auto"
@@ -1470,20 +1544,24 @@ def elabDeriveMutual : CommandElab := fun stx => do
               catch e =>
                 logWarning m!"Failed to compile {key.inductiveName}{key.outputIndices}{repr key.deriveSort}: {e.toMessageData}"
             | _ => logWarning m!"No schedule found for {key.inductiveName}{key.outputIndices}"
+          let getNumArgs (k : SpecKey) : CommandElabM Nat := liftTermElabM do
+            try pure ((← getComponentsOfArrowType (← getConstInfoInduct k.inductiveName).type).size - 1)
+            catch _ => pure k.outputIndices.length
           -- Emit: mutual block for multi-element, standalone for singletons
           let specDescs ← compMeta.toList.mapM fun (k, _) => do
-            let numArgs ← liftTermElabM do
-              try
-                let comps ← getComponentsOfArrowType (← getConstInfoInduct k.inductiveName).type
-                pure (comps.size - 1)
-              catch _ => pure k.outputIndices.length
-            pure (k.prettyPrint numArgs)
+            let numArgs ← getNumArgs k
+            let scoreStr := match finalMemo[k]? with
+              | some (.done indSched) =>
+                if indSched.alreadyExists then "(pre-existing)"
+                else s!"({indSched.baseSchedules.length} base, {indSched.recSchedules.length} rec)"
+              | _ => ""
+            pure s!"{k.prettyPrint numArgs} {scoreStr}"
           if defCmds.size > 1 then
-            logInfo m!"  mutual block ({defCmds.size}):\n    {String.intercalate "\n    " specDescs}"
+            logInfo m!"  ◆ mutual ({defCmds.size}):\n    {String.intercalate "\n    " specDescs}"
             let mutualCmd ← `(command| mutual $defCmds* end)
             elabCommand mutualCmd
           else if defCmds.size == 1 then
-            logInfo m!"  singleton: {specDescs.head!}"
+            logInfo m!"  ● {specDescs.head!}"
             elabCommand defCmds[0]!
           for instCmd in instCmds do
             elabCommand instCmd

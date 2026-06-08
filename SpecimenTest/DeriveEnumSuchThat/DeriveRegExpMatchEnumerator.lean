@@ -8,6 +8,13 @@ import SpecimenTest.DeriveArbitrarySuchThat.DeriveRegExpMatchGenerator
 
 set_option guard_msgs.diff true
 
+
+set_option specimen.autoDeriveDeps true
+set_option specimen.multiOutput true
+
+derive_mutual enumerator
+  (fun r0 => ∃ (s : List Nat), ExpMatch s r0)
+
 #guard_msgs(drop info) in
 derive_enumerator (fun r0 => ∃ (s : List Nat), ExpMatch s r0)
 
