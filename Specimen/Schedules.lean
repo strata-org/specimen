@@ -48,7 +48,7 @@ inductive DeriveSort
   | Enumerator
   | Checker
   | Theorem
-  deriving Repr, BEq, Ord
+  deriving Repr, BEq, Ord, Hashable, Inhabited
 
 /-- Determines if a `DeriveSort` corresponds to a producer
     (only generators & enumerators are considered producers) -/
@@ -269,41 +269,219 @@ def addConclusionPatternsAndEqualitiesToSchedule (patterns : List (Unknown × Pa
   let equalityCheckSteps := (fun (u1, u2) => ScheduleStep.Check (Source.NonRec (``Eq, [.Unknown u1, .Unknown u2])) true) <$> equalities.toList
   (matchSteps ++ equalityCheckSteps ++ existingScheduleSteps, scheduleSort)
 
+/-- Extracts all variable names from a ConstructorExpr (looks inside constructors) -/
+partial def varsInConstructorExpr : ConstructorExpr → List Name
+  | .Unknown u => [u]
+  | .Ctor _ args | .FuncApp _ args | .TyCtor _ args => args.flatMap varsInConstructorExpr
+  | .Lit _ | .CSort _ => []
+
+/-- Computes output indices: position i is an output if any output variable appears in it -/
+def computeOutputIndicesForRewrite (hypArgs : List ConstructorExpr) (outputVarNames : List Name) : List Nat :=
+  filterMapWithIndex (fun i arg =>
+    let vars := varsInConstructorExpr arg
+    if vars.any (· ∈ outputVarNames) then some i else none) hypArgs
+
 /-- Rewrites `Source.NonRec` calls in schedule steps to `Source.MutRec` when the hypothesis
-    matches a sibling spec exactly (same inductive name AND same number of output variables).
-    `siblings` is `(inductiveName, outputIndices, auxFnName)`. -/
-def rewriteMutualCalls (steps : List ScheduleStep) (siblings : List (Name × List Nat × Name)) : List ScheduleStep :=
-  let matchesSibling (hyp : HypothesisExpr) (numOutputs : Nat) : Option (Name × List Nat) :=
+    matches a sibling spec exactly (same inductive, same output positions, same derive sort).
+    `siblings` is `(inductiveName, outputIndices, auxFnName, siblingDeriveSort)`. -/
+def rewriteMutualCalls (steps : List ScheduleStep) (siblings : List (Name × List Nat × Name × DeriveSort)) : List ScheduleStep :=
+  let matchesSibling (hyp : HypothesisExpr) (outNames : List Name) (stepDeriveSort : DeriveSort) : Option (Name × List Nat) :=
     let (hypName, hypArgs) := hyp
-    let numInputs := hypArgs.length - numOutputs
-    siblings.findSome? fun (indName, outputIdxs, auxName) =>
-      if hypName == indName && outputIdxs.length == numOutputs && (hypArgs.length - outputIdxs.length) == numInputs then
-        some (auxName, outputIdxs)
+    let stepOutputIdxs := computeOutputIndicesForRewrite hypArgs outNames
+    siblings.findSome? fun (indName, sibOutputIdxs, auxName, sibSort) =>
+      if hypName == indName && stepOutputIdxs == sibOutputIdxs && stepDeriveSort == sibSort then
+        some (auxName, sibOutputIdxs)
       else none
   steps.map fun step =>
     match step with
     | .SuchThat vs (.NonRec hyp) ps =>
-      match matchesSibling hyp vs.length with
+      let ds := match ps with | .Generator => DeriveSort.Generator | .Enumerator => .Enumerator
+      match matchesSibling hyp (vs.map Prod.fst) ds with
       | some (auxName, outputIdxs) =>
         let (_, hypArgs) := hyp
         let inputArgs := filterWithIndex (fun i _ => i ∉ outputIdxs) hypArgs
         .SuchThat vs (.MutRec auxName inputArgs) ps
       | none => step
     | .Unconstrained v (.NonRec hyp) ps =>
-      match matchesSibling hyp 1 with
+      let ds := match ps with | .Generator => DeriveSort.Generator | .Enumerator => .Enumerator
+      match matchesSibling hyp [v] ds with
       | some (auxName, outputIdxs) =>
         let (_, hypArgs) := hyp
         let inputArgs := filterWithIndex (fun i _ => i ∉ outputIdxs) hypArgs
         .Unconstrained v (.MutRec auxName inputArgs) ps
       | none => step
     | .Check (.NonRec hyp) pol =>
-      match matchesSibling hyp 0 with
-      | some (auxName, outputIdxs) =>
+      match matchesSibling hyp [] .Checker with
+      | some (auxName, _) =>
         let (_, hypArgs) := hyp
-        let inputArgs := filterWithIndex (fun i _ => i ∉ outputIdxs) hypArgs
-        .Check (.MutRec auxName inputArgs) pol
+        .Check (.MutRec auxName hypArgs) pol
       | none => step
     | other => other
+
+/-- Identifies a unique derivation spec (inductive + output mode + sort). -/
+structure SpecKey where
+  inductiveName : Name
+  outputIndices : List Nat
+  deriveSort : DeriveSort
+  deriving Repr, BEq, Hashable
+
+/-- Pretty-prints a SpecKey as a spec form like "fun τ => ∃ Γ e, typing Γ e τ".
+    Requires knowing the inductive's arg types (number of args). -/
+def SpecKey.prettyPrint (key : SpecKey) (numArgs : Nat) : String :=
+  let inputVarNames := #["a", "b", "c", "d", "e", "f", "g", "h"]
+  let outputVarNames := #["x", "y", "z", "w", "u", "v", "p", "q"]
+  let (inputs, outputs, appArgs) := Id.run do
+    let mut inputs : List String := []
+    let mut outputs : List String := []
+    let mut appArgs : List String := []
+    let mut inpIdx := 0
+    let mut outIdx := 0
+    for i in List.range numArgs do
+      if i ∈ key.outputIndices then
+        let name := outputVarNames.getD outIdx s!"o{outIdx}"
+        outputs := outputs ++ [name]
+        appArgs := appArgs ++ [name]
+        outIdx := outIdx + 1
+      else
+        let name := inputVarNames.getD inpIdx s!"i{inpIdx}"
+        inputs := inputs ++ [name]
+        appArgs := appArgs ++ [name]
+        inpIdx := inpIdx + 1
+    (inputs, outputs, appArgs)
+  let inputsStr := if inputs.isEmpty then "" else s!"fun {String.intercalate " " inputs} => "
+  let outputsStr := if outputs.isEmpty then "" else s!"∃ {String.intercalate " " outputs}, "
+  s!"{inputsStr}{outputsStr}{key.inductiveName} {String.intercalate " " appArgs}"
+
+/-- Score for a derived schedule (used for selecting best schedule). -/
+structure SpecScore where
+  checks : Nat := 0
+  unconstrained : Nat := 0
+  backtracking : Nat := 0
+  deriving Repr, BEq, Ord
+
+instance : Inhabited SpecScore := ⟨{}⟩
+
+/-- A complete derivation plan for one inductive at one output mode.
+    Analogous to QuickChick's `inductive_schedule`. -/
+structure InductiveSchedule where
+  /-- The spec this schedule is for -/
+  key : SpecKey
+  /-- Freshened argument names (used in the schedule steps) -/
+  argNames : List Name
+  /-- The recursive function name used in Source.Rec calls -/
+  recFnName : Name
+  /-- Per-constructor schedules for non-recursive (base) constructors -/
+  baseSchedules : List (Name × Schedule)
+  /-- Per-constructor schedules for recursive constructors -/
+  recSchedules : List (Name × Schedule)
+  /-- Quality score for this derivation -/
+  score : SpecScore
+  /-- True if this spec already has an instance in the environment (no need to compile) -/
+  alreadyExists : Bool := false
+  deriving Repr
+
+/-- Result of deriving a schedule, stored in the dependency memo. -/
+inductive MemoEntry
+  | inProgress  -- derivation started, cycle detection
+  | done (indSched : InductiveSchedule)
+  | failed (msg : String)
+  deriving Repr
+
+/-- Whether a dependency is for a base type (needs Arbitrary/Enum) or a relation
+    (needs ArbitrarySizedSuchThat/EnumSizedSuchThat/DecOpt). -/
+inductive DepKind
+  /-- Unconstrained generation of a base type (needs `Arbitrary` or `Enum`) -/
+  | baseType
+  /-- Constrained generation from a relation (needs `ArbitrarySizedSuchThat` or `EnumSizedSuchThat`) -/
+  | relation
+  /-- Checking a relation (needs `DecOpt`) -/
+  | checker
+  deriving Repr, BEq
+
+/-- A dependency extracted from a schedule: what instance is needed.
+    - `kind`: whether this is a base type, constrained relation, or checker
+    - `inductiveName`: the type/relation being referenced
+    - `hypothesis`: the full hypothesis expression (indName + args)
+    - `outputVarNames`: the variables being produced (determines output positions)
+    - `outputIndices`: positions in the hypothesis args that are outputs
+    - `deriveSort`: the producer sort context (Generator or Enumerator) -/
+structure ScheduleDep where
+  kind : DepKind
+  inductiveName : Name
+  hypothesis : HypothesisExpr
+  outputVarNames : List Name
+  outputIndices : List Nat
+  deriveSort : DeriveSort
+  deriving Repr, BEq
+
+/-- Computes output indices: which positions in hypArgs are output variables -/
+private def computeOutputIndices (hypArgs : List ConstructorExpr) (outputVarNames : List Name) : List Nat :=
+  filterMapWithIndex (fun i arg =>
+    match arg with
+    | .Unknown name => if name ∈ outputVarNames then some i else none
+    | _ => none) hypArgs
+
+/-- Extracts all `Source.NonRec` dependencies from schedule steps.
+    Each dependency tells us what instance is needed: which inductive,
+    which argument positions are outputs, and what derive sort. -/
+def collectNonRecDeps (steps : List ScheduleStep) : List ScheduleDep :=
+  steps.filterMap fun step =>
+    match step with
+    | .SuchThat vs (.NonRec hyp) ps =>
+      let ds := match ps with | .Generator => DeriveSort.Generator | .Enumerator => .Enumerator
+      let outNames := vs.map Prod.fst
+      some { kind := .relation
+             inductiveName := hyp.fst
+             hypothesis := hyp
+             outputVarNames := outNames
+             outputIndices := computeOutputIndices hyp.snd outNames
+             deriveSort := ds }
+    | .Unconstrained v (.NonRec hyp) ps =>
+      let ds := match ps with | .Generator => DeriveSort.Generator | .Enumerator => .Enumerator
+      some { kind := .baseType
+             inductiveName := hyp.fst
+             hypothesis := hyp
+             outputVarNames := [v]
+             outputIndices := computeOutputIndices hyp.snd [v]
+             deriveSort := ds }
+    | .Check (.NonRec hyp) _ =>
+      some { kind := .checker
+             inductiveName := hyp.fst
+             hypothesis := hyp
+             outputVarNames := []
+             outputIndices := []
+             deriveSort := .Checker }
+    | _ => none
+
+/-- DFS from a root SpecKey through chosen schedules to find all actually-used dependencies. -/
+partial def collectUsedDeps (root : SpecKey) (memo : Std.HashMap SpecKey MemoEntry)
+    (visited : Std.HashSet SpecKey := {}) : Std.HashSet SpecKey :=
+  if visited.contains root then visited
+  else
+    let visited := visited.insert root
+    match memo[root]? with
+    | some (.done indSched) =>
+      let allSchedules := indSched.baseSchedules ++ indSched.recSchedules
+      let deps := allSchedules.flatMap (fun (_, (steps, _)) => collectNonRecDeps steps)
+      let relDeps := deps.filter (·.kind == .relation)
+      relDeps.foldl (fun acc dep =>
+        let depKey : SpecKey := { inductiveName := dep.inductiveName, outputIndices := dep.outputIndices, deriveSort := dep.deriveSort }
+        collectUsedDeps depKey memo acc) visited
+    | _ => visited
+
+/-- Given a set of used SpecKeys and the memo, compute SCCs (mutual groups).
+    Returns components in topological order (dependencies before dependants). -/
+def computeSpecSCC (usedKeys : List SpecKey) (memo : Std.HashMap SpecKey MemoEntry) : List (List SpecKey) :=
+  let successors (key : SpecKey) : List SpecKey :=
+    match memo[key]? with
+    | some (.done indSched) =>
+      let allScheds := indSched.baseSchedules ++ indSched.recSchedules
+      let deps := allScheds.flatMap (fun (_, (steps, _)) => collectNonRecDeps steps)
+      let relDeps := deps.filter (·.kind == .relation)
+      let depKeys := relDeps.map (fun d => SpecKey.mk d.inductiveName d.outputIndices d.deriveSort)
+      depKeys.filter (usedKeys.contains ·)
+    | _ => []
+  Lean.SCC.scc usedKeys successors
 
 /-- Checks if any step in a schedule uses `Source.MutRec`. -/
 def scheduleUsesMutualCall (steps : List ScheduleStep) : Bool :=

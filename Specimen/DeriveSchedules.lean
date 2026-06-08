@@ -123,6 +123,11 @@ structure ScheduleEnv where
       Currently only same-sort mutual calls are supported (gen↔gen, checker↔enum). -/
   mutualSiblings : List (Name × List Nat × Name × DeriveSort) := []
 
+  /-- Memoization for recursive dependency derivation.
+      When set, the step scorer uses this to recursively derive deps and cache results.
+      Keys that map to `inProgress` indicate a cycle (mutual recursion). -/
+  depMemo : Option (IO.Ref (Std.HashMap SpecKey MemoEntry)) := none
+
 /-- A monad for deriving generator schedules. Under the hood,
     `ScheduleM` is just a reader monad stacked on top of `MetaM`,
     with `ScheduleEnv` serving as the environment for the reader monad. -/
@@ -1287,7 +1292,7 @@ private def possiblePreSchedules (vars : List TypedVar) (hypotheses : List Hypot
   let sortedHypotheses := mkSortedHypothesesVariablesMap hypotheses
   let varNames := vars.map (fun x => x.var)
   let prodSort := convertDeriveSortToProducerSort deriveSort
-  let scheduleEnv := ⟨ vars, sortedHypotheses, deriveSort, prodSort, recCall, fixedVars, recFnName, false, [] ⟩
+  let scheduleEnv := ⟨ vars, sortedHypotheses, deriveSort, prodSort, recCall, fixedVars, recFnName, false, [], none ⟩
   let remainingVars := List.filter (fun v => not <| fixedVars.contains v) varNames
   let (newCheckedIdxs, newCheckedHyps) := List.unzip <| (collectCheckedHypotheses scheduleEnv fixedVars [])
   let remainingSortedHypotheses := filterWithIndex (fun i _ => i ∉ newCheckedIdxs) sortedHypotheses
@@ -1322,7 +1327,7 @@ private def possiblePreSchedulesWithAdvancedPruning (vars : List TypedVar) (hypo
   let sortedHypotheses := mkSortedHypothesesVariablesMap hypotheses
   let varNames := vars.map (fun x => x.var)
   let prodSort := convertDeriveSortToProducerSort deriveSort
-  let scheduleEnv := ⟨ vars, sortedHypotheses, deriveSort, prodSort, recCall, fixedVars, recFnName, multiOutput, [] ⟩
+  let scheduleEnv := ⟨ vars, sortedHypotheses, deriveSort, prodSort, recCall, fixedVars, recFnName, multiOutput, [], none ⟩
   let remainingVars := List.filter (fun v => not <| fixedVars.contains v) varNames
   let (newCheckedIdxs, newCheckedHyps) := List.unzip <| (collectCheckedHypotheses scheduleEnv fixedVars [])
   let remainingSortedHypotheses := filterWithIndex (fun i _ => i ∉ newCheckedIdxs) sortedHypotheses
@@ -1364,7 +1369,7 @@ private def possibleSchedules' (ctorName : Name) (vars : List TypedVar) (hypothe
   let sortedHypotheses := mkSortedHypothesesVariablesMap hypotheses
   let varNames := vars.map (fun x => x.var)
   let prodSort := convertDeriveSortToProducerSort deriveSort
-  let scheduleEnv := ⟨ vars, sortedHypotheses, deriveSort, prodSort, recCall, fixedVars, recFnName, false, [] ⟩
+  let scheduleEnv := ⟨ vars, sortedHypotheses, deriveSort, prodSort, recCall, fixedVars, recFnName, false, [], none ⟩
   let remainingVars := List.filter (fun v => not <| fixedVars.contains v) varNames
   let (newCheckedIdxs, newCheckedHyps) := List.unzip <| (collectCheckSteps scheduleEnv fixedVars [])
   let remainingSortedHypotheses := filterWithIndex (fun i _ => i ∉ newCheckedIdxs) sortedHypotheses
