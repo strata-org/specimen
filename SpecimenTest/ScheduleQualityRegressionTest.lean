@@ -86,10 +86,10 @@ inductive MemNat : List Nat → Nat → Prop where
 | here  : ∀ n xs, MemNat (n :: xs) n
 | there : ∀ n m xs, n ≠ m → MemNat xs n → MemNat (m :: xs) n
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_checker (fun xs n => MemNat xs n)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_generator (fun n => ∃ xs, MemNat xs n)
 
 /--

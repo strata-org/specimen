@@ -22,10 +22,10 @@ instance [Repr T.Meta] [Repr T.IDMeta] : Repr (Bar T) where
 
 deriving instance Arbitrary for Bar
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 #synth Arbitrary (Bar ⟨Bool, Nat⟩)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 #eval Arbitrary.runArbitrary (α := Bar ⟨Bool, Nat⟩) 5
 
 /-! ## Mixed: normal type parameter + structure parameter -/
@@ -44,10 +44,10 @@ instance [Repr α] [Repr C.Tag] : Repr (Mixed α C) where
 
 deriving instance Arbitrary for Mixed
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 #synth Arbitrary (Mixed Nat ⟨Bool⟩)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 #eval Arbitrary.runArbitrary (α := Mixed Nat ⟨Bool⟩) 5
 
 /-! ## Rejection of structures with non-Type fields -/
@@ -71,10 +71,10 @@ instance [Repr T.base.Meta] [Repr T.base.IDMeta] [Repr T.Extra] : Repr (Nested T
 
 deriving instance Arbitrary for Nested
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 #synth Arbitrary (Nested ⟨⟨Bool, Nat⟩, String⟩)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 #eval Arbitrary.runArbitrary (α := Nested ⟨⟨Bool, Nat⟩, String⟩) 5
 
 /-! ## Rejection of structures with non-Type fields -/

@@ -6,7 +6,7 @@ import SpecimenTest.DeriveEnumSuchThat.DerivePermutationEnumerator
 /-! Snapshot test: derived `DecOpt` checker for the `Permutation` relation. -/
 
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_checker (fun l l' => Permutation l l')
 
 

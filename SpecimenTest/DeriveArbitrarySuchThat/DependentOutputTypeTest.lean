@@ -25,9 +25,9 @@ inductive Wraps (α : Type) : α → Box α → Prop where
 
 set_option maxHeartbeats 400000
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_generator (fun (α : Type) (_inst : DecidableEq α) (x : α) =>
   ∃ (b : Box α), @Wraps α x b)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 #synth ArbitrarySizedSuchThat (Box Nat) (fun b => Wraps Nat 42 b)

@@ -30,16 +30,16 @@ inductive NatChain (a b : Nat) : Prop where
     (LessThanEq y b) →
     NatChain a b
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_enumerator (fun x => ∃ (a : Nat), LessThanEq a x)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_enumerator (fun x => ∃ (y : Nat), LessThanEq x y)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_checker (fun n m => LessThanEq n m)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_checker (fun a b => NatChain a b)
 
 -- Regression test: argument names that collide with internal reserved names
@@ -52,7 +52,7 @@ inductive SizedLe : Nat → Nat → Prop where
   | Refl : ∀ n, SizedLe n n
   | Succ : ∀ size' n, SizedLe size' n → SizedLe size' (Nat.succ n)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_checker (fun size' n => SizedLe size' n)
 
 /-- Like `LessThanEq` but with an argument deliberately named `aux_dec`
@@ -61,8 +61,8 @@ inductive AuxDecLe : Nat → Nat → Prop where
   | Refl : ∀ n, AuxDecLe n n
   | Succ : ∀ aux_dec n, AuxDecLe aux_dec n → AuxDecLe aux_dec (Nat.succ n)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_checker (fun aux_dec n => AuxDecLe aux_dec n)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_generator (fun size' => ∃ n, SizedLe size' n)

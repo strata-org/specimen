@@ -29,52 +29,52 @@ instance instKeyValueStoreArbitraryString : Arbitrary String where
 ---------------------------------------------------------------------------------------------------------------------------------------
 
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_generator (fun k s2 => ∃ (s1 : List (String × String)), KeyValueStore.RemoveKV k s1 s2)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_generator (fun ka s1a => ∃ (s2a : List (String × String)), KeyValueStore.RemoveKV ka s1a s2a)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_generator (fun k v s2 => ∃ (s1 : List (String × String)), KeyValueStore.AddKV k v s1 s2)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_generator (fun k v s1 => ∃ (s2 : List (String × String)), KeyValueStore.AddKV k v s1 s2)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_generator (fun k x_1 s2 => ∃ (v : String), KeyValueStore.AddKV k v x_1 s2)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_checker (fun s kv => KeyValueStore.LookupKV s kv)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_generator (fun kv => ∃ (s1 : List (String × String)), KeyValueStore.LookupKV s1 kv)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_checker (fun k2 v s_1 s2 => KeyValueStore.AddKV k2 v s_1 s2)
 
 #guard_msgs(drop info) in
 derive_checker (fun k s s2 => RemoveKV k s s2)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_generator (fun x => ∃ (s : List (String × String)), KeyValueStore.EvalStateApiCall s x)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_generator (fun s => ∃ (kv : StateResult × String × Nat × String), KeyValueStore.LookupKV s kv)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_generator (fun s => ∃ (nb : Nat × List (String × String)), KeyValueStore.GetBucket s nb)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_generator (fun v x_1 s2 => ∃ (k : _), KeyValueStore.AddKV k v x_1 s2)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_generator (fun x => ∃ (foo : StateAPICall × StateResult × List (String × String)), KeyValueStore.EvalStateApiCall x foo)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_generator (fun s => ∃ (crns : APICall × Result × (Nat × List (Nat × List (String × String)))), KeyValueStore.EvalApiCall s crns)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_generator (fun s => ∃ (o : List (APICall × Result) × (Nat × List (Nat × List (String × String)))), KeyValueStore.EvalApiCalls s o)
 
 

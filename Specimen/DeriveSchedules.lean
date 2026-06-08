@@ -5,6 +5,7 @@ import Specimen.UnificationMonad
 import Specimen.MakeConstrainedProducerInstance
 import Specimen.LazyList
 import Specimen.SearchTree
+import Specimen.Debug
 import Lean.Util.SCC
 
 namespace Schedules
@@ -971,6 +972,11 @@ def List.permutations {α : Type u} : List α → List (List α)
   | x :: xs => ((List.permutations xs).flatMap fun perm =>
     (List.range (perm.length + 1)).map fun i => perm.take i ++ [x] ++ perm.drop i)
 
+/-- Evaluates one scheduling choice for a hypothesis: `out` are the output variable groups
+    produced by satisfying the hypothesis, `bound` are variables bound arbitrarily beforehand.
+    Extends the environment with bound vars, partitions remaining hypotheses into pre/post-checks
+    around the produce step. Returns `none` if invalid (multiple outputs in single-output mode,
+    or no outputs with non-empty bound). -/
 private def processChoice {α v} [BEq v] [Hashable v] (multiOutput : Bool) (hyp : α)
         (out bound : List (List v)) (some_bound_output_indices : List (List v))
         (always_bound_variables : List v) (rest : List (α × List (List v) × List v))
@@ -1005,6 +1011,10 @@ private def findMins [Ord β] (l : List α) (score : α → β) : List α :=
   | [] => []
   | a :: as => aux as [a] (score a)
 
+/-- Lazily enumerates generator schedules using branch-and-bound pruning.
+    Explores permutations of hypothesis orderings chunked by connected components,
+    pruning branches whose lower-bound score exceeds the best found so far.
+    Returns a lazy list of valid schedules sorted by quality (best first). -/
 private partial def enumSchedulesChunkedWithPruning {α v} [Ord v] [BEq v] [Repr α] [Repr v] [Hashable v] (vars : List v) (matchableVars : List v) (hypComps : List (LazyList (List (α × List (List v) × List v)))) (env : List v) (numHyps : Nat) (multiOutput : Bool := false)
   : LazyList (List (PreScheduleStep α v)) :=
   let matchableSet := Std.HashSet.ofList matchableVars
@@ -1042,20 +1052,20 @@ private partial def enumSchedulesChunkedWithPruning {α v} [Ord v] [BEq v] [Repr
         let lowerBound := estimateLowerBound currentScore remainingHyps
         let envKey := ((List.eraseDups currentEnv) |>.mergeSort (fun a b => compare a b |>.isLE))
         let dominatingScore := envMemo[envKey]?.getD componentBest
-        -- dbg_trace "processPerm: remainingHyps={remainingHyps}, currentScore={repr currentScore}, lowerBound={repr lowerBound}, runningBest={repr runningComponentBest}, dominatingScore={repr dominatingScore}"
+        let _ := schedTrace "processPerm: remainingHyps={remainingHyps}, currentScore={repr currentScore}, lowerBound={repr lowerBound}, runningBest={repr runningComponentBest}, dominatingScore={repr dominatingScore}"
         if lowerBound > runningComponentBest then
-          -- dbg_trace "PRUNED: lowerBound > runningComponentBest ({repr lowerBound} >= {repr runningComponentBest}) \n"
+          let _ := schedTrace "PRUNED: lowerBound > runningComponentBest ({repr lowerBound} >= {repr runningComponentBest})"
           .lnil
         else if dominatingScore < currentScore then
-          -- dbg_trace "PRUNED: dominatingScore < currentScore ({repr dominatingScore} < {repr currentScore}) \n"
+          let _ := schedTrace "PRUNED: dominatingScore < currentScore ({repr dominatingScore} < {repr currentScore})"
           .lnil
         else
         match currentPerm with
         | [] =>
-          -- dbg_trace "BASE CASE: returning final schedule with score {repr currentScore}"
+          let _ := schedTrace "BASE CASE: returning final schedule with score {repr currentScore}"
           pure ((sched ++ currentSched, currentEnv), (currentScore, envMemo))
         | (hyp, potential_output_indices, always_bound_variables) :: rest =>
-          -- dbg_trace "PROCESSING hyp: {repr hyp}, potential_outputs: {repr potential_output_indices.length}, always_bound: {repr always_bound_variables.length}"
+          let _ := schedTrace "PROCESSING hyp: {repr hyp}, potential_outputs: {repr potential_output_indices.length}, always_bound: {repr always_bound_variables.length}"
           let envMemo := if currentScore < dominatingScore then envMemo.insert envKey currentScore else envMemo
           let (some_bound_output_indices, all_unbound_output_indices) := potential_output_indices.partition
             (fun l =>
@@ -1066,7 +1076,7 @@ private partial def enumSchedulesChunkedWithPruning {α v} [Ord v] [BEq v] [Repr
             else
               ([],all_unbound_output_indices) :: (select all_unbound_output_indices |>.toList.map (fun (a,b) => ([a],b)))
           let validChoices := choices.filterMap (fun (out,bound) => processChoice multiOutput hyp out bound some_bound_output_indices always_bound_variables rest currentEnv currentEnvSet)
-          -- dbg_trace "CHOICES: total={choices.length}, valid={validChoices.length}"
+          let _ := schedTrace "CHOICES: total={choices.length}, valid={validChoices.length}"
           let sortedChoices := validChoices.mergeSort (fun (a,_,_,_) (b,_,_,_) => preScheduleStepsScore a ≤ preScheduleStepsScore b)
 
           sequentialFlatMap (LazyList.fromList sortedChoices) (runningComponentBest,envMemo) fun (newSteps, to_be_satisfied', finalEnv, finalEnvSet) (runningComponentBest, envMemo) =>

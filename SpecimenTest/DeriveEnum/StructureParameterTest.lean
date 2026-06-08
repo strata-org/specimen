@@ -20,7 +20,7 @@ instance [Repr T.Meta] [Repr T.IDMeta] : Repr (Bar T) where
 
 deriving instance Enum for Bar
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 #synth EnumSized (Bar ⟨Bool, Nat⟩)
 
 /-- info: [Bar.mk true 0, Bar.mk false 0] -/
@@ -43,10 +43,10 @@ instance [Repr α] [Repr C.Tag] : Repr (Mixed α C) where
 
 deriving instance Enum for Mixed
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 #synth Enum (Mixed Bool ⟨Nat⟩)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 #eval (runEnum (α := Mixed Bool ⟨Nat⟩) 0)
 
 /-! ## Nested structure parameter -/
@@ -68,10 +68,10 @@ instance [Repr T.base.Meta] [Repr T.base.IDMeta] [Repr T.Extra] : Repr (Nested T
 
 deriving instance Enum for Nested
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 #synth Enum (Nested ⟨⟨Bool, Nat⟩, String⟩)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 #eval (runEnum (α := Nested ⟨⟨Bool, Nat⟩, String⟩) 0)
 
 /-! ## Rejection of structures with non-Type fields -/

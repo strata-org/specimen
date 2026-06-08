@@ -141,6 +141,7 @@ def tupleOfList [Inhabited α] (pair : α → α → α) (l : List α) (default 
   | [x] => x
   | x :: xs => pair x (tupleOfList pair xs default)
 
+
 /-- Converts a list of `Pattern`s to a one single `Pattern` expressed
     as a tuple -/
 def patternTupleOfList (xs : List Pattern) : Pattern :=

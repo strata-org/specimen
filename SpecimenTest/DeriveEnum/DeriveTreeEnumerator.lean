@@ -12,17 +12,17 @@ deriving instance Enum for BinaryTree
 
 -- Test that we can successfully synthesize instances of `Arbitrary` & `ArbitrarySized`
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 #synth EnumSized BinaryTree
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 #synth Enum BinaryTree
 
 -- We test the command elaborator frontend in a separate namespace to
 -- avoid overlapping typeclass instances for the same type
 namespace CommandElaboratorTest
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_enum BinaryTree
 
 end CommandElaboratorTest

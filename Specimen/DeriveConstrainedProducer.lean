@@ -650,11 +650,8 @@ def deriveConstrainedProducer
   let argNamesTypes := argNames.zip argTypes
 
   -- The output type for code generation — for multiple outputs, use a right-nested product type
-  let rec mkProdType : List Expr → TermElabM Expr
-    | [] => throwError "no output types"
-    | [t] => pure t
-    | t :: ts => do let rest ← mkProdType ts; mkAppM ``Prod #[t, rest]
-  let outputType ← mkProdType outputTypes.toList
+  let outputType ← tupleOfListM (throwError "no output types")
+    (fun t rest => mkAppM ``Prod #[t, rest]) outputTypes.toList
 
   -- Add the name & type of each argument of the inductive relation to the `LocalContext`
   -- Then, derive `baseProducers` & `inductiveProducers` (the code for the sub-producers
@@ -767,8 +764,8 @@ def deriveConstrainedProducer
     constrainingInductive
     inductiveLevels
     freshArgIdents
-    freshenedOutputNames
-    outputTypes
+    freshenedOutputNames.toList
+    outputTypes.toList
     producerSort
     localCtx
 

@@ -182,7 +182,7 @@ def deriveScheduledChecker' (_args : Array Expr)
 
       if (not requiredInstances.isEmpty) then
         let deduplicatedInstances := List.eraseDups requiredInstances.toList
-        logWarning m!"Required typeclass instances (please derive these first if they aren't already defined):\n{deduplicatedInstances}"
+        trace[plausible.deriving.arbitrary] m!"Required typeclass instances (please derive these first if they aren't already defined):\n{deduplicatedInstances}"
 
       -- Collect all the base / inductive checkers into two Lean list terms
       -- Base checkers are invoked when `size = 0`, inductive checkers are invoked when `size > 0`

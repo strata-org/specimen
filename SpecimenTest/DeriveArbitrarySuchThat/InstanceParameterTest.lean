@@ -17,11 +17,11 @@ inductive MyRel {α : Type} [DecidableEq α] : α → Nat → Prop where
 
 set_option maxHeartbeats 400000
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_generator (fun (α : Type) (inst : DecidableEq α) (x : α) =>
   ∃ n, @MyRel α inst x n)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 #synth ArbitrarySizedSuchThat Nat (fun n => @MyRel Nat instDecidableEqNat 42 n)
 
 /-! ## Eta-expanded instance lambdas in constructor arguments
@@ -36,9 +36,9 @@ a typeclass instance and skip it. -/
 inductive PairRel {α : Type} [DecidableEq α] : α → (α × α) → Prop where
   | mk : PairRel x (x, x)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_generator (fun (α : Type) (inst : DecidableEq α) (x : α) =>
   ∃ (p : α × α), @PairRel α inst x p)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 #synth @ArbitrarySizedSuchThat (Nat × Nat) (fun p => @PairRel Nat instDecidableEqNat 42 p)

@@ -10,13 +10,13 @@ import SpecimenTest.DeriveEnum.DeriveSTLCTermTypeEnumerators
 
 set_option guard_msgs.diff true
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_enumerator (fun Γ τ => ∃ (x : Nat), lookup Γ x τ)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_checker (fun Γ x τ => lookup Γ x τ)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_enumerator (fun Γ x => ∃ (τ : type), lookup Γ x τ)
 
 
@@ -130,11 +130,11 @@ end
 instance : DecOpt (typing Γ_1 e_1 τ_1) where
   decOpt := checkTyping Γ_1 e_1 τ_1
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_enumerator (fun Γ x => ∃ (τ : type), lookup Γ x τ)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_enumerator (fun Γ e => ∃ (τ : type), typing Γ e τ)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_enumerator (fun Γ τ => ∃ (e : term), typing Γ e τ)

@@ -45,14 +45,14 @@ Hint: Type class instance resolution failures can be inspected with the `set_opt
 #check ArbitrarySizedSuchThat.arbitrarySizedST (fun (x : Nat) => Eq (OfNat.ofNat 0) x)
 
 -- These succeed: NatFoo.ty unfolds to Nat via whnf
-#guard_msgs(error, drop info, drop warning) in
+#guard_msgs(error, drop info) in
 derive_generator ∃ (n : Nat), TypeBoxPred n
 
-#guard_msgs(error, drop info, drop warning) in
+#guard_msgs(error, drop info) in
 derive_generator ∃ (n : _), TypeBoxPredS n
 
 -- This fails at elaboration: SomeFoo is opaque so SomeFoo.ty cannot be resolved,
 -- and DecOpt (x = x) has no instance for opaque types. Errors are dropped since
 -- they are not user-friendly (see open-issues.md).
-#guard_msgs(drop error, drop info, drop warning) in
+#guard_msgs(drop error, drop info) in
 derive_generator ∃ (n : Nat), TypeBoxPredOpaque n

@@ -15,7 +15,7 @@ set_option guard_msgs.diff true
 inductive GoodTree : Nat → Nat → BinaryTree → Prop where
   | GoodLeaf : ∀ n, GoodTree n n .Leaf
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_generator (fun in1 in2 => ∃ (t : BinaryTree), GoodTree in1 in2 t)
 
 
@@ -25,5 +25,5 @@ derive_generator (fun in1 in2 => ∃ (t : BinaryTree), GoodTree in1 in2 t)
 inductive SameHead : List Nat → List Nat → Prop where
 | HeadMatch : ∀ x xs ys, SameHead (x::xs) (x::ys)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_generator (fun ys => ∃ (xs : List Nat), SameHead xs ys)

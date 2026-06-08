@@ -8,8 +8,8 @@ import SpecimenTest.DeriveArbitrarySuchThat.DeriveBSTGenerator
 
 set_option guard_msgs.diff true
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_enumerator (fun lo hi => ∃ (x : Nat), Between lo x hi)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_enumerator (fun lo hi => ∃ (t : BinaryTree), BST lo hi t)

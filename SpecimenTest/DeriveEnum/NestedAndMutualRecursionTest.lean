@@ -15,10 +15,10 @@ inductive NestedTree where
 
 deriving instance Enum for NestedTree
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 #synth EnumSized NestedTree
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 #synth Enum NestedTree
 
 /-- info: [NestedTree.node 0 [], NestedTree.leaf] -/
@@ -40,16 +40,16 @@ end
 
 deriving instance Enum for MutEven, MutOdd
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 #synth EnumSized MutEven
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 #synth EnumSized MutOdd
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 #synth Enum MutEven
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 #synth Enum MutOdd
 
 -- Verify the enumerators produce non-empty output.
@@ -57,8 +57,8 @@ deriving instance Enum for MutEven, MutOdd
 -- DeriveArbitrary) does not decrement fuel for cross-type calls, so the
 -- enumerator exhaustively produces all reachable chains. We drop the output
 -- and just check that evaluation succeeds.
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 #eval (runEnum (α := MutEven) 0)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 #eval (runEnum (α := MutOdd) 0)

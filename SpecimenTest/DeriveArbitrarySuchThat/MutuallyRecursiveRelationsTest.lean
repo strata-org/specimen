@@ -28,8 +28,8 @@ end
 instance : ArbitrarySizedSuchThat Nat (fun n => Odd n) where
   arbitrarySizedST (_ : Nat) := return 1
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_generator ∃ (n : Nat), Even n
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_generator ∃ (n : Nat), Odd n

@@ -45,7 +45,7 @@ def compiler_correct (stmt : Stmt) : Bool :=
 
 -- This is the big-step semantics from the inductive relation, derived to
 -- be an enumerator: It will "run" Eval on m and s and produce m2.
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_enumerator (fun m s => ∃ m2, Eval m s m2)
 
 -- This is our correctness statement from above, but using the enumerator

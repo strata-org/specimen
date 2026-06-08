@@ -3,6 +3,13 @@ import Lean
 
 open Lean Meta LocalContext Std
 
+/-- Folds a non-empty list into a right-nested pair using a monadic pairing function.
+    Produces `pair a (pair b c)` for `[a, b, c]`. -/
+def tupleOfListM [Monad m] (onEmpty : m α) (pair : α → α → m α) : List α → m α
+  | [] => onEmpty
+  | [x] => pure x
+  | x :: xs => do let rest ← tupleOfListM onEmpty pair xs; pair x rest
+
 /-- A variable along with its fully elaborated type.
 Will likely be replaced by variables directly living in `Expr` at some point. -/
 structure TypedVar where

@@ -8,7 +8,7 @@ import SpecimenTest.DeriveArbitrarySuchThat.DeriveRegExpMatchGenerator
 
 set_option guard_msgs.diff true
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_enumerator (fun r0 => ∃ (s : List Nat), ExpMatch s r0)
 
 -- To sample from this enumerator, we can run the following:

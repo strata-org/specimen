@@ -81,8 +81,8 @@ def mkConstrainedProducerTypeClassInstance
   (inductiveGenerators : TSyntax `term)
   (inductiveName : Name)
   (inductiveLevels : List Level)
-  (args : TSyntaxArray `term) (targetVars : Array Name)
-  (targetTypes : Array Expr)
+  (args : TSyntaxArray `term) (targetVars : List Name)
+  (targetTypes : List Expr)
   (producerSort : ProducerSort)
   (topLevelLocalCtx : LocalContext) : TermElabM (TSyntax `command) := do
     -- Produce a fresh name for the `size` argument for the lambda
@@ -115,7 +115,7 @@ def mkConstrainedProducerTypeClassInstance
     -- (except the target variables, which we'll filter out later)
     let paramInfo ← analyzeInductiveArgs inductiveName inductiveLevels args
 
-    let targetVarsList := targetVars.toList
+    let targetVarsList := targetVars
 
     -- Inner params are for the inner `aux_arb` / `aux_enum` function
     let mut innerParams := #[]
@@ -150,12 +150,9 @@ def mkConstrainedProducerTypeClassInstance
     let targetTypeSyntax ← do
       let syns ← if outputTypeSyntaxes.isEmpty then
         targetTypes.mapM (fun ty => PrettyPrinter.delab ty)
-      else pure outputTypeSyntaxes
-      let rec mkProdType : List (TSyntax `term) → TermElabM (TSyntax `term)
-        | [] => throwError "no output types found"
-        | [t] => pure t
-        | t :: ts => do let rest ← mkProdType ts; `($t × $rest)
-      mkProdType syns.toList
+      else pure outputTypeSyntaxes.toList
+      tupleOfListM (throwError "no output types found")
+        (fun t rest => `($t × $rest)) syns
 
     -- Build the lambda pattern for the typeclass predicate
     -- For a single output: `fun x => @P args*`
@@ -165,7 +162,7 @@ def mkConstrainedProducerTypeClassInstance
         | [] => throwError "no output variables"
         | [v] => `($(Lean.mkIdent v))
         | v :: vs => do let rest ← mkProdPat vs; `(($(Lean.mkIdent v), $rest))
-      mkProdPat targetVars.toList
+      mkProdPat targetVars
 
     -- Figure out which typeclass should be derived
     -- (`ArbitrarySizedSuchThat` for generators, `EnumSizedSuchThat` for enumerators)

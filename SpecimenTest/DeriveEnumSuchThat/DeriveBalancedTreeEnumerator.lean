@@ -8,5 +8,5 @@ import SpecimenTest.DeriveArbitrarySuchThat.DeriveBalancedTreeGenerator
 
 set_option guard_msgs.diff true
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(drop info) in
 derive_enumerator (fun n => ∃ (t : BinaryTree), balancedTree n t)
