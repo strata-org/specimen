@@ -47,13 +47,15 @@ def pureFn : Ident := mkIdent $ Name.mkStr1 "pure"
 def trueIdent : Ident := mkIdent ``true
 def falseIdent : Ident := mkIdent ``false
 
--- Idents for size arguments to generators
+-- Idents for fuel and size arguments to generators
+def fuelIdent : Ident := mkIdent $ Name.mkStr1 "fuel"
 def initSizeIdent : Ident := mkIdent $ Name.mkStr1 "initSize"
 def sizeIdent : Ident := mkIdent $ Name.mkStr1 "size"
 
 /-- `Ident` representing `MonadExcept.throw`-/
 def failFn : Ident := mkIdent ``MonadExcept.throw
 def genericFailure : Ident := mkIdent ``Plausible.Gen.genericFailure
+def outOfFuelError : Ident := mkIdent `Gen.outOfFuelError
 
 -- Idents for typeclasses
 def arbitrarySizedSuchThatTypeclass : Ident := mkIdent $ Name.mkStr1 "ArbitrarySizedSuchThat"

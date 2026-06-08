@@ -28,6 +28,8 @@ local instance [Ord α][Ord β]: Ord (α × β) := lexOrd
 inductive Source
   | NonRec : HypothesisExpr → Source
   | Rec : Name → List ConstructorExpr → Source
+  /-- A call to a sibling spec in a mutual block (distinct global def name). -/
+  | MutRec : Name → List ConstructorExpr → Source
   deriving Repr, BEq
 
 /-- Producers are either enumerators or generators -/
@@ -92,6 +94,7 @@ inductive ScheduleStep
 /-- Stringifier for `Source` -/
 def sourceToString source := match source with
   | Source.Rec name ctrArgs => s!"{ToExpr.toExpr (name,ctrArgs)}"
+  | Source.MutRec name ctrArgs => s!"mut:{ToExpr.toExpr (name,ctrArgs)}"
   | Source.NonRec hyp => s!"{ToExpr.toExpr hyp}"
 
 def patternToString pat := s!"{ToExpr.toExpr $ constructorExprOfPattern pat}"
@@ -225,6 +228,9 @@ def updateSource (k : UnknownMap) (src : Source) : UnifyM Source := do
   | .Rec r tys => do
     let updatedTys ← List.mapM (UnifyM.updateConstructorArg k) tys
     return .Rec r updatedTys
+  | .MutRec r tys => do
+    let updatedTys ← List.mapM (UnifyM.updateConstructorArg k) tys
+    return .MutRec r updatedTys
 
 /-- Updates a list of `ScheduleSteps` with the result of unification -/
 def updateScheduleSteps (scheduleSteps : List ScheduleStep) : UnifyM (List ScheduleStep) := do
@@ -262,5 +268,50 @@ def addConclusionPatternsAndEqualitiesToSchedule (patterns : List (Unknown × Pa
   -- We should never have an equality here. Assertion after unification should handle that though.
   let equalityCheckSteps := (fun (u1, u2) => ScheduleStep.Check (Source.NonRec (``Eq, [.Unknown u1, .Unknown u2])) true) <$> equalities.toList
   (matchSteps ++ equalityCheckSteps ++ existingScheduleSteps, scheduleSort)
+
+/-- Rewrites `Source.NonRec` calls in schedule steps to `Source.MutRec` when the hypothesis
+    matches a sibling spec exactly (same inductive name AND same number of output variables).
+    `siblings` is `(inductiveName, outputIndices, auxFnName)`. -/
+def rewriteMutualCalls (steps : List ScheduleStep) (siblings : List (Name × List Nat × Name)) : List ScheduleStep :=
+  let matchesSibling (hyp : HypothesisExpr) (numOutputs : Nat) : Option (Name × List Nat) :=
+    let (hypName, hypArgs) := hyp
+    let numInputs := hypArgs.length - numOutputs
+    siblings.findSome? fun (indName, outputIdxs, auxName) =>
+      if hypName == indName && outputIdxs.length == numOutputs && (hypArgs.length - outputIdxs.length) == numInputs then
+        some (auxName, outputIdxs)
+      else none
+  steps.map fun step =>
+    match step with
+    | .SuchThat vs (.NonRec hyp) ps =>
+      match matchesSibling hyp vs.length with
+      | some (auxName, outputIdxs) =>
+        let (_, hypArgs) := hyp
+        let inputArgs := filterWithIndex (fun i _ => i ∉ outputIdxs) hypArgs
+        .SuchThat vs (.MutRec auxName inputArgs) ps
+      | none => step
+    | .Unconstrained v (.NonRec hyp) ps =>
+      match matchesSibling hyp 1 with
+      | some (auxName, outputIdxs) =>
+        let (_, hypArgs) := hyp
+        let inputArgs := filterWithIndex (fun i _ => i ∉ outputIdxs) hypArgs
+        .Unconstrained v (.MutRec auxName inputArgs) ps
+      | none => step
+    | .Check (.NonRec hyp) pol =>
+      match matchesSibling hyp 0 with
+      | some (auxName, outputIdxs) =>
+        let (_, hypArgs) := hyp
+        let inputArgs := filterWithIndex (fun i _ => i ∉ outputIdxs) hypArgs
+        .Check (.MutRec auxName inputArgs) pol
+      | none => step
+    | other => other
+
+/-- Checks if any step in a schedule uses `Source.MutRec`. -/
+def scheduleUsesMutualCall (steps : List ScheduleStep) : Bool :=
+  steps.any fun step =>
+    match step with
+    | .Unconstrained _ (.MutRec ..) _ => true
+    | .SuchThat _ (.MutRec ..) _ => true
+    | .Check (.MutRec ..) _ => true
+    | _ => false
 
 end Schedules
