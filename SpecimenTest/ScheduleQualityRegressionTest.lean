@@ -29,10 +29,10 @@ set_option match.ignoreUnusedAlts true
 -- ============================================================
 
 /--
-info: def instArbitrarySizedSuchThatNatBetween.aux_arb : Nat → Nat → Nat → Nat → Gen Nat :=
-fun initSize size lo_1 hi_1 =>
-  Nat.brecOn (motive := fun size => Nat → Gen Nat) size (instArbitrarySizedSuchThatNatBetween.aux_arb._f initSize lo_1)
-    hi_1
+info: def instArbitrarySizedSuchThatNatBetween.aux_arb : Nat → Nat → Nat → Nat → Nat → Gen Nat :=
+fun fuel initSize size lo_1 hi_1 =>
+  Nat.brecOn (motive := fun fuel => Nat → Nat → Gen Nat) fuel
+    (instArbitrarySizedSuchThatNatBetween.aux_arb._f initSize lo_1) size hi_1
 -/
 #guard_msgs in
 #print instArbitrarySizedSuchThatNatBetween.aux_arb
@@ -42,10 +42,10 @@ fun initSize size lo_1 hi_1 =>
 -- ============================================================
 
 /--
-info: def instArbitrarySizedSuchThatBinaryTreeBST.aux_arb : Nat → Nat → Nat → Nat → Gen BinaryTree :=
-fun initSize size lo_1 hi_1 =>
-  Nat.brecOn (motive := fun size => Nat → Nat → Gen BinaryTree) size
-    (instArbitrarySizedSuchThatBinaryTreeBST.aux_arb._f initSize) lo_1 hi_1
+info: def instArbitrarySizedSuchThatBinaryTreeBST.aux_arb : Nat → Nat → Nat → Nat → Nat → Gen BinaryTree :=
+fun fuel initSize size lo_1 hi_1 =>
+  Nat.brecOn (motive := fun fuel => Nat → Nat → Nat → Gen BinaryTree) fuel
+    (instArbitrarySizedSuchThatBinaryTreeBST.aux_arb._f initSize) size lo_1 hi_1
 -/
 #guard_msgs in
 #print instArbitrarySizedSuchThatBinaryTreeBST.aux_arb
@@ -55,10 +55,10 @@ fun initSize size lo_1 hi_1 =>
 -- ============================================================
 
 /--
-info: def instArbitrarySizedSuchThatTermTyping.aux_arb : Nat → Nat → List type → type → Gen term :=
-fun initSize size G_1 t_1 =>
-  Nat.brecOn (motive := fun size => List type → type → Gen term) size
-    (instArbitrarySizedSuchThatTermTyping.aux_arb._f initSize) G_1 t_1
+info: def instArbitrarySizedSuchThatTermTyping.aux_arb : Nat → Nat → Nat → List type → type → Gen term :=
+fun fuel initSize size G_1 t_1 =>
+  Nat.brecOn (motive := fun fuel => Nat → List type → type → Gen term) fuel
+    (instArbitrarySizedSuchThatTermTyping.aux_arb._f initSize) size G_1 t_1
 -/
 #guard_msgs in
 #print instArbitrarySizedSuchThatTermTyping.aux_arb
@@ -68,10 +68,10 @@ fun initSize size G_1 t_1 =>
 -- ============================================================
 
 /--
-info: def instArbitrarySizedSuchThatListNatExpMatch.aux_arb : Nat → Nat → RegExp → Gen (List Nat) :=
-fun initSize size re_1 =>
-  Nat.brecOn (motive := fun size => RegExp → Gen (List Nat)) size
-    (instArbitrarySizedSuchThatListNatExpMatch.aux_arb._f initSize) re_1
+info: def instArbitrarySizedSuchThatListNatExpMatch.aux_arb : Nat → Nat → Nat → RegExp → Gen (List Nat) :=
+fun fuel initSize size re_1 =>
+  Nat.brecOn (motive := fun fuel => Nat → RegExp → Gen (List Nat)) fuel
+    (instArbitrarySizedSuchThatListNatExpMatch.aux_arb._f initSize) size re_1
 -/
 #guard_msgs in
 #print instArbitrarySizedSuchThatListNatExpMatch.aux_arb
@@ -93,8 +93,10 @@ derive_checker (fun xs n => MemNat xs n)
 derive_generator (fun n => ∃ xs, MemNat xs n)
 
 /--
-info: def instArbitrarySizedSuchThatListNatMemNat.aux_arb : Nat → Nat → Nat → Gen (List Nat) :=
-fun initSize size n_1 => Nat.brecOn size (instArbitrarySizedSuchThatListNatMemNat.aux_arb._f initSize n_1)
+info: def instArbitrarySizedSuchThatListNatMemNat.aux_arb : Nat → Nat → Nat → Nat → Gen (List Nat) :=
+fun fuel initSize size n_1 =>
+  Nat.brecOn (motive := fun fuel => Nat → Gen (List Nat)) fuel
+    (instArbitrarySizedSuchThatListNatMemNat.aux_arb._f initSize n_1) size
 -/
 #guard_msgs in
 #print instArbitrarySizedSuchThatListNatMemNat.aux_arb
