@@ -28,6 +28,7 @@ local instance [Ord α][Ord β]: Ord (α × β) := lexOrd
 inductive Source
   | NonRec : HypothesisExpr → Source
   | Rec : Name → List ConstructorExpr → Source
+  /-- A call to a sibling spec in a mutual block (distinct global def name). -/
   | MutRec : Name → List ConstructorExpr → Source
   deriving Repr, BEq
 

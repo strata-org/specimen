@@ -34,5 +34,5 @@ derive_mutual
 -- Sample: generate a well-typed term with its context and type
 #eval! do
   let sample ← Gen.run
-    (ArbitrarySizedSuchThat.arbitrarySizedST (fun (p : List type × term × type) => typing p.1 p.2.1 p.2.2) 3) 10
+    (ArbitrarySizedSuchThat.arbitrarySizedST (fun (p : List type × term × type) => let (Γ, e, τ) := p; typing Γ e τ) 3) 10
   return repr sample

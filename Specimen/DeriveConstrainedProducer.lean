@@ -782,6 +782,7 @@ def deriveConstrainedProducerParts
   TermElabM (TSyntax `term × TSyntax `term × Array Name × TSyntaxArray `term × Array Expr × LocalContext × Name × List Level × ProducerSort) := do
   let producerSort := convertDeriveSortToProducerSort deriveSort
   let inductiveName := constrainingInductive
+  -- Identify which argument positions are outputs (to be generated)
   let outputFVars := outputVars.map Expr.fvarId!
   let mut outputIdxs : Array Nat := #[]
   for i in [:constrArgs.size] do
@@ -790,6 +791,7 @@ def deriveConstrainedProducerParts
       outputIdxs := outputIdxs.push i
   if outputIdxs.isEmpty then
     throwError m!"cannot find output indices, try specifying the implicit arguments"
+  -- Extract argument names and types from the inductive's type signature
   let inductiveVal ← getConstInfoInduct inductiveName
   let inductiveTypeComponents ← getComponentsOfArrowType inductiveVal.type
   let argTypes := inductiveTypeComponents.pop
@@ -800,8 +802,10 @@ def deriveConstrainedProducerParts
         outputVars[outIdx]!.fvarId!.getUserName
       else throwError m!"{ident} is expected to be a variable.")
   let argNamesTypes := argNames.zip argTypes
+  -- Build the output product type (e.g., α × β for two outputs)
   let _outputType ← tupleOfListM (throwError "no output types")
     (fun t rest => mkAppM ``Prod #[t, rest]) outputTypes.toList
+  -- Freshen argument names to avoid capture, then derive schedules per constructor
   let (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, localCtx) ←
     withLocalDeclsDND argNamesTypes (fun _ => do
       let mut localCtx ← getLCtx
@@ -823,6 +827,7 @@ def deriveConstrainedProducerParts
       let freshSize' := mkIdent freshSizePrimeName
       let freshRecFnName := recFnNameOverride.getD (localCtx.getUnusedName (match deriveSort with
         | .Generator => `aux_arb | .Enumerator => `aux_enum | _ => `aux_dec))
+      -- For each constructor: derive a schedule, compile to syntax
       for ctorName in inductiveVal.ctors do
         let scheduleOption ← (UnifyM.runInMetaM
           (getProducerScheduleForInductiveConstructor inductiveName ctorName outputNamesTypesIndices
@@ -996,24 +1001,8 @@ derive_mutual
 ```
 
 Each entry is either `generator`, `generator_multi`, `enumerator`, or `checker` followed by
-a term describing the constraint. Currently each entry is derived independently in sequence.
-
-### TODO for true mutual recursion:
-To support cases where the derived functions need to call each other (e.g., "all outputs"
-typing depends on "fixed type" typing and vice versa), the following changes are needed:
-
-1. **Scheduler**: Generalize `recCall : Name × List Nat` to
-   `recCalls : List (Name × List Nat × Name)` where the third component is the
-   aux function name of the sibling spec to call.
-
-2. **isRecCall**: Check against ALL sibling specs. When a hypothesis matches a sibling
-   spec (same inductive, compatible output positions), emit `Source.Rec siblingAuxName args`.
-
-3. **Code generation**: Emit a `mutual ... end` block of top-level `def`s instead of
-   `let rec` inside an instance. Each instance then references its corresponding `def`.
-
-4. **MExp → TSyntax**: `Source.Rec` already handles calling by name, so no changes needed
-   once the schedule correctly identifies mutual calls.
+a term describing the constraint. Entries in the same SCC are compiled into a shared
+`mutual` block with cross-calls rewritten to `Source.MutRec`.
 -/
 
 /-- Command for deriving multiple constrained generators in sequence,
