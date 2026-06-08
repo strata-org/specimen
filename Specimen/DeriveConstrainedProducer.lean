@@ -266,7 +266,7 @@ def getScheduleSort (conclusion : HypothesisExpr)
 def linearizeAndFlatten
   (hypotheses : Array Expr) (conclusion : Expr) (outputIndices : List Nat) (localCtx : LocalContext) :
   UnifyM (Array Expr × Expr × List (Name × Expr) × LocalContext) := do
-  -- Find all sub-terms which are non-trivial function applications
+  -- Phase 1: flatten function calls into fresh unknowns with equality hypotheses
   let funcAppExprs ← collectUnmatchableProperSubterms conclusion
   trace[plausible.deriving.arbitrary] m!"Unmatchable exprs: {funcAppExprs} In conclusion: {conclusion}"
   withLCtx' localCtx do
@@ -301,7 +301,7 @@ def linearizeAndFlatten
     let functionsNewTypedVars := freshUnknownsAndTypes
     let functionsNewHyps := additionalHyps
 
-    -- Count variable occurrences to find nonlinear patterns
+    -- Phase 2: linearize repeated variables — each extra occurrence gets a fresh unknown + equality
     let varOccurrences := collectFVarOccurrences conclusion outputIndices
 
     trace[plausible.deriving.arbitrary] m!"varOccurences: {repr varOccurrences.toList} \n expr: {conclusion} \n outputIndices {outputIndices}"
@@ -530,7 +530,7 @@ def getScheduleForInductiveRelationConstructor
       trace[plausible.deriving.arbitrary] m!"Updated ForAll Vars: {repr updatedForAllVars}"
       trace[plausible.deriving.arbitrary] m!"Fixed Vars: {repr fixedVars}"
 
-      -- Compute all possible checker schedules for this constructor
+      -- Enumerate candidate schedules and select the best by score (checks < length < unconstrained)
       let multiOutput := Lean.Option.get (← getOptions) specimen.multiOutput
       let possibleSchedules := possibleSchedules
         (vars := updatedForAllVars)
@@ -699,6 +699,7 @@ def deriveConstrainedProducer
         | .Enumerator => `aux_enum
         | _ => `aux_dec)
 
+      -- For each constructor: derive schedule → compile to MExp → emit TSyntax term
       let mut requiredInstances := #[]
       for ctorName in inductiveVal.ctors do
         let scheduleOption ← (UnifyM.runInMetaM
