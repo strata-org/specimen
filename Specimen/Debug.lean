@@ -21,6 +21,13 @@ register_option specimen.fuel : Nat := {
   descr := "fuel (termination budget) for derived generators/enumerators/checkers"
 }
 
+/-- When true, derive_mutual automatically derives dependencies for other inductives
+    referenced in the specs' constructors before emitting the mutual block. -/
+register_option specimen.autoDeriveDeps : Bool := {
+  defValue := false
+  descr := "automatically derive dependency instances in derive_mutual"
+}
+
 /-- Global flag for enabling/disabling debug messages -/
 def globalDebugFlag : Bool := false
 
