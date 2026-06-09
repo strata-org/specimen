@@ -13,11 +13,12 @@ import Specimen.Debug
 import Plausible.Arbitrary
 
 import Lean.Elab.Command
+import ProofWidgets.Component.HtmlDisplay
 
 import Lean.Meta.Basic
 
 open Lean Elab Command Meta Term Parser
-open Idents Schedules
+open Idents Schedules ProofWidgets
 
 
 ----------------------------------------------------------------------------------------------------------------------------------
@@ -1517,7 +1518,264 @@ def elabDeriveMutual : CommandElab := fun stx => do
         -- Use SCC-based compilation from memo
         -- Step 3: SCC decomposition and compilation
         let components := computeSpecSCC usedKeys.toList finalMemo
-        logInfo m!"derive_mutual: {usedKeys.size} specs in {components.length} components"
+        -- Print dependency graph + emission order as rich HTML
+        let getNumArgs (k : SpecKey) : CommandElabM Nat := liftTermElabM do
+          try pure ((← getComponentsOfArrowType (← getConstInfoInduct k.inductiveName).type).size - 1)
+          catch _ => pure k.outputIndices.length
+        let mut totalEdges : Nat := 0
+        for k in usedKeys.toList do
+          match finalMemo[k]? with
+          | some (.done indSched) =>
+            let allScheds := indSched.baseSchedules ++ indSched.recSchedules
+            let deps := allScheds.flatMap (fun (_, (steps, _)) => collectNonRecDeps steps)
+            let relDeps := deps.filter (fun d => d.kind == .relation || d.kind == .checker)
+            let depKeys := relDeps.map (fun d => SpecKey.mk d.inductiveName d.outputIndices d.deriveSort)
+              |>.filter (usedKeys.contains ·) |>.eraseDups
+            totalEdges := totalEdges + depKeys.length
+          | _ => pure ()
+        -- Build HTML output using ProofWidgets (controlled by specimen.richOutput)
+        let richOutput := Lean.Option.get (← getOptions) specimen.richOutput
+        let mkSpan (style : Json) (text : String) : Html :=
+          .element "span" #[("style", style)] #[.text text]
+        let headerStyle := json% {"fontWeight": "bold", "fontSize": "1.2em", "color": "#4fc1ff"}
+        let srcStyle := json% {"color": "#dcdcaa", "fontWeight": "bold"}
+        let dstStyle := json% {"color": "#9cdcfe"}
+        let reqStyle := json% {"color": "#c586c0", "fontStyle": "italic"}
+        let ctorStyle := json% {"color": "#4ec9b0"}
+        let schedStyle := json% {"color": "#ce9178", "fontSize": "0.9em", "whiteSpace": "pre", "fontFamily": "var(--vscode-editor-font-family, monospace)"}
+        let singletonStyle := json% {"color": "#b5cea8"}
+        let mutualStyle := json% {"color": "#ce9178", "fontWeight": "bold"}
+        let scoreStyle := json% {"color": "#808080", "fontSize": "0.9em"}
+        let mut htmlChildren : Array Html := #[]
+        -- Title
+        htmlChildren := htmlChildren.push (.element "div" #[("style", json% {"marginBottom": "12px"})] #[
+          mkSpan headerStyle s!"⚙ derive_mutual — {usedKeys.size} specs, {components.length} components"
+        ])
+        -- Merged emission order + constructor schedules (topological)
+        -- Compute score color: green (good) through yellow to red (bad) via HSL interpolation
+        -- Badness ∈ [0, 1] mapped to hue 120° (green) → 0° (red)
+        let scoreToColor (score : ScheduleScore) : String :=
+          let badness : Float :=
+            if score.length == 0 then 0.0
+            else
+              let checkRatio := Float.ofNat score.checks / Float.ofNat score.length
+              let uncRatio := Float.ofNat score.unconstrained / Float.ofNat score.length
+              let lengthPenalty := min 1.0 (Float.ofNat score.length / 12.0)
+              min 1.0 (checkRatio * 2.0 + uncRatio * 0.5 + lengthPenalty * 0.3)
+          let hue := (1.0 - badness) * 120.0
+          s!"hsl({Float.toString hue}, 70%, 60%)"
+        -- Aggregate spec-level color: blend of worst and mean constructor badness
+        let specColor (indSched : InductiveSchedule) : String :=
+          let allScheds := indSched.baseSchedules ++ indSched.recSchedules
+          if allScheds.isEmpty then "hsl(120, 70%, 60%)"
+          else
+            let scores := allScheds.map (fun (_, (steps, _)) => scheduleStepsScore steps)
+            let badnesses := scores.map fun score =>
+              if score.length == 0 then 0.0
+              else
+                let checkRatio := Float.ofNat score.checks / Float.ofNat score.length
+                let uncRatio := Float.ofNat score.unconstrained / Float.ofNat score.length
+                let lengthPenalty := min 1.0 (Float.ofNat score.length / 12.0)
+                min 1.0 (checkRatio * 2.0 + uncRatio * 0.5 + lengthPenalty * 0.3)
+            let worst := badnesses.foldl max 0.0
+            let avg := badnesses.foldl (· + ·) 0.0 / Float.ofNat badnesses.length
+            let blended := worst * 0.7 + avg * 0.3
+            let hue := (1.0 - blended) * 120.0
+            s!"hsl({Float.toString hue}, 70%, 60%)"
+        let mkCtorItems (indSched : InductiveSchedule) : Array Html := Id.run do
+          let allScheds := indSched.baseSchedules ++ indSched.recSchedules
+          let mut items : Array Html := #[]
+          for (ctorName, schedule@(steps, _)) in allScheds do
+            let isBase := indSched.baseSchedules.any (fun (n, _) => n == ctorName)
+            let tag := if isBase then "base" else "rec"
+            let tagColor := if isBase then json% {"color": "#4ec9b0"} else json% {"color": "#d7ba7d"}
+            let (ctorInfoStr, ctorColor) := match indSched.ctorStats.find? (fun (n, _, _, _) => n == ctorName) with
+              | some (_, us, count, score) =>
+                let timeStr := if us >= 1000 then s!"{us / 1000}ms" else if us > 0 then s!"{us}μs" else ""
+                let countStr := if count > 1 then s!"{count} considered" else ""
+                let scoreStr := s!"{score.checks}chk/{score.length}steps/{score.unconstrained}unc"
+                let parts := [timeStr, countStr, scoreStr].filter (· != "")
+                (s!" ({String.intercalate ", " parts})", scoreToColor score)
+              | none =>
+                let fallbackScore := scheduleStepsScore steps
+                ("", scoreToColor fallbackScore)
+            let ctorNameStyle := json% {"color": $(ctorColor), "fontWeight": "bold"}
+            items := items.push (Html.element "details" #[] #[
+              .element "summary" #[("style", json% {"cursor": "pointer", "marginBottom": "2px"})] #[
+                mkSpan ctorNameStyle ctorName.getString!,
+                .text " ",
+                mkSpan tagColor s!"[{tag}]",
+                mkSpan scoreStyle ctorInfoStr
+              ],
+              .element "div" #[("style", json% {"marginLeft": "16px", "marginBottom": "6px", "padding": "4px 8px", "background": "#1a1a2e", "borderRadius": "4px", "border": "1px solid #2a2a4a", "whiteSpace": "pre", "fontFamily": "var(--vscode-editor-font-family, monospace)", "fontSize": "0.9em", "lineHeight": "1.5"})]
+                (let stepHtmls := steps.toArray.map fun step =>
+                  let stepStr := ppStep step
+                  let color := match step with
+                    | .Check _ false => "hsl(0, 70%, 60%)"
+                    | .Check (.NonRec (name, _)) true =>
+                      let depKey := SpecKey.mk name [] .Checker
+                      match finalMemo[depKey]? with
+                      | some (.done depSched) => specColor depSched
+                      | _ => "hsl(30, 70%, 60%)"
+                    | .Check _ true => "hsl(30, 70%, 60%)"
+                    | .Unconstrained _ (.NonRec (name, _)) _ =>
+                      let depKey := SpecKey.mk name [] .Generator
+                      match finalMemo[depKey]? with
+                      | some (.done depSched) => specColor depSched
+                      | _ => "hsl(60, 70%, 60%)"
+                    | .Unconstrained _ _ _ => "hsl(60, 70%, 60%)"
+                    | .SuchThat vs (.NonRec (name, args)) ps =>
+                      let outNames := vs.map Prod.fst
+                      let outIdxs := computeOutputIndices args outNames
+                      let ds := match ps with | .Generator => DeriveSort.Generator | .Enumerator => .Enumerator
+                      let depKey := SpecKey.mk name outIdxs ds
+                      match finalMemo[depKey]? with
+                      | some (.done depSched) => specColor depSched
+                      | _ => "hsl(90, 70%, 60%)"
+                    | .SuchThat _ (.Rec ..) _ => "hsl(200, 50%, 60%)"
+                    | .SuchThat _ (.MutRec ..) _ => "hsl(200, 50%, 60%)"
+                    | .Match .. => "hsl(120, 40%, 60%)"
+                  Html.element "div" #[] #[mkSpan (json% {"color": $(color)}) stepStr]
+                let (_, sort) := schedule
+                let conclusionStr := match sort with
+                  | .ProducerSchedule _ conclusion =>
+                    let outputStr := match conclusion with
+                      | [e] => ppConstructorExpr e
+                      | es => s!"({String.intercalate ", " (es.map ppConstructorExpr)})"
+                    s!"return {outputStr}"
+                  | .CheckerSchedule => "return ok"
+                  | .TheoremSchedule hyp _ => s!"check_conclusion {ppHypothesisExpr hyp}"
+                let conclusionHtml := Html.element "div" #[] #[mkSpan (json% {"color": "hsl(120, 70%, 70%)"}) conclusionStr]
+                stepHtmls.push conclusionHtml)
+            ])
+          items
+        let mut orderItems : Array Html := #[]
+        for comp in components do
+          if comp.length > 1 then
+            let mut mutualItems : Array Html := #[]
+            for k in comp do
+              let numArgs ← getNumArgs k
+              match finalMemo[k]? with
+              | some (.done indSched) =>
+                let timeStr := if indSched.derivationTimeUs >= 1000 then s!" {indSched.derivationTimeUs / 1000}ms"
+                  else if indSched.derivationTimeUs > 0 then s!" {indSched.derivationTimeUs}μs" else ""
+                let nCtors := indSched.baseSchedules.length + indSched.recSchedules.length
+                let ctorItems := mkCtorItems indSched
+                let specNameStyle := json% {"color": $(specColor indSched), "fontWeight": "bold"}
+                mutualItems := mutualItems.push (Html.element "details" #[] #[
+                  .element "summary" #[("style", json% {"cursor": "pointer", "marginBottom": "2px"})] #[
+                    mkSpan specNameStyle (k.prettyPrint numArgs),
+                    mkSpan scoreStyle s!" ({nCtors} ctors{timeStr})"
+                  ],
+                  .element "div" #[("style", json% {"marginLeft": "12px"})] ctorItems
+                ])
+              | _ => pure ()
+            orderItems := orderItems.push (.element "div" #[("style", json% {"marginBottom": "6px", "paddingLeft": "4px", "borderLeft": "3px solid #ce9178"})] (#[
+              mkSpan mutualStyle s!"◆ mutual ({comp.length}):",
+              .element "br" #[] #[]
+            ] ++ mutualItems))
+          else
+            let k := comp.head!
+            let numArgs ← getNumArgs k
+            match finalMemo[k]? with
+            | some (.done indSched) =>
+              if indSched.alreadyExists then
+                orderItems := orderItems.push (.element "div" #[("style", json% {"marginBottom": "2px"})] #[
+                  .text "● ", mkSpan singletonStyle (k.prettyPrint numArgs),
+                  mkSpan scoreStyle " (pre-existing)"
+                ])
+              else
+                let timeStr := if indSched.derivationTimeUs >= 1000 then s!" {indSched.derivationTimeUs / 1000}ms"
+                  else if indSched.derivationTimeUs > 0 then s!" {indSched.derivationTimeUs}μs" else ""
+                let nCtors := indSched.baseSchedules.length + indSched.recSchedules.length
+                let ctorItems := mkCtorItems indSched
+                let specNameStyle := json% {"color": $(specColor indSched), "fontWeight": "bold"}
+                orderItems := orderItems.push (Html.element "details" #[] #[
+                  .element "summary" #[("style", json% {"cursor": "pointer", "marginBottom": "2px"})] #[
+                    .text "● ",
+                    mkSpan specNameStyle (k.prettyPrint numArgs),
+                    mkSpan scoreStyle s!" ({nCtors} ctors{timeStr})"
+                  ],
+                  .element "div" #[("style", json% {"marginLeft": "12px"})] ctorItems
+                ])
+            | _ => pure ()
+        htmlChildren := htmlChildren.push (Html.element "details" #[("open", json% true)] #[
+          .element "summary" #[("style", json% {"cursor": "pointer", "fontWeight": "bold", "color": "#569cd6", "marginBottom": "6px"})] #[
+            .text "📋 Derived Specs (topological order)"
+          ],
+          .element "div" #[("style", json% {"marginLeft": "8px"})] orderItems
+        ])
+        -- Dependency graph with clickable constructors showing schedules
+        if totalEdges > 0 then
+          let getCtorSchedule (specKey : SpecKey) (ctorName : String) : String :=
+            match finalMemo[specKey]? with
+            | some (.done indSched) =>
+              let allScheds := indSched.baseSchedules ++ indSched.recSchedules
+              match allScheds.find? (fun (n, _) => n.getString! == ctorName) with
+              | some (_, schedule) => ppSchedule schedule
+              | none => "(schedule not found)"
+            | _ => "(not derived)"
+          -- Build graph section
+          let mut graphItems : Array Html := #[]
+          for k in usedKeys.toList do
+            let nArgs ← getNumArgs k
+            let label := k.prettyPrint nArgs
+            match finalMemo[k]? with
+            | some (.done indSched) =>
+              let allScheds := indSched.baseSchedules ++ indSched.recSchedules
+              let mut depCtors : Std.HashMap SpecKey (List Name) := {}
+              for (ctorName, schedule@(steps, _)) in allScheds do
+                let deps := collectNonRecDeps steps
+                let relDeps := deps.filter (fun d => d.kind == .relation || d.kind == .checker)
+                for d in relDeps do
+                  let dk := SpecKey.mk d.inductiveName d.outputIndices d.deriveSort
+                  if usedKeys.contains dk then
+                    let existing := depCtors.getD dk []
+                    if ctorName ∉ existing then
+                      depCtors := depCtors.insert dk (existing ++ [ctorName])
+              if !depCtors.isEmpty then
+                let mut dstItems : Array Html := #[]
+                for (dk, ctors) in depCtors.toList do
+                  let dkArgs ← getNumArgs dk
+                  -- Each constructor is a clickable details showing its schedule
+                  let ctorElements ← ctors.toArray.mapM fun ctorName => do
+                    let schedText := getCtorSchedule k ctorName.getString!
+                    pure (Html.element "details" #[("style", json% {"display": "inline"})] #[
+                      .element "summary" #[("style", json% {"cursor": "pointer", "display": "inline", "color": "#4ec9b0"})] #[
+                        .text ctorName.getString!
+                      ],
+                      .element "div" #[("style", json% {"marginLeft": "24px", "marginBottom": "4px", "padding": "4px 8px", "background": "#1e1e1e", "borderRadius": "4px", "border": "1px solid #3c3c3c"})] #[
+                        mkSpan schedStyle schedText
+                      ]
+                    ])
+                  let ctorSep := ctorElements.foldl (init := (#[] : Array Html)) fun acc el =>
+                    if acc.isEmpty then #[el] else acc ++ #[.text ", ", el]
+                  dstItems := dstItems.push (.element "div" #[("style", json% {"marginLeft": "16px", "marginBottom": "3px"})] #[
+                    mkSpan reqStyle "requires ",
+                    mkSpan dstStyle (dk.prettyPrint dkArgs),
+                    .text "  via ",
+                    .element "span" #[] ctorSep
+                  ])
+                graphItems := graphItems.push (.element "details" #[] #[
+                  .element "summary" #[("style", json% {"cursor": "pointer", "marginBottom": "2px"})] #[
+                    mkSpan srcStyle label,
+                    mkSpan (json% {"color": "#808080"}) s!" ({depCtors.size} deps)"
+                  ],
+                  .element "div" #[] dstItems
+                ])
+            | _ => pure ()
+          htmlChildren := htmlChildren.push (Html.element "details" #[] #[
+            .element "summary" #[("style", json% {"cursor": "pointer", "fontWeight": "bold", "color": "#569cd6", "marginTop": "12px", "marginBottom": "6px"})] #[
+              .text s!"📊 Dependency Graph ({totalEdges} edges)"
+            ],
+            .element "div" #[("style", json% {"marginLeft": "8px", "borderLeft": "2px solid #3c3c3c", "paddingLeft": "12px"})] graphItems
+          ])
+        -- Emit the full HTML (if richOutput enabled)
+        if richOutput then
+          let fullHtml := Html.element "div" #[("style", json% {"fontFamily": "var(--vscode-editor-font-family, monospace)", "fontSize": "13px", "lineHeight": "1.6", "padding": "8px"})] htmlChildren
+          let graphMsg ← liftCoreM <| Lean.MessageData.ofHtml fullHtml
+            s!"derive_mutual: {usedKeys.size} specs in {components.length} components"
+          logInfo graphMsg
         -- For each component: assign names, compile, emit
         for comp in components do
           -- Assign global names for this component
