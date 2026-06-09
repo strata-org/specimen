@@ -450,8 +450,31 @@ def scheduleStepToMExp (step : ScheduleStep) (defFuel : MExp) (k : MExp) (output
 
     -- TODO: double check if this is right
     pure $ .MBind .Checker checker [] k
-  | .Match explicit scrutinee pattern =>
-    pure $ .MMatch explicit (.MId scrutinee) [(pattern, k), (wildCardPattern, .MFail)]
+  | .Match explicit scrutinee pattern => do
+    -- If the scrutinee's type has only one constructor, the wildcard
+    -- fallthrough `| _ => MFail` is structurally redundant and Lean's
+    -- exhaustiveness check rejects it as a hard error
+    -- (`error(lean.redundantMatchAlt): Redundant alternative`). Look up
+    -- the constructor named in the pattern, find its inductive parent,
+    -- count siblings, and emit a single-arm match when there's only one.
+    let ctorName? : Option Name := match pattern with
+      | .CtorPattern n _ => some n
+      | _ => none
+    let isSingleCtor : Bool ← do
+      match ctorName? with
+      | none => pure false
+      | some cn =>
+        let env ← getEnv
+        match env.find? cn with
+        | some (.ctorInfo ci) =>
+          match env.find? ci.induct with
+          | some (.inductInfo ii) => pure (ii.ctors.length == 1)
+          | _ => pure false
+        | _ => pure false
+    let cases :=
+      if isSingleCtor then [(pattern, k)]
+      else [(pattern, k), (wildCardPattern, .MFail)]
+    pure $ .MMatch explicit (.MId scrutinee) cases
 
 /-- Converts a `Schedule` (a list of `ScheduleStep`s along with a `ScheduleSort`,
     which acts as the conclusion of the schedule) to an `MExp`.
