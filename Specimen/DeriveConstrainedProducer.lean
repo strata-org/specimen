@@ -843,7 +843,16 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
         | .Enumerator => pure subProducer
         | .Checker | .Theorem => `(fun (_ : Unit) => $subProducer)
       recursiveProducers := recursiveProducers.push term
-    let baseProducers ← `([$nonRecursiveProducers,*])
+    -- For checkers with recursive constructors, add a failsafe to the base case:
+    -- if no base constructor matches, return "unknown" (error) rather than "false",
+    -- since a recursive constructor might succeed at a larger size.
+    let baseProducersWithFailsafe ← do
+      if (key.deriveSort == .Checker || key.deriveSort == .Theorem) && !recursiveProducers.isEmpty then
+        let failsafe ← `((fun (_ : Unit) => $failFn $genericFailure))
+        pure (nonRecursiveProducers.push failsafe)
+      else
+        pure nonRecursiveProducers
+    let baseProducers ← `([$baseProducersWithFailsafe,*])
     let allProducers := nonRecursiveProducers ++ recursiveProducers
     let inductiveProducers ← `([$allProducers,*])
     let argNames := (List.range allFVars.size).map (fun i => indSched.argNames.getD i (Name.mkSimple s!"arg_{i}"))
