@@ -22,6 +22,8 @@
 
 A glossary of terms appears at the end, for quick reference.
 
+**Experiments.** The design in this document was validated by the experiments in `SpecimenTest/BasaltPort/`: `BridgeBacktrackMockup.lean` demonstrates all three bridging mechanisms (backtracking, sub-generators, and checkers) in a single example, while `BridgeBenchmark.lean` provides performance comparisons between legacy and bridge-based generators.
+
 ---
 
 ## 1. Status Quo and Goal
@@ -38,7 +40,7 @@ It provides randomness, a size parameter, and exception-based failure. The `plau
 - `ArbitrarySizedSuchThat α P` — a sized generator (`Nat → Gen α`) for values satisfying `P`
 - `ArbitrarySuchThat α P` — the unsized wrapper (via `Gen.sized`)
 
-**Basalt** defines a `Gen` typeclass abstracting the capabilities needed by a generator:
+**[Basalt](https://github.com/hgoldstein95/basalt/)** defines a `Gen` typeclass abstracting the capabilities needed by a generator:
 ```lean
 class Gen (g : Type u → Type v) where
   instInhabited : ∀ α, Inhabited (g α)
@@ -509,6 +511,8 @@ For mutually recursive inductive relations, the emitted code uses Lean's `mutual
 - `initSize` is the original fuel value, passed unchanged to sub-generators via `BacktrackGenFor.gen ... initSize`.
 
 Sub-generators always get a full budget. This matches today's behavior where `aux_arb initSize size' Ty.nat` passes `initSize` to nested calls.
+
+**Note on future changes.** The current approach — a local `size` that decrements structurally and a global `initSize` passed to sub-generators — is a good balance of generality and simplicity (see [Generator-config.md](Generator-config.md) for alternatives). However, this sizing strategy may need to change in the future as we gain experience with more complex generators or integrate with Basalt's `partial_fixpoint` approach, which eliminates the explicit fuel parameter entirely.
 
 ### Known limitations
 
