@@ -813,16 +813,24 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
         | other => other
     for (_, schedule) in indSched.baseSchedules do
       let (steps, sort) := schedule
-      let rewrittenSchedule := (rewriteSchedule steps, sort)
+      let rewrittenSteps := rewriteSchedule steps
+      let rewrittenSchedule := (rewrittenSteps, sort)
       let (subProducer, _) ← StateT.run (s := #[]) (do
         let mexp ← MExp.scheduleToMExp rewrittenSchedule (.MId `size) (.MId `initSize) outputType
           (fuelPrimeName := freshFuelPrimeName) (sizePrimeName := freshSizePrimeName)
         MExp.mexpToTSyntax mexp key.deriveSort)
-      let term ← match key.deriveSort with
-        | .Generator => `( (1, $subProducer) )
-        | .Enumerator => pure subProducer
-        | .Checker | .Theorem => `(fun (_ : Unit) => $subProducer)
-      nonRecursiveProducers := nonRecursiveProducers.push term
+      if scheduleUsesMutualCall rewrittenSteps then
+        let term ← match key.deriveSort with
+          | .Generator => `( ($(Lean.mkIdent ``Nat.succ) $freshSize', $subProducer) )
+          | .Enumerator => pure subProducer
+          | .Checker | .Theorem => `(fun (_ : Unit) => $subProducer)
+        recursiveProducers := recursiveProducers.push term
+      else
+        let term ← match key.deriveSort with
+          | .Generator => `( (1, $subProducer) )
+          | .Enumerator => pure subProducer
+          | .Checker | .Theorem => `(fun (_ : Unit) => $subProducer)
+        nonRecursiveProducers := nonRecursiveProducers.push term
     for (_, schedule) in indSched.recSchedules do
       let (steps, sort) := schedule
       let rewrittenSchedule := (rewriteSchedule steps, sort)
@@ -836,7 +844,8 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
         | .Checker | .Theorem => `(fun (_ : Unit) => $subProducer)
       recursiveProducers := recursiveProducers.push term
     let baseProducers ← `([$nonRecursiveProducers,*])
-    let inductiveProducers ← `([$nonRecursiveProducers,*, $recursiveProducers,*])
+    let allProducers := nonRecursiveProducers ++ recursiveProducers
+    let inductiveProducers ← `([$allProducers,*])
     let argNames := (List.range allFVars.size).map (fun i => indSched.argNames.getD i (Name.mkSimple s!"arg_{i}"))
     let freshArgIdents : TSyntaxArray `term := argNames.toArray.map (fun n => Lean.mkIdent n)
     let freshenedOutputNames := outputIndicesNonSort.filterMap (fun i => argNames[i]?)
@@ -1776,6 +1785,109 @@ def elabDeriveMutual : CommandElab := fun stx => do
           let graphMsg ← liftCoreM <| Lean.MessageData.ofHtml fullHtml
             s!"derive_mutual: {usedKeys.size} specs in {components.length} components"
           logInfo graphMsg
+        -- Plain-text output (accessible to LLMs and non-IDE tooling)
+        -- Levels: 0=off, 1=names+quality, 2=full schedules for poor-quality, 3=everything
+        let textLevel := Lean.Option.get (← getOptions) specimen.textOutput
+        if textLevel > 0 then
+          let scoreBadness (score : ScheduleScore) : Float :=
+            if score.length == 0 then 0.0
+            else
+              let checkRatio := Float.ofNat score.checks / Float.ofNat score.length
+              let uncRatio := Float.ofNat score.unconstrained / Float.ofNat score.length
+              let lengthPenalty := min 1.0 (Float.ofNat score.length / 12.0)
+              min 1.0 (checkRatio * 2.0 + uncRatio * 0.5 + lengthPenalty * 0.3)
+          let scoreQuality (score : ScheduleScore) : String :=
+            let b := scoreBadness score
+            if b ≤ 0.2 then "★★★"
+            else if b ≤ 0.5 then "★★☆"
+            else if b ≤ 0.8 then "★☆☆"
+            else "☆☆☆"
+          let specBadness (indSched : InductiveSchedule) : Float :=
+            let allScheds := indSched.baseSchedules ++ indSched.recSchedules
+            if allScheds.isEmpty then 0.0
+            else
+              let badnesses := allScheds.map (fun (_, (steps, _)) => scoreBadness (scheduleStepsScore steps))
+              let worst := badnesses.foldl max 0.0
+              let avg := badnesses.foldl (· + ·) 0.0 / Float.ofNat badnesses.length
+              worst * 0.7 + avg * 0.3
+          let specQuality (indSched : InductiveSchedule) : String :=
+            let b := specBadness indSched
+            if b ≤ 0.2 then "★★★"
+            else if b ≤ 0.5 then "★★☆"
+            else if b ≤ 0.8 then "★☆☆"
+            else "☆☆☆"
+          let showSchedules (indSched : InductiveSchedule) : Bool :=
+            textLevel ≥ 3 || (textLevel ≥ 2 && specBadness indSched > 0.5)
+          let mut lines : Array String := #[]
+          lines := lines.push s!"⚙ derive_mutual — {usedKeys.size} specs, {components.length} components"
+          lines := lines.push ""
+          lines := lines.push "── Derived Specs (topological order) ──"
+          for comp in components do
+            if comp.length > 1 then
+              lines := lines.push s!"  ◆ mutual ({comp.length}):"
+              for k in comp do
+                let numArgs ← getNumArgs k
+                match finalMemo[k]? with
+                | some (.done indSched) =>
+                  let nCtors := indSched.baseSchedules.length + indSched.recSchedules.length
+                  lines := lines.push s!"    {specQuality indSched} {k.prettyPrint numArgs} ({nCtors} ctors)"
+                  if showSchedules indSched then
+                    let allScheds := indSched.baseSchedules ++ indSched.recSchedules
+                    for (ctorName, schedule) in allScheds do
+                      let isBase := indSched.baseSchedules.any (fun (n, _) => n == ctorName)
+                      let tag := if isBase then "base" else "rec"
+                      let (steps, _) := schedule
+                      let score := scheduleStepsScore steps
+                      lines := lines.push s!"      {scoreQuality score} {ctorName.getString!} [{tag}] ({score.checks}chk/{score.length}steps/{score.unconstrained}unc)"
+                      lines := lines.push s!"        {ppSchedule schedule}"
+                | _ => pure ()
+            else
+              let k := comp.head!
+              let numArgs ← getNumArgs k
+              match finalMemo[k]? with
+              | some (.done indSched) =>
+                if indSched.alreadyExists then
+                  lines := lines.push s!"  ● {k.prettyPrint numArgs} (pre-existing)"
+                else
+                  let nCtors := indSched.baseSchedules.length + indSched.recSchedules.length
+                  lines := lines.push s!"  ● {specQuality indSched} {k.prettyPrint numArgs} ({nCtors} ctors)"
+                  if showSchedules indSched then
+                    let allScheds := indSched.baseSchedules ++ indSched.recSchedules
+                    for (ctorName, schedule) in allScheds do
+                      let isBase := indSched.baseSchedules.any (fun (n, _) => n == ctorName)
+                      let tag := if isBase then "base" else "rec"
+                      let (steps, _) := schedule
+                      let score := scheduleStepsScore steps
+                      lines := lines.push s!"      {scoreQuality score} {ctorName.getString!} [{tag}] ({score.checks}chk/{score.length}steps/{score.unconstrained}unc)"
+                      lines := lines.push s!"        {ppSchedule schedule}"
+              | _ => pure ()
+          if textLevel ≥ 2 && totalEdges > 0 then
+            lines := lines.push ""
+            lines := lines.push s!"── Dependency Graph ({totalEdges} edges) ──"
+            for k in usedKeys.toList do
+              let nArgs ← getNumArgs k
+              let label := k.prettyPrint nArgs
+              match finalMemo[k]? with
+              | some (.done indSched) =>
+                let allScheds := indSched.baseSchedules ++ indSched.recSchedules
+                let mut depCtors : Std.HashMap SpecKey (List Name) := {}
+                for (ctorName, (steps, _)) in allScheds do
+                  let deps := collectNonRecDeps steps
+                  let relDeps := deps.filter (fun d => d.kind == .relation || d.kind == .checker)
+                  for d in relDeps do
+                    let dk := SpecKey.mk d.inductiveName d.outputIndices d.deriveSort
+                    if usedKeys.contains dk then
+                      let existing := depCtors.getD dk []
+                      if ctorName ∉ existing then
+                        depCtors := depCtors.insert dk (existing ++ [ctorName])
+                if !depCtors.isEmpty then
+                  lines := lines.push s!"  {label} ({depCtors.size} deps)"
+                  for (dk, ctors) in depCtors.toList do
+                    let dkArgs ← getNumArgs dk
+                    let ctorStrs := ctors.map (fun n => n.getString!)
+                    lines := lines.push s!"    requires {dk.prettyPrint dkArgs}  via {String.intercalate ", " ctorStrs}"
+              | _ => pure ()
+          logInfo m!"{String.intercalate "\n" lines.toList}"
         -- For each component: assign names, compile, emit
         for comp in components do
           -- Assign global names for this component
