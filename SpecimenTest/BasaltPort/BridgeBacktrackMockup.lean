@@ -6,7 +6,7 @@ import Specimen.GeneratorCombinators
 /-!
 # Specimen–Basalt Bridge Mockup: Backtracking, Sub-generators, and Checkers
 
-This file demonstrates all three mechanisms from SPECIMEN-BASALT-BRIDGE.md in a single
+This file demonstrates all three mechanisms from Specimen-Basalt-port.md in a single
 example that genuinely exercises each:
 
 1. **Backtracking**: The `isPos` branch (targeting `.bool`) generates `n` randomly and
@@ -412,21 +412,21 @@ end StatusQuo
 
 open MockBacktrack
 
-#eval! do
+#eval do
   IO.println "=== genHasType (τ = .bool, size = 5) — isPos with DecOpt n≠0 check ==="
   for _ in List.range 8 do
     let result ← Plausible.Gen.run
       (BacktrackGen.toPlausibleGen (genHasType (G := Plausible.Gen) 5 .bool 5)) 10
     IO.println s!"  {repr result}"
 
-#eval! do
+#eval do
   IO.println "=== genHasType (τ = .nat, size = 3) — lit and add, with backtracking ==="
   for _ in List.range 5 do
     let result ← Plausible.Gen.run
       (BacktrackGen.toPlausibleGen (genHasType (G := Plausible.Gen) 3 .nat 3)) 10
     IO.println s!"  {repr result}"
 
-#eval! do
+#eval do
   IO.println "=== genWellFormed (size = 3) — sub-generator calls into HasType ==="
   for _ in List.range 5 do
     let result : Prog ← Plausible.Gen.run
@@ -434,7 +434,7 @@ open MockBacktrack
     IO.println s!"  {repr result}"
 
 -- Also run the status-quo version to confirm both produce the same kinds of output
-#eval! do
+#eval do
   IO.println "=== StatusQuo HasType (τ = .bool, size = 5) ==="
   for _ in List.range 5 do
     let inst : ArbitrarySizedSuchThat Expr (fun e => HasType e .bool) := inferInstance
@@ -463,7 +463,7 @@ instance [Arbitrary α] : ArbitraryFueled (Tree α) where
 end UnconstrainedStatusQuo
 
 -- Run the migrated unconstrained generator
-#eval! do
+#eval do
   IO.println "=== Tree.gen (fuel = 3) ==="
   for _ in List.range 5 do
     let result ← Plausible.Gen.run (Tree.gen (G := Plausible.Gen) (α := Nat) 3) 10

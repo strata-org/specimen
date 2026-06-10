@@ -294,7 +294,7 @@ def benchAtSize (size : Nat) (iters : Nat) (τ : Ty) : IO Unit := do
 
 /-! ## Main benchmark -/
 
-#eval! do
+#eval do
   let iters := 2000
   IO.println s!"=== A/B Benchmark: Legacy vs Bridge (HasType, {iters} iterations) ==="
   IO.println ""
@@ -463,7 +463,7 @@ private def genNat100Legacy : Plausible.Gen Nat := do
 
 end StressBacktrack
 
-#eval! do
+#eval do
   let iters := 10000
   IO.println s!""
   IO.println s!"=== Stress Backtrack: 5 branches, 4 always fail after work, {iters} iters ==="
