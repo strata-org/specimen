@@ -631,226 +631,6 @@ private def getNeighbors {α v} [BEq α] [BEq v] (hyps : List (α × List v)) : 
       hyp != otherHyp && vars.any (otherVars.contains ·))
     (hyp, neighbors.map Prod.fst))
 
--- Represents a partitioning of an ordering into chunks separated by anchor points
--- Used to efficiently insert new elements while respecting dependency constraints
-structure Chunks α where
-  beforeAnchor : List α     -- Elements before any anchor
-  anchors : List (List α)   -- Chunks starting with anchor elements
-  numAnchors : Nat         -- Number of anchor chunks
-  deriving Repr
-
--- Split an ordering into chunks based on anchor points (dependencies that must be preserved)
-private def splitIntoChunks {α} [BEq α] (order : List α) (anchors : List α) : Chunks α :=
-  let (beforeAnchor, rest) := order.span (!anchors.contains ·)
-  let rec split (remaining : List α) (currentChunk : List α) (result : List (List α)) : List (List α) :=
-    match remaining with
-    | [] => currentChunk.reverse :: result |>.reverse
-    | x :: xs =>
-      if anchors.contains x then
-        split xs [x] (currentChunk.reverse :: result)
-      else
-        split xs (x :: currentChunk) result
-  let anchors :=
-    match rest with
-    | firstAnchor :: rest' => split rest' [firstAnchor] []
-    | [] => []
-  let numAnchors := anchors.length
-  ⟨beforeAnchor, anchors, numAnchors⟩
-
--- Insert new hypotheses into chunks while preserving anchor constraints
--- Each new hypothesis can be inserted at any valid chunk boundary
-private partial def enumChunkedInsertions {α} [BEq α] (newHyps : List α) (chunks : Chunks α) : LazyList (List α) :=
-  match newHyps, chunks with
-  | [], _ => pure <| chunks.beforeAnchor ++ chunks.anchors.flatten
-  | h :: hs, _ => do
-    let chunkIdx ← LazyList.range (chunks.numAnchors + 1)
-    let newChunks := {chunks with anchors := chunks.anchors.insertIdx (chunkIdx) [h], numAnchors := chunks.numAnchors + 1}
-    enumChunkedInsertions hs newChunks
-
-/-Simple examples  displaying how a list is chunked into relevant sublists to insert around.-/
-
-/--info: { beforeAnchor := ["A"], anchors := [["B", "C"]], numAnchors := 1 } -/
-#guard_msgs in
-#eval splitIntoChunks ["A", "B", "C"] ["B"]
-
-/--info: { beforeAnchor := [], anchors := [[4], [5, 6]], numAnchors := 2 }-/
-#guard_msgs in
-#eval (splitIntoChunks [4,5,6] [4,5])
-
-/-Example of the result of chunking followed by insertion around those chunks.-/
-/--info: [[1, 4, 5, 6], [4, 1, 5, 6], [4, 5, 6, 1]]-/
-#guard_msgs in
-#eval enumChunkedInsertions [1] (splitIntoChunks [4,5,6] [4,5])
-
--- Generate orderings that satisfy dependency constraints between hypotheses
--- Uses chunked insertion to avoid exponential blowup while respecting variable dependencies
-private partial def enumDependencySatisfyingOrderings {α v} [BEq α] [Repr α] [Repr v] [BEq v] [Hashable v] (hyps : List (α × List v)) : LazyList (List α) := do
-  let neighbors := getNeighbors hyps
-  let mut currentOrder := []
-  for (h, neighbors) in neighbors do
-    -- For each hypothesis, find which of its dependencies are already in the current order
-    let inOrder := neighbors.filter (currentOrder.contains ·)
-    -- Split current order into chunks based on these dependency anchors
-    let chunks := splitIntoChunks currentOrder inOrder
-    -- Insert the new hypothesis at all valid positions (respecting dependencies)
-    currentOrder ← enumChunkedInsertions [h] chunks
-  return currentOrder
-
-/--info: [[2, 5, 1], [1, 2, 5], [5, 1, 2], [1, 5, 2]]-/
-#guard_msgs in
-#eval (enumChunkedInsertions [2] <| splitIntoChunks · [5]) =<< (enumChunkedInsertions [1,5] (splitIntoChunks [] []))
-
--- Test chunked approach with simple dependency chain: H depends on var 1, I depends on vars 1&2, J depends on var 2
-/--info: [["J", "I", "H"], ["H", "J", "I"], ["I", "H", "J"], ["H", "I", "J"]]-/
-#guard_msgs in
-#eval enumDependencySatisfyingOrderings [("H",[1]),("I",[1,2]),("J",[2])]
-
--- Test with linear chain of 26 hypotheses - should generate only a single ordering, much less than 26! permutations
-/--info: 1-/
-#guard_msgs in
-#eval enumDependencySatisfyingOrderings (List.map (fun a => (a,[a+1])) (1...26).toList) |>.take 100 |>.length
-
--- Test with real Cedar example (with numbers in place of variable names) showing complex variable dependencies
-/--info: 288-/
-#guard_msgs in
-#eval @enumDependencySatisfyingOrderings _ _ _ _ _ _ _ ([("V_eq", [11, 0, 1, 2]),
-                                   ("DefinedEntities", [0, 3]),
-                                   ("WfCedarType", [3, 4]),
-                                   ("SubType_T1", [5, 4]),
-                                   ("SubType_T2", [6, 4]),
-                                   ("HasType_E2", [11, 12, 8, 10, 6]),
-                                   ("HasType_E1", [11, 12, 7, 9, 5])]) |>.length
-
--- Test cases comparing exponential permutation growth vs dependency-aware ordering
--- Baseline: all permutations of 4 elements = 4! = 24
-/--info: 24-/
-#guard_msgs in
-#eval enumAllPermutations ["H", "I", "J", "K"] |>.length  -- Should be 4! = 24
-
--- Dependency-constrained: H,I share var 1; I,J share var 2; K is independent
-/--info: 4-/
-#guard_msgs in
-#eval enumDependencySatisfyingOrderings [("H",[1]),("I",[1,2]),("J",[2]),("K",[3])] |>.length  -- Should be much less
-
--- More complex example: 5 hypotheses with mixed dependencies vs 6! = 720 permutations
-/--info: 720-/
-#guard_msgs in
-#eval enumAllPermutations ["A", "B", "C", "D", "E", "F"] |>.length  -- 5! = 120
-
--- Complex dependency graph with multiple connected components
-/--info: 32-/
-#guard_msgs in
-#eval enumDependencySatisfyingOrderings [("A",[1]),("B",[1,2]),("C",[2,3]),("D",[4]),("E",[5,1,2]), ("F",[4,6])] |>.length  -- Should be much less
-
--- EXACT SIZE CALCULATION WITHOUT ENUMERATION
-private def countDependencySatisfyingOrderingsExact {α v} [BEq α] [BEq v] (hyps : List (α × List v)) : Nat :=
-  let neighbors := getNeighbors hyps
-  let rec countExact (remaining : List (α × List α)) (placedHyps : List α) : Nat :=
-    match remaining with
-    | [] => 1
-    | (h, deps) :: rest =>
-      let inOrder := deps.filter (placedHyps.contains ·)
-      let insertionPositions := inOrder.length + 1
-      insertionPositions * countExact rest (h :: placedHyps)
-  countExact neighbors []
-
--- Test the exact counting vs actual enumeration
-/--info: "Exact count: 4, Actual count: 4"-/
-#guard_msgs in
-#eval let hyps := [("H",[1]),("I",[1,2]),("J",[2]),("K",[3])]
-      let exactCount := countDependencySatisfyingOrderingsExact hyps
-      let actualCount := enumDependencySatisfyingOrderings hyps |>.length
-      s!"Exact count: {exactCount}, Actual count: {actualCount}"
-
--- Test on ValidTensorScalarOp - this should be much faster!
-/-info: (will show exact count without computing all orderings)-/
-
-#guard_msgs(error, drop info) in
-#time #eval countDependencySatisfyingOrderingsExact [
-  ("ValidHeader", ["header"]),
-  ("ValidEvents", ["events"]),
-  ("HasTensorScalarOpcode", ["header"]),
-  ("TensorScalarValidOps", ["op0", "op1"]),
-  ("TensorScalarValidTypes", ["header", "in_dtype", "out_dtype"]),
-  ("TensorScalarImmediatesCheck", ["imm0_src", "imm1_src", "imm0", "imm1", "header", "in_dtype", "num_active_channels"]),
-  ("TensorScalarShiftChk", ["op0", "op1", "in_dtype"]),
-  ("TensorScalarTensorChk", ["src_mem_pattern", "in_dtype", "dst_mem_pattern", "out_dtype"]),
-  ("TensorScalarReverseChk", []),
-  ("S3d3TransposeCheck", ["header", "src_mem_pattern", "num_active_channels"]),
-  ("ValidDtype_in", ["in_dtype"]),
-  ("ValidDtype_out", ["out_dtype"]),
-  ("ValidAluOp_op0", ["op0"]),
-  ("ValidAluOp_op1", ["op1"]),
-  ("HasZeroAccumCmdField", ["accumulator_cmd"]),
-  ("HasValidActiveChannelRange", ["num_active_channels"]),
-  ("StartAddrActiveChannels_src", ["src_mem_pattern", "num_active_channels"]),
-  ("StartAddrActiveChannels_dst", ["dst_mem_pattern", "num_active_channels"]),
-  ("Tensor3dValid_src", ["src_mem_pattern", "in_dtype"]),
-  ("Tensor3dValid_dst", ["dst_mem_pattern", "out_dtype"])
-]
-
--- Subset with connected component A-B-C-E
-/--info: [["E", "C", "B", "A"],
- ["E", "A", "C", "B"],
- ["E", "B", "A", "C"],
- ["E", "A", "B", "C"],
- ["C", "E", "B", "A"],
- ["A", "E", "C", "B"],
- ["B", "E", "A", "C"],
- ["A", "E", "B", "C"],
- ["C", "B", "E", "A"],
- ["A", "C", "E", "B"],
- ["B", "A", "E", "C"],
- ["A", "B", "E", "C"],
- ["C", "B", "A", "E"],
- ["A", "C", "B", "E"],
- ["B", "A", "C", "E"],
- ["A", "B", "C", "E"]]-/
-#guard_msgs in
-#eval enumDependencySatisfyingOrderings [("A",[1]),("B",[1,2]),("C",[2,3]),("E",[5,1,2])]
-
--- Separate component D-F
-/--info: [["F", "D"], ["D", "F"]]-/
-#guard_msgs in
-#eval enumDependencySatisfyingOrderings [("D",[4]), ("F",[4,6])]  -- Should be much less
-
--- Extreme case: 7! = 5040 permutations
-/--info: 5040-/
-#guard_msgs in
-#eval enumAllPermutations (0...7).toList |>.length
-
--- vs dependency-aware with overlapping variable ranges (much more constrained)
-/--info: 720-/
-#guard_msgs in
-#eval enumDependencySatisfyingOrderings (List.map (fun a => (a,(a...(a + 10)).toList)) (1...7).toList) |>.length  -- Should be much less
-
--- Test with ValidTensorScalarOp hypotheses - this will show the actual complexity
-/-info: (will show actual count)-/
-
-#guard_msgs(error, drop info) in
-#eval enumDependencySatisfyingOrderings [
-  ("ValidHeader", ["header"]),
-  ("ValidEvents", ["events"]),
-  ("HasTensorScalarOpcode", ["header"]),
-  ("TensorScalarValidOps", ["op0", "op1"]),
-  ("TensorScalarValidTypes", ["header", "in_dtype", "out_dtype"]),
-  ("TensorScalarImmediatesCheck", ["imm0_src", "imm1_src", "imm0", "imm1", "header", "in_dtype", "num_active_channels"]),
-  ("TensorScalarShiftChk", ["op0", "op1", "in_dtype"]),
-  ("TensorScalarTensorChk", ["src_mem_pattern", "in_dtype", "dst_mem_pattern", "out_dtype"]),
-  ("TensorScalarReverseChk", []),
-  ("S3d3TransposeCheck", ["header", "src_mem_pattern", "num_active_channels"]),
-  ("ValidDtype_in", ["in_dtype"]),
-  ("ValidDtype_out", ["out_dtype"]),
-  ("ValidAluOp_op0", ["op0"]),
-  ("ValidAluOp_op1", ["op1"]),
-  ("HasZeroAccumCmdField", ["accumulator_cmd"]),
-  ("HasValidActiveChannelRange", ["num_active_channels"]),
-  ("StartAddrActiveChannels_src", ["src_mem_pattern", "num_active_channels"]),
-  ("StartAddrActiveChannels_dst", ["dst_mem_pattern", "num_active_channels"]),
-  ("Tensor3dValid_src", ["src_mem_pattern", "in_dtype"]),
-  ("Tensor3dValid_dst", ["dst_mem_pattern", "out_dtype"])
-] |>.take 1  -- Limit to 10K to avoid timeout
-
 /--
 `enumSchedules'` is a variant of `enumSchedules` where instead of taking a list of hypotheses to permute,
 it takes a list of simply connected components of hypotheses based on reachability in the graph
@@ -1066,10 +846,10 @@ private partial def enumSchedulesChunkedWithPruning {α v} [Ord v] [BEq v] [Repr
         let dominatingScore := envMemo[envKey]?.getD componentBest
         let _ := schedTrace "processPerm: remainingHyps={remainingHyps}, currentScore={repr currentScore}, lowerBound={repr lowerBound}, runningBest={repr runningComponentBest}, dominatingScore={repr dominatingScore}"
         if lowerBound > runningComponentBest then
-          let _ := schedTrace "PRUNED: lowerBound > runningComponentBest ({repr lowerBound} >= {repr runningComponentBest})"
+          let _ := schedTrace "PRUNED: lowerBound > runningComponentBest ({repr lowerBound} >= {repr runningComponentBest}) \n"
           .lnil
         else if dominatingScore < currentScore then
-          let _ := schedTrace "PRUNED: dominatingScore < currentScore ({repr dominatingScore} < {repr currentScore})"
+          let _ := schedTrace "PRUNED: dominatingScore < currentScore ({repr dominatingScore} < {repr currentScore}) \n"
           .lnil
         else
         match currentPerm with
@@ -1168,40 +948,6 @@ private partial def enumSchedulesChunkedWithPruning {α v} [Ord v] [BEq v] [Repr
                        (deepOriginal + branchOriginal + complexOriginal + worstOriginal)
   IO.println s!"Total Reduction: {totalReduction}%"
   pure ()
-
-#guard_msgs(drop info) in
-#eval do
-  let benchHyps := [("H1", [["a"]], []), ("H2", [["a"], ["b"]], []), ("H3", [["b"], ["c"]], []),
-                    ("H4", [["c"], ["d"]], []), ("H5", [["a", "d"]], []), ("H6", [["b", "d"]], [])]
-  let benchComps := [(enumDependencySatisfyingOrderings <| benchHyps.map (fun ((a : String),(b : List (List String)),c) => ((a,b,c),b.flatten ++ c) ))]
-  let benchVars := ["a", "b", "c", "d"]
-
-  -- Measure quality of schedules (lower scores are better)
-  let originalSchedules := enumSchedulesChunked benchVars [] benchComps [] |>.toList
-  let prunedSchedules := enumSchedulesChunkedWithPruning benchVars [] benchComps [] 6 |>.toList
-
-  let originalScores := originalSchedules.map preScheduleStepsScore
-  let prunedScores := prunedSchedules.map preScheduleStepsScore
-
-  let originalBest := @originalScores.min? _ ⟨fun a b => if a < b then a else b⟩
-  let prunedBest := @prunedScores.min? _ ⟨fun a b => if a < b then a else b⟩
-  let originalAvg := if originalScores.isEmpty then 0 else (originalScores.map (fun (s : PreScheduleScore) => s.checks + s.length + s.unconstrained)).sum / originalScores.length
-  let prunedAvg := if prunedScores.isEmpty then 0 else (prunedScores.map (fun (s : PreScheduleScore) => s.checks + s.length + s.unconstrained)).sum / prunedScores.length
-
-  IO.println "=== Schedule Quality Analysis ==="
-  IO.println s!"Original - Count: {originalSchedules.length}, Best Score: {repr originalBest}, Avg Score: {originalAvg}"
-  IO.println s!"Pruned - Count: {prunedSchedules.length}, Best Score: {repr prunedBest}, Avg Score: {prunedAvg}"
-
-  match originalBest, prunedBest with
-  | some orig, some pruned =>
-    if pruned ≤ orig then
-      IO.println "✓ Pruning maintains or improves best schedule quality"
-    else
-      IO.println "✗ Pruning degraded best schedule quality"
-  | _, _ => IO.println "Unable to compare best scores"
-
-  pure ()
-
 -- Determine the right name for the recursive function in the producer
 -- The default name for the recursive function, used when no freshened name is provided.
 def defaultRecFnName (deriveSort : DeriveSort) : Name :=
@@ -1214,11 +960,24 @@ private def preScheduleStepToScheduleStep (ctorName : Name) (preStep : PreSchedu
   let env ← read
   match preStep with
   | .Checks hyps => return (hyps.map (fun hyp =>
-    let src := if env.deriveSort == DeriveSort.Checker && env.recCall.fst == hyp.fst then
-      Source.Rec env.recFnName hyp.snd
+    -- Unwrap nested negation: peel `Not` layers, flipping polarity each time
+    let (innerHyp, polarity) := Id.run do
+      let mut h := hyp
+      let mut pol := true
+      for _ in List.range 10 do  -- bounded iteration
+        if h.fst == ``Not then
+          match h.snd with
+          | [.Ctor name args] => h := (name, args); pol := !pol
+          | [.TyCtor name args] => h := (name, args); pol := !pol
+          | [.FuncApp name args] => h := (name, args); pol := !pol
+          | _ => break
+        else break
+      return (h, pol)
+    let src := if env.deriveSort == DeriveSort.Checker && env.recCall.fst == innerHyp.fst then
+      Source.Rec env.recFnName innerHyp.snd
     else
-      Source.NonRec hyp;
-    ScheduleStep.Check src true))
+      Source.NonRec innerHyp;
+    ScheduleStep.Check src polarity))
   | .Produce outs hyp =>
     let (newMatches, hyp', newOutputs) ← handleConstrainedOutputs hyp outs
     let typedOutputs ← newOutputs.mapM
@@ -1286,26 +1045,6 @@ instance [ToString α] [ToString v] : ToString (List (List (PreScheduleStep α v
       "do\n  " ++ String.intercalate "\n  " lines
     ) |> String.intercalate "\n\n"
 
-private def possiblePreSchedules (vars : List TypedVar) (hypotheses : List HypothesisExpr) (deriveSort : DeriveSort)
-  (recCall : Name × List Nat) (fixedVars : List Name) (recFnName : Name := defaultRecFnName deriveSort) : LazyList ((List (PreScheduleStep HypothesisExpr TypedVar))) × ScheduleEnv :=
-  let typeVars := vars.filterMap fun ⟨v,t⟩ => if t.isSort then some v else none
-  let sortedHypotheses := mkSortedHypothesesVariablesMap hypotheses
-  let varNames := vars.map (fun x => x.var)
-  let prodSort := convertDeriveSortToProducerSort deriveSort
-  let scheduleEnv := ⟨ vars, sortedHypotheses, deriveSort, prodSort, recCall, fixedVars, recFnName, false, [], none ⟩
-  let remainingVars := List.filter (fun v => not <| fixedVars.contains v) varNames
-  let (newCheckedIdxs, newCheckedHyps) := List.unzip <| (collectCheckedHypotheses scheduleEnv fixedVars [])
-  let remainingSortedHypotheses := filterWithIndex (fun i _ => i ∉ newCheckedIdxs) sortedHypotheses
-  let rawHypotheses := remainingSortedHypotheses.map (fun (h,vars) => ((h,vars), List.flatten vars))
-  let sccGroups := computeSCC rawHypotheses
-  let connectedHypotheses := sccGroups
-                             |>.map (enumDependencySatisfyingOrderings ·
-                                    |> LazyList.mapLazyList (List.map <| constructHypothesis typeVars))
-  let firstChecks := PreScheduleStep.Checks newCheckedHyps.reverse
-  let lazyPreSchedules : LazyList (List (PreScheduleStep HypothesisExpr Name)) := enumSchedulesChunkedWithPruning remainingVars typeVars connectedHypotheses fixedVars sortedHypotheses.length
-  let nameTypeMap := List.foldl (fun m ⟨name,ty⟩ => NameMap.insert m name ty) ∅ vars
-  let typedPreSchedules : LazyList (List (PreScheduleStep HypothesisExpr TypedVar)) := lazyPreSchedules.mapLazyList ((firstChecks :: ·) ∘ List.map (typePreScheduleStep nameTypeMap))
-  (typedPreSchedules, scheduleEnv)
 
 /-- Converts a HypothesisExpr to a list of VarExpr, checking each argument for function applications -/
 private def hypothesisToVarExpr (hyp : HypothesisExpr) : List (SearchTree.VarExpr Name) :=
@@ -1361,78 +1100,3 @@ def possibleSchedules (ctorName : Name) (vars : List TypedVar) (hypotheses : Lis
   let lazySchedules := prunedImprovingTypedPreSchedules.mapLazyList
     ((ReaderT.run . scheduleEnv) ∘ (fun (s,c) => return (← s.flatMapM <| preScheduleStepToScheduleStep ctorName, c)))
   lazySchedules
-
-/-- An unoptimized version of `possibleSchedues` for testing purposes. -/
-private def possibleSchedules' (ctorName : Name) (vars : List TypedVar) (hypotheses : List HypothesisExpr) (deriveSort : DeriveSort)
-  (recCall : Name × List Nat) (fixedVars : List Name) (recFnName : Name := defaultRecFnName deriveSort) : LazyList (MetaM (List ScheduleStep)) := do
-  let typeVars := vars.filterMap fun ⟨v,t⟩ => if t.isSort then some v else none
-  let sortedHypotheses := mkSortedHypothesesVariablesMap hypotheses
-  let varNames := vars.map (fun x => x.var)
-  let prodSort := convertDeriveSortToProducerSort deriveSort
-  let scheduleEnv := ⟨ vars, sortedHypotheses, deriveSort, prodSort, recCall, fixedVars, recFnName, false, [], none ⟩
-  let remainingVars := List.filter (fun v => not <| fixedVars.contains v) varNames
-  let (newCheckedIdxs, newCheckedHyps) := List.unzip <| (collectCheckSteps scheduleEnv fixedVars [])
-  let remainingSortedHypotheses := filterWithIndex (fun i _ => i ∉ newCheckedIdxs) sortedHypotheses
-  let connectedHypotheses := (computeSCC (remainingSortedHypotheses.map (fun (h,vars) => ((h,vars),vars.flatten)))).map (List.map fun ((h,vars),_) => constructHypothesis typeVars (h,vars))
-  let firstChecks := List.reverse <| (ScheduleStep.Check . true) <$> newCheckedHyps
-  let lazyPreSchedules : LazyList (List (PreScheduleStep HypothesisExpr Name)) := enumSchedules' remainingVars typeVars connectedHypotheses fixedVars
-  let nameTypeMap := List.foldl (fun m ⟨name,ty⟩ => NameMap.insert m name ty) ∅ vars
-  let typedPreSchedules : LazyList (List (PreScheduleStep HypothesisExpr TypedVar)) := lazyPreSchedules.mapLazyList (List.map (typePreScheduleStep nameTypeMap))
-  let lazySchedules := typedPreSchedules.mapLazyList ((ReaderT.run . scheduleEnv) ∘ ((firstChecks ++ .) <$> .) ∘ List.flatMapM (preScheduleStepToScheduleStep ctorName))
-  lazySchedules
-
-private def exampleEnumSchedulesChunked :=
-  -- All hypotheses from Cedar.HasType.TContainsAny constructor
-  let hypotheses := [
-    (`V_eq, [[`ets, `acts, `R]], [`V]),
-    (`DefinedEntities, [[`ets], [`ns]], []),
-    (`WfCedarType, [[`ns], [`T]], []),
-    (`SubType_T1, [[`T1], [`T]], []),
-    (`SubType_T2, [[`T2], [`T]], []),
-    (`HasType_E1, [[`E1], [`x1], [`T1]], [`V]),
-    (`HasType_E2, [[`E2], [`x2], [`T2]], [`V])
-  ]
-
-  -- Use computeSCC to find connected components then enumerate valid orderings that satisfy dependencies within each.
-  let components := hypotheses |>.map (fun (h,vars) => ((h,vars), List.flatten vars.1 ++ vars.2))
-                             |> computeSCC
-                             |>.map (@enumDependencySatisfyingOrderings _ _ ⟨fun (a,_) (b,_) => BEq.beq a b⟩ _ _ _ _)
-  enumSchedulesChunked [`ets,`acts,`R,`ns,`T,`T1,`T2,`E1,`x1,`x2] [] components [`V]
-
-private def exampleEnumSchedulesChunkedPruned :=
-  -- All hypotheses from Cedar.HasType.TContainsAny constructor
-  let hypotheses := [
-    (`V_eq, [[`ets, `acts, `R]], [`V]),
-    (`DefinedEntities, [[`ets], [`ns]], []),
-    (`WfCedarType, [[`ns], [`T]], []),
-    (`SubType_T1, [[`T1], [`T]], []),
-    (`SubType_T2, [[`T2], [`T]], []),
-    (`HasType_E1, [ [`E1], [`x1], [`T1]], [`V]),
-    (`HasType_E2, [ [`E2], [`x2], [`T2]], [`V])
-  ]
-
-  -- Use computeSCC to find connected components then enumerate valid orderings that satisfy dependencies within each.
-  let components := hypotheses |>.map (fun (h,vars) => ((h,vars), List.flatten vars.1 ++ vars.2))
-                             |> computeSCC
-                             |>.map (@enumDependencySatisfyingOrderings _ _ ⟨fun (a,_) (b,_) => BEq.beq a b⟩ _ _ _ _)
-  enumSchedulesChunkedWithPruning [`ets,`acts,`R,`ns,`T,`T1,`T2,`E1,`x1,`x2] [] components [`V] 0
-
-private def countChecks (schd : List (PreScheduleStep α β)) : Nat :=
-  schd.foldl (fun acc step => match step with | PreScheduleStep.Checks cs => acc + cs.length | _ => acc) 0
-
-/-
-Sorts all the schedules according to the used ordering, so we can examine them.
--/
-#guard_msgs(drop info) in
-#eval exampleEnumSchedulesChunked.take 200000 |>.mergeSort (le := fun a b =>
-  match compare (countChecks a) (countChecks b) with
-  | .eq => a.length < b.length
-  | .gt => false
-  | .lt => true)
-
-#guard_msgs(drop info) in
-#eval exampleEnumSchedulesChunkedPruned.take 200000 |>.mergeSort (le := fun a b =>
-  match compare (countChecks a) (countChecks b) with
-  | .eq => a.length < b.length
-  | .gt => false
-  | .lt => true)

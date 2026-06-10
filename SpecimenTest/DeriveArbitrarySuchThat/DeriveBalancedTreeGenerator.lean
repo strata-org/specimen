@@ -20,5 +20,9 @@ inductive balancedTree : Nat → BinaryTree → Prop where
     balancedTree n l → balancedTree n r →
     balancedTree (.succ n) (BinaryTree.Node x l r)
 
+set_option specimen.autoDeriveDeps true
+set_option specimen.multiOutput true
+
 #guard_msgs(drop info) in
-derive_generator (fun n => ∃ (t : BinaryTree), balancedTree n t)
+derive_mutual
+ (fun n => ∃ (t : BinaryTree), balancedTree n t)

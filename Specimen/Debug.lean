@@ -28,6 +28,21 @@ register_option specimen.autoDeriveDeps : Bool := {
   descr := "automatically derive dependency instances in derive_mutual"
 }
 
+/-- When true, derive_mutual emits a rich HTML widget in the infoview with interactive
+    schedule details. When false, only plain text output is emitted (faster). -/
+register_option specimen.richOutput : Bool := {
+  defValue := true
+  descr := "emit rich HTML widget output in derive_mutual (disable for faster builds)"
+}
+
+/-- Controls plain-text schedule output verbosity in derive_mutual.
+    0 = off, 1 = one-line per spec (name + quality), 2 = full schedules for poor-quality specs,
+    3 = full schedules for all specs. Useful for LLM tooling and non-IDE workflows. -/
+register_option specimen.textOutput : Nat := {
+  defValue := 0
+  descr := "plain-text output verbosity (0=off, 1=summary, 2=problems, 3=full)"
+}
+
 /-- Global flag for enabling/disabling debug messages -/
 def globalDebugFlag : Bool := false
 

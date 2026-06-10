@@ -23,8 +23,9 @@ open Idents Schedules
     - The name of the inductive relation `inductiveName`
     - The constructor name `ctorName`
     - The names of inputs `inputNames` (arguments to the checker, i.e. all arguments to the inductive relation) -/
-def getCheckerScheduleForInductiveConstructor (inductiveName : Name) (ctorName : Name) (inputNames : List Name) (localCtx : LocalContext) (recFnName : Name := `aux_dec) : UnifyM Schedule :=
-  getScheduleForInductiveRelationConstructor inductiveName ctorName inputNames (deriveSort := .Checker) none #[] localCtx recFnName
+def getCheckerScheduleForInductiveConstructor (inductiveName : Name) (ctorName : Name) (inputNames : List Name) (localCtx : LocalContext) (recFnName : Name := `aux_dec) : UnifyM Schedule := do
+  let result ← getScheduleForInductiveRelationConstructor inductiveName ctorName inputNames (deriveSort := .Checker) none #[] localCtx recFnName
+  return result.schedule
 
 
 /-- Produces an instance of the `DecOpt` typeclass containing the definition for the top-level derived checker.
@@ -197,7 +198,16 @@ def deriveScheduledChecker' (_args : Array Expr)
 
       -- Collect all the base / inductive checkers into two Lean list terms
       -- Base checkers are invoked when `size = 0`, inductive checkers are invoked when `size > 0`
-      let baseCheckers ← `([$nonRecursiveCheckers,*])
+      -- For checkers with recursive constructors, add a failsafe to the base case:
+      -- if no base constructor matches, return "unknown" (error) rather than "false",
+      -- since a recursive constructor might succeed at a larger size.
+      let baseCheckersWithFailsafe ← do
+        if !recursiveCheckers.isEmpty then
+          let failsafe ← `((fun (_ : $(Lean.mkIdent ``Unit)) => $failFn $genericFailure))
+          pure (nonRecursiveCheckers.push failsafe)
+        else
+          pure nonRecursiveCheckers
+      let baseCheckers ← `([$baseCheckersWithFailsafe,*])
       let inductiveCheckers ← `([$nonRecursiveCheckers,*, $recursiveCheckers,*])
 
       return (baseCheckers, inductiveCheckers, Lean.mkIdent <$> freshUnknowns, localCtx))

@@ -85,6 +85,13 @@ instance {α : Type} {a : α} [Repr α] [ArbitraryFueled α] [DecidableEq α] : 
       return b
 
 deriving instance DecidableEq for PathSet
+
+
+set_option specimen.autoDeriveDeps true in
+set_option specimen.multiOutput true in
+#time derive_mutual
+  (fun a v t => ∃ (ex : (CedarExpr × PathSet)), Cedar.HasType a v ex t)
+
 --------------------------------------------------
 -- Checker & Generator for `RecordExpr` relation
 --------------------------------------------------

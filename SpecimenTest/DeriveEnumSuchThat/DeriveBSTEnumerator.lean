@@ -8,6 +8,13 @@ import SpecimenTest.DeriveArbitrarySuchThat.DeriveBSTGenerator
 
 set_option guard_msgs.diff true
 
+set_option specimen.autoDeriveDeps true
+set_option specimen.multiOutput true
+
+derive_mutual enumerator
+  (fun lo hi => ∃ (t : BinaryTree), BST lo hi t)
+
+
 #guard_msgs(drop info) in
 derive_enumerator (fun lo hi => ∃ (x : Nat), Between lo x hi)
 

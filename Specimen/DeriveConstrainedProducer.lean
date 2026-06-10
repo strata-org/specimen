@@ -13,10 +13,12 @@ import Specimen.Debug
 import Plausible.Arbitrary
 
 import Lean.Elab.Command
+import ProofWidgets.Component.HtmlDisplay
+
 import Lean.Meta.Basic
 
 open Lean Elab Command Meta Term Parser
-open Idents Schedules
+open Idents Schedules ProofWidgets
 
 
 ----------------------------------------------------------------------------------------------------------------------------------
@@ -239,9 +241,7 @@ def getScheduleSort (conclusion : HypothesisExpr)
   | .Theorem => return (.TheoremSchedule conclusion (typeClassUsed := true))
   | _ => do
     let outputValues ← outputVars.mapM UnifyM.evaluateUnknown
-    let producerSort :=
-      if let .Enumerator := deriveSort then ProducerSort.Enumerator
-      else ProducerSort.Generator
+    let producerSort := convertDeriveSortToProducerSort deriveSort
     let conclusion ← do
       if returnOption then
         pure outputValues
@@ -266,7 +266,7 @@ def getScheduleSort (conclusion : HypothesisExpr)
 def linearizeAndFlatten
   (hypotheses : Array Expr) (conclusion : Expr) (outputIndices : List Nat) (localCtx : LocalContext) :
   UnifyM (Array Expr × Expr × List (Name × Expr) × LocalContext) := do
-  -- Find all sub-terms which are non-trivial function applications
+  -- Phase 1: flatten function calls into fresh unknowns with equality hypotheses
   let funcAppExprs ← collectUnmatchableProperSubterms conclusion
   trace[plausible.deriving.arbitrary] m!"Unmatchable exprs: {funcAppExprs} In conclusion: {conclusion}"
   withLCtx' localCtx do
@@ -301,7 +301,7 @@ def linearizeAndFlatten
     let functionsNewTypedVars := freshUnknownsAndTypes
     let functionsNewHyps := additionalHyps
 
-    -- Count variable occurrences to find nonlinear patterns
+    -- Phase 2: linearize repeated variables — each extra occurrence gets a fresh unknown + equality
     let varOccurrences := collectFVarOccurrences conclusion outputIndices
 
     trace[plausible.deriving.arbitrary] m!"varOccurences: {repr varOccurrences.toList} \n expr: {conclusion} \n outputIndices {outputIndices}"
@@ -350,29 +350,6 @@ def linearizeAndFlatten
     )
   )
 
-structure ScheduleScore where
-  checks : Nat
-  length : Nat
-  unconstrained : Nat
-  deriving Ord, Repr
-
-def scheduleStepsScore (schedule : List ScheduleStep) : ScheduleScore :=
-  let steps := schedule
-  Id.run do
-    let mut checks := 0
-    let mut length := 0
-    let mut unconstrained := 0
-    for step in steps do
-      length := length + 1
-      match step with
-      | .Check .. => checks := checks + 1
-      | .Unconstrained .. => unconstrained := unconstrained + 1
-      | _ => ()
-    ⟨checks, length, unconstrained⟩
-
-instance : LT ScheduleScore := ltOfOrd
-
-def scheduleLT (a b : List ScheduleStep) := scheduleStepsScore a < scheduleStepsScore b
 
 /-- Unifies each argument in the conclusion of an inductive relation with the top-level arguments to the relation
     (using the unification algorithm from Generating Good Generations),
@@ -391,11 +368,17 @@ def scheduleLT (a b : List ScheduleStep) := scheduleStepsScore a < scheduleSteps
     - An array of unknowns (`unknownsArray`), which are provided to the unification algorithm
       + This array should be non-empty if `deriveSort = .Generator` or `.Enumerator`, and empty otherwise
       + Note: when `deriveSort == .Generator / .Enumerator`, it is the caller's responsibility to ensure that
-        `unknowns == inputNames ∪ { outputName }`, i.e. `unknowns` contains all args to the inductive relation
-        listed in order, which coincides with `inputNames ∪ { outputName }` -/
+        `unknowns == inputNames ∪ outputNames`, i.e. `unknowns` contains all args to the inductive relation
+        listed in order, which coincides with `inputNames ∪ outputNames` -/
+structure ScheduleResult where
+  schedule : Schedule
+  schedulesConsidered : Nat
+  score : ScheduleScore
+  deriving Repr
+
 def getScheduleForInductiveRelationConstructor
   (inductiveName : Name) (ctorName : Name) (inputNames : List Name)
-  (deriveSort : DeriveSort) (outputNameTypeOption : Option (List (Name × Expr × Nat))) (unknownsArray : Array Unknown) (localCtx : LocalContext) (recFnName : Name := defaultRecFnName deriveSort) : UnifyM Schedule := do
+  (deriveSort : DeriveSort) (outputNameTypeOption : Option (List (Name × Expr × Nat))) (unknownsArray : Array Unknown) (localCtx : LocalContext) (recFnName : Name := defaultRecFnName deriveSort) : UnifyM ScheduleResult := do
   trace[plausible.deriving.arbitrary] "Schedule requested for inductive {inductiveName}'s constructor, {ctorName} with inputs: {inputNames} and variables: {unknownsArray}"
 
   let ctorInfo ← getConstInfoCtor ctorName
@@ -530,7 +513,7 @@ def getScheduleForInductiveRelationConstructor
       trace[plausible.deriving.arbitrary] m!"Updated ForAll Vars: {repr updatedForAllVars}"
       trace[plausible.deriving.arbitrary] m!"Fixed Vars: {repr fixedVars}"
 
-      -- Compute all possible checker schedules for this constructor
+      -- Enumerate candidate schedules and select the best by score (checks < length < unconstrained)
       let multiOutput := Lean.Option.get (← getOptions) specimen.multiOutput
       let possibleSchedules := possibleSchedules
         (vars := updatedForAllVars)
@@ -546,13 +529,14 @@ def getScheduleForInductiveRelationConstructor
       | .lnil => throwError m!"Unable to compute any possible schedules"
       | .lcons fstSchdM rest =>
 
+      let searchStart ← IO.monoNanosNow
       let (fstSchd, countSeen) ← fstSchdM
 
       let mut countProcessed  := 1
       let mut bestScore := scheduleStepsScore fstSchd
       let mut bestSchedule   := fstSchd
 
-      trace[plausible.deriving.results] m!"First Schedule: {scheduleStepsToString bestSchedule} \nScore: {repr bestScore}\nSchedules Considered: {repr countSeen}\nSchedules Processed: {repr countProcessed}"
+      trace[plausible.deriving.results] m!"First Schedule: {ppScheduleSteps bestSchedule} \nScore: {repr bestScore}\nSchedules Considered: {repr countSeen}\nSchedules Processed: {repr countProcessed}"
       let limit := 200000
       for schdM in rest.get do
         let (schd, countSeen) ← schdM
@@ -561,20 +545,26 @@ def getScheduleForInductiveRelationConstructor
         if score < bestScore then
           bestSchedule := schd
           bestScore := score
-          trace[plausible.deriving.results] m!"Better Schedule: {scheduleStepsToString bestSchedule} \nScore: {repr bestScore}\nSchedules Considered: {repr countSeen}\nSchedules Processed: {repr countProcessed}"
+          trace[plausible.deriving.results] m!"Better Schedule: {ppScheduleSteps bestSchedule} \nScore: {repr bestScore}\nSchedules Considered: {repr countSeen}\nSchedules Processed: {repr countProcessed}"
         if countProcessed > limit then
           break
+      let searchEnd ← IO.monoNanosNow
 
-      trace[plausible.deriving.results] m!"Chosen Schedule: {scheduleStepsToString bestSchedule} \nScore: {repr bestScore}\nSchedules Considered: {repr countSeen}\nSchedules Processed: {repr countProcessed}"
+      trace[plausible.deriving.results] m!"Chosen Schedule: {ppScheduleSteps bestSchedule} \nScore: {repr bestScore}\nSchedules Considered: {repr countSeen}\nSchedules Processed: {repr countProcessed}"
+      trace[plausible.deriving.results] m!"  Search time: {(searchEnd - searchStart) / 1000000}ms"
 
       -- Update the best schedule with the result of unification
+      let unifyStart ← IO.monoNanosNow
       let updatedBestSchedule ← updateScheduleSteps bestSchedule
+      let unifyEnd ← IO.monoNanosNow
+      trace[plausible.deriving.results] m!"  Unify time: {(unifyEnd - unifyStart) / 1000000}ms"
       let finalState ← get
 
       -- Takes the `patterns` and `equalities` fields from `UnifyState` (created after
       -- the conclusion of a constructor has been unified with the top-level arguments to the inductive relation),
       -- convert them to the appropriate `ScheduleStep`s, and prepends them to the `naiveSchedule`
-      pure $ addConclusionPatternsAndEqualitiesToSchedule finalState.patterns finalState.equalities (updatedBestSchedule, scheduleSort))
+      let finalSchedule := addConclusionPatternsAndEqualitiesToSchedule finalState.patterns finalState.equalities (updatedBestSchedule, scheduleSort)
+      pure { schedule := finalSchedule, schedulesConsidered := countProcessed, score := bestScore })
   )
 
 
@@ -593,7 +583,7 @@ def getScheduleForInductiveRelationConstructor
         listed in order, which coincides with `inputNames ∪ outputNames` -/
 def getProducerScheduleForInductiveConstructor
   (inductiveName : Name) (ctorName : Name) (outputNamesTypesIndices : List (Name × Expr × Nat)) (inputNames : List Name)
-  (unknowns : Array Unknown) (deriveSort : DeriveSort) (localCtx : LocalContext) (recFnName : Name := defaultRecFnName deriveSort) : UnifyM Schedule :=
+  (unknowns : Array Unknown) (deriveSort : DeriveSort) (localCtx : LocalContext) (recFnName : Name := defaultRecFnName deriveSort) : UnifyM ScheduleResult :=
   getScheduleForInductiveRelationConstructor inductiveName ctorName inputNames deriveSort (some outputNamesTypesIndices) unknowns localCtx recFnName
 
 
@@ -618,6 +608,7 @@ def deriveConstrainedProducer
   let inductiveName := constrainingInductive
 
   -- Find the indices of the output variables in the inductive application.
+  -- Identify which argument positions are outputs (to be generated)
   let outputFVars := outputVars.map Expr.fvarId!
   let mut outputIdxs : Array Nat := #[]
   for i in [:constrArgs.size] do
@@ -650,17 +641,23 @@ def deriveConstrainedProducer
   let argNamesTypes := argNames.zip argTypes
 
   -- The output type for code generation — for multiple outputs, use a right-nested product type
+  -- Build the output product type (e.g., α × β for two outputs)
   let outputType ← tupleOfListM (throwError "no output types")
-    (fun t rest => mkAppM ``Prod #[t, rest]) outputTypes.toList
+    (fun t rest => do
+      let u ← Meta.mkFreshLevelMVar
+      let v ← Meta.mkFreshLevelMVar
+      pure (Lean.mkApp2 (Lean.mkConst ``Prod [u, v]) t rest)) outputTypes.toList
 
   -- Add the name & type of each argument of the inductive relation to the `LocalContext`
   -- Then, derive `baseProducers` & `inductiveProducers` (the code for the sub-producers
   -- that are invoked when `size = 0` and `size > 0` respectively),
   -- and obtain freshened versions of the output variables / arguments (`freshenedOutputNames`, `freshArgIdents`)
   let (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, localCtx) ←
+  -- Freshen argument names to avoid capture, then derive schedules per constructor
     withLocalDeclsDND argNamesTypes (fun _ => do
       let mut localCtx ← getLCtx
       let mut freshUnknowns := #[]
+      -- For each constructor: derive schedule → compile to MExp → emit TSyntax term
 
       -- For each arg to the inductive relation (as specified to the user),
       -- create a fresh name (to avoid clashing with names that may appear in constructors
@@ -701,12 +698,13 @@ def deriveConstrainedProducer
 
       let mut requiredInstances := #[]
       for ctorName in inductiveVal.ctors do
-        let scheduleOption ← (UnifyM.runInMetaM
+        let resultOption ← (UnifyM.runInMetaM
           (getProducerScheduleForInductiveConstructor inductiveName ctorName outputNamesTypesIndices
             freshenedInputNamesExcludingOutput freshUnknowns deriveSort localCtx freshRecFnName)
             emptyUnifyState)
-        match scheduleOption with
-        | some schedule =>
+        match resultOption with
+        | some result =>
+          let schedule := result.schedule
           -- Obtain a sub-producer for this constructor, along with an array of all typeclass instances that need to be defined beforehand.
           -- (Under the hood, we compile the schedule to an `MExp`, then compile the `MExp` to a Lean term containing the code for the sub-producer.
           -- This is all done in a state monad: when we detect that a new instance is required, we append it to an array of `TSyntax term`s
@@ -759,16 +757,9 @@ def deriveConstrainedProducer
       return (baseProducers, inductiveProducers, freshenedOutputNames, Lean.mkIdent <$> freshUnknowns, localCtx))
 
   -- Create an instance of the appropriate producer typeclass
-  mkConstrainedProducerTypeClassInstance
-    baseProducers
-    inductiveProducers
-    constrainingInductive
-    inductiveLevels
-    freshArgIdents
-    freshenedOutputNames.toList
-    outputTypes.toList
-    producerSort
-    localCtx
+  mkConstrainedProducerTypeClassInstance baseProducers inductiveProducers
+    constrainingInductive inductiveLevels freshArgIdents freshenedOutputNames.toList
+    outputTypes.toList producerSort localCtx
 
 /-- Compiles an InductiveSchedule from the memo into (def, instance) commands.
     Uses the pre-derived schedules directly (no re-derivation).
@@ -779,23 +770,31 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
   let key := indSched.key
   let indInfo ← getConstInfoInduct key.inductiveName
   let indLevels := indInfo.levelParams.map (Level.param ·)
-  let indTypeComponents ← getComponentsOfArrowType indInfo.type
-  let argTypes := indTypeComponents.pop
-  -- Use the SAME freshened names that derivation used (stored in indSched.argNames)
+  -- Get arg types using getCorrectTypes (handles dependent types like Eq's α correctly)
+  let numArgs := (← getComponentsOfArrowType indInfo.type).size - 1
+  let argNames := (List.range numArgs).map (fun i => indSched.argNames.getD i (Name.mkSimple s!"arg_{i}"))
   let argNameTypes : Array (Name × Expr) := Id.run do
     let mut r := #[]
-    for i in [:argTypes.size] do
-      let name := indSched.argNames.getD i (Name.mkSimple s!"arg_{i}")
-      r := r.push (name, argTypes[i]!)
+    for i in [:numArgs] do
+      r := r.push (argNames.getD i `x, mkSort .zero)  -- placeholder types
     r
-  withLocalDeclsDND argNameTypes fun _allFVars => do
+  -- Create fvars with placeholder types, then fix with getCorrectTypes
+  withLocalDeclsDND argNameTypes fun allFVars => do
+  let argTypesLive ← getCorrectTypes allFVars key.inductiveName indLevels
+  do
     -- Filter out Sort-typed positions from outputs (those are type params, handled by instance binders)
     let outputIndicesNonSort := key.outputIndices.filter (fun i =>
-      match argTypes[i]? with | some ty => !ty.isSort | none => true)
-    let outputTypes := outputIndicesNonSort.filterMap (fun i => argTypes[i]?)
+      match argTypesLive[i]? with | some ty => !ty.isSort | none => true)
+    let outputTypes := outputIndicesNonSort.filterMap (fun i => argTypesLive[i]?)
     -- Compile each constructor schedule to a sub-producer term
-    let outputType ← tupleOfListM (throwError "no output types")
-      (fun t rest => mkAppM ``Prod #[t, rest]) outputTypes
+    let outputType ← if key.deriveSort == .Checker then
+        pure (Lean.mkConst ``Bool)
+      else
+        tupleOfListM (throwError "no output types")
+          (fun t rest => do
+            let u ← Meta.mkFreshLevelMVar
+            let v ← Meta.mkFreshLevelMVar
+            pure (Lean.mkApp2 (Lean.mkConst ``Prod [u, v]) t rest)) outputTypes
     let producerSort := convertDeriveSortToProducerSort key.deriveSort
     let freshFuelPrimeName := `fuel'
     let freshSizePrimeName := `size'
@@ -814,16 +813,24 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
         | other => other
     for (_, schedule) in indSched.baseSchedules do
       let (steps, sort) := schedule
-      let rewrittenSchedule := (rewriteSchedule steps, sort)
+      let rewrittenSteps := rewriteSchedule steps
+      let rewrittenSchedule := (rewrittenSteps, sort)
       let (subProducer, _) ← StateT.run (s := #[]) (do
         let mexp ← MExp.scheduleToMExp rewrittenSchedule (.MId `size) (.MId `initSize) outputType
           (fuelPrimeName := freshFuelPrimeName) (sizePrimeName := freshSizePrimeName)
         MExp.mexpToTSyntax mexp key.deriveSort)
-      let term ← match key.deriveSort with
-        | .Generator => `( (1, $subProducer) )
-        | .Enumerator => pure subProducer
-        | .Checker | .Theorem => `(fun (_ : Unit) => $subProducer)
-      nonRecursiveProducers := nonRecursiveProducers.push term
+      if scheduleUsesMutualCall rewrittenSteps then
+        let term ← match key.deriveSort with
+          | .Generator => `( ($(Lean.mkIdent ``Nat.succ) $freshSize', $subProducer) )
+          | .Enumerator => pure subProducer
+          | .Checker | .Theorem => `(fun (_ : Unit) => $subProducer)
+        recursiveProducers := recursiveProducers.push term
+      else
+        let term ← match key.deriveSort with
+          | .Generator => `( (1, $subProducer) )
+          | .Enumerator => pure subProducer
+          | .Checker | .Theorem => `(fun (_ : Unit) => $subProducer)
+        nonRecursiveProducers := nonRecursiveProducers.push term
     for (_, schedule) in indSched.recSchedules do
       let (steps, sort) := schedule
       let rewrittenSchedule := (rewriteSchedule steps, sort)
@@ -836,13 +843,30 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
         | .Enumerator => pure subProducer
         | .Checker | .Theorem => `(fun (_ : Unit) => $subProducer)
       recursiveProducers := recursiveProducers.push term
-    let baseProducers ← `([$nonRecursiveProducers,*])
-    let inductiveProducers ← `([$nonRecursiveProducers,*, $recursiveProducers,*])
-    let freshArgIdents : TSyntaxArray `term := argNameTypes.map (fun (n, _) => Lean.mkIdent n)
-    let freshenedOutputNames := outputIndicesNonSort.filterMap (fun i => argNameTypes[i]?.map (·.1))
+    -- For checkers with recursive constructors, add a failsafe to the base case:
+    -- if no base constructor matches, return "unknown" (error) rather than "false",
+    -- since a recursive constructor might succeed at a larger size.
+    let baseProducersWithFailsafe ← do
+      if (key.deriveSort == .Checker || key.deriveSort == .Theorem) && !recursiveProducers.isEmpty then
+        let failsafe ← `((fun (_ : Unit) => $failFn $genericFailure))
+        pure (nonRecursiveProducers.push failsafe)
+      else
+        pure nonRecursiveProducers
+    let baseProducers ← `([$baseProducersWithFailsafe,*])
+    let allProducers := nonRecursiveProducers ++ recursiveProducers
+    let inductiveProducers ← `([$allProducers,*])
+    let argNames := (List.range allFVars.size).map (fun i => indSched.argNames.getD i (Name.mkSimple s!"arg_{i}"))
+    let freshArgIdents : TSyntaxArray `term := argNames.toArray.map (fun n => Lean.mkIdent n)
+    let freshenedOutputNames := outputIndicesNonSort.filterMap (fun i => argNames[i]?)
+    -- Compute paramInfo using the live fvars (handles dependent types correctly)
+    let liveTypes ← getCorrectTypes allFVars key.inductiveName indLevels
+    let liveTypesSyntax ← liveTypes.mapM (fun ty => PrettyPrinter.delab ty)
+    let mut paramInfo : Array (Name × Expr × TSyntax `term) := #[]
+    for i in [:liveTypes.size] do
+      paramInfo := paramInfo.push (argNames.getD i `x, liveTypes[i]!, liveTypesSyntax[i]!)
     mkConstrainedProducerMutualPieces baseProducers inductiveProducers
       key.inductiveName indLevels freshArgIdents freshenedOutputNames
-      outputTypes producerSort (← getLCtx) globalName key.deriveSort
+      outputTypes producerSort (← getLCtx) globalName key.deriveSort paramInfo
 
 /-- Recursively derives the best schedule for a SpecKey, populating the memo with
     all transitive dependencies. Returns the score for this spec.
@@ -865,8 +889,31 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
   | some (.failed _) => return { unconstrained := 1 }  -- user must provide; assume partial quality
   | none => pure ()
 
-  -- 2. Check if instance already exists — skip derivation if so
-  -- Uses getCorrectTypes pattern: apply inductive to args one at a time for proper dependent types
+  -- 2. Non-inductive heads (e.g. LE.le, Not) — try to find an existing instance
+  unless (← isInductive key.inductiveName) do
+    -- For non-inductives, check if a Decidable instance exists (gives DecOpt via [Decidable P] : DecOpt P)
+    let hasInstance ← try
+      Meta.withNewMCtxDepth do
+        -- Build a proposition with metavar args and check Decidable
+        let info ← getConstInfo key.inductiveName
+        let mut t := .const key.inductiveName (info.levelParams.map fun _ => .zero)
+        let arity := (← getComponentsOfArrowType info.type).size - 1
+        for _ in List.range arity do
+          let argTy := (← inferType t).bindingDomain!
+          let mv ← Meta.mkFreshExprMVar (some argTy)
+          t := .app t mv
+        let result ← Meta.synthInstance? (← mkAppM ``Decidable #[t])
+        pure result.isSome
+    catch _ => pure false
+    if hasInstance then
+      let trivialSched : InductiveSchedule := { key, argNames := [], recFnName := `_, baseSchedules := [], recSchedules := [], score := {}, alreadyExists := true }
+      memo.modify (·.insert key (.done trivialSched))
+      return {}
+    else
+      memo.modify (·.insert key (.failed s!"{key.inductiveName} is not inductive and has no Decidable instance"))
+      return { unconstrained := 1 }
+
+  -- Check if instance already exists — skip derivation if so
   let indInfo ← getConstInfoInduct key.inductiveName
   let indTypeComponents ← getComponentsOfArrowType indInfo.type
   let argTypes := indTypeComponents.pop
@@ -875,6 +922,32 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
   let instanceExists ← Meta.withNewMCtxDepth do
     try
       if nonSortOutputIndices.isEmpty && key.outputIndices.length > 0 then pure true
+      else if key.deriveSort == .Checker then
+        -- For checkers: synthesize DecOpt (@ind args*) with all args as metavars
+        let indLevelsForCheck ← indInfo.levelParams.mapM (fun _ => do
+          let lv ← Meta.mkFreshLevelMVar
+          pure (.succ lv))
+        let numArgs := argTypes.size
+        let rec buildAndCheckChecker (idx : Nat) (t : Expr) (fvars : Array Expr) (instIdx : Nat) : TermElabM Bool :=
+          if idx >= numArgs then do
+            let body := mkAppN (.const key.inductiveName indLevelsForCheck) fvars
+            let ty ← mkAppM ``DecOpt #[body]
+            let result ← Meta.synthInstance? ty
+            pure result.isSome
+          else do
+            let argTy := (← inferType t).bindingDomain!
+            let name := Name.mkSimple s!"arg_{idx}"
+            let bi := if argTy.isSort then BinderInfo.implicit else .default
+            withLocalDecl name bi argTy fun fv => do
+              if argTy.isSort then
+                let enumTy ← mkAppM ``Enum #[fv]
+                let decEqTy ← mkAppM ``DecidableEq #[fv]
+                withLocalDecl (Name.mkSimple s!"inst_enum_{instIdx}") .instImplicit enumTy fun _ =>
+                withLocalDecl (Name.mkSimple s!"inst_deceq_{instIdx}") .instImplicit decEqTy fun _ =>
+                  buildAndCheckChecker (idx + 1) (.app t fv) (fvars.push fv) (instIdx + 1)
+              else
+                buildAndCheckChecker (idx + 1) (.app t fv) (fvars.push fv) instIdx
+        buildAndCheckChecker 0 (.const key.inductiveName indLevelsForCheck) #[] 0
       else if nonSortOutputIndices.isEmpty then pure false
       else
         -- Build properly-typed fvars by applying the inductive one arg at a time
@@ -890,7 +963,10 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
             let outputFVars := nonSortOutputIndices.filterMap (fun i => fvars[i]?)
             let outputTypes ← outputFVars.mapM (fun e => inferType e)
             let outType ← tupleOfListM (throwError "empty")
-              (fun t' rest => mkAppM ``Prod #[t', rest]) outputTypes
+              (fun t' rest => do
+                let u ← Meta.mkFreshLevelMVar
+                let v ← Meta.mkFreshLevelMVar
+                pure (Lean.mkApp2 (Lean.mkConst ``Prod [u, v]) t' rest)) outputTypes
             withLocalDecl `x .default outType fun xFvar => do
               let mut projections : Array Expr := #[]
               let mut currentExpr := xFvar
@@ -910,7 +986,11 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
                   appArgs := appArgs.push fvars[i]!
               let body := mkAppN (.const key.inductiveName indLevelsForCheck) appArgs
               let pred ← mkLambdaFVars #[xFvar] body
-              let ty ← mkAppM ``ArbitrarySizedSuchThat #[outType, pred]
+              let tcName ← match key.deriveSort with
+                | .Generator => pure ``ArbitrarySizedSuchThat
+                | .Enumerator => pure ``EnumSizedSuchThat
+                | .Checker | .Theorem => throwError "synthInstance check: checker case should be handled above"
+              let ty ← mkAppM tcName #[outType, pred]
               let result ← Meta.synthInstance? ty
               pure result.isSome
           else do
@@ -937,12 +1017,14 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
 
   -- 3. Insert inProgress placeholder (cycle detection)
   memo.modify (·.insert key .inProgress)
+  let startTime ← IO.monoNanosNow
 
   -- 4. Derive schedules for each constructor
   let indInfo ← getConstInfoInduct key.inductiveName
   let indTypeComponents ← getComponentsOfArrowType indInfo.type
   let argTypes := indTypeComponents.pop
-  let argNames := (List.range argTypes.size).map (fun i => Name.mkSimple s!"arg_{i}")
+  let varPool := #["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"]
+  let argNames := (List.range argTypes.size).map (fun i => Name.mkSimple (varPool.getD i s!"v{i}"))
   let argNamesTypes := argNames.toArray.zip argTypes
 
 
@@ -968,17 +1050,22 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
       let mut base : List (Name × Schedule) := []
       let mut rec_ : List (Name × Schedule) := []
       let mut deps : Array ScheduleDep := #[]
+      let mut ctorStats : List (Name × Nat × Nat × ScheduleScore) := []
 
-      -- Per-constructor: derive schedule, collect deps, classify as base vs recursive
       for ctorName in indInfo.ctors do
         try
-          let scheduleOption ← (UnifyM.runInMetaM
+          let ctorStart ← IO.monoNanosNow
+          let resultOption ← (UnifyM.runInMetaM
             (getProducerScheduleForInductiveConstructor key.inductiveName ctorName
               freshenedOutputNamesTypesIndices freshenedInputNames freshUnknowns
               key.deriveSort localCtx freshRecFnName)
               emptyUnifyState)
-          match scheduleOption with
-          | some (scheduleSteps, scheduleSort) =>
+          let ctorEnd ← IO.monoNanosNow
+          let ctorElapsed := (ctorEnd - ctorStart) / 1000
+          match resultOption with
+          | some result =>
+            let (scheduleSteps, scheduleSort) := result.schedule
+            ctorStats := ctorStats ++ [(ctorName, ctorElapsed, result.schedulesConsidered, result.score)]
             let rewrittenSteps := scheduleRewriter scheduleSteps
             let schedule := (rewrittenSteps, scheduleSort)
             let ctorDeps := collectNonRecDeps rewrittenSteps
@@ -991,20 +1078,21 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
             else
               base := base ++ [(ctorName, schedule)]
           | none => pure ()
-        catch _ => pure ()  -- skip constructors that fail to schedule
-      return (base, rec_, deps, freshUnknowns.toList, freshRecFnName)
+        catch _ => pure ()
+      return (base, rec_, deps, freshUnknowns.toList, freshRecFnName, ctorStats)
 
-    -- Unpack results from the withLocalDeclsDND scope
-    let (base, rec_, deps, fNames, rFnName) := results
+    let (base, rec_, deps, fNames, (rFnName, ctorStats)) := results
     baseSchedules := base
     recSchedules := rec_
     allDeps := deps
     -- 5. Recursively derive deps
     for dep in deps do
-      if dep.kind == .relation then
+      if dep.kind == .relation || dep.kind == .checker then
         let depKey : SpecKey := { inductiveName := dep.inductiveName, outputIndices := dep.outputIndices, deriveSort := dep.deriveSort }
         let _ ← deriveBestInductiveSchedule depKey memo scheduleRewriter
     -- 6. Store result
+    let endTime ← IO.monoNanosNow
+    let elapsed := (endTime - startTime) / 1000
     let score : SpecScore := { checks := 0, unconstrained := 0, backtracking := 0 }
     let indSched : InductiveSchedule := {
       key := key
@@ -1013,11 +1101,14 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
       baseSchedules := base
       recSchedules := rec_
       score := score
+      derivationTimeUs := elapsed
+      ctorStats := ctorStats
     }
     memo.modify (·.insert key (.done indSched))
     return score
-  catch _ =>
-    memo.modify (·.insert key (.failed s!"Failed to derive schedules for {key.inductiveName}"))
+  catch e =>
+    let msg ← e.toMessageData.toString
+    memo.modify (·.insert key (.failed s!"Failed to derive schedules for {key.inductiveName}: {msg}"))
     return { unconstrained := 1 }
 
 /-- Derives schedules for a spec and returns the dependencies (Source.NonRec calls)
@@ -1029,7 +1120,6 @@ def collectSpecDependencies
   (scheduleRewriter : List ScheduleStep → List ScheduleStep := id)
   (recFnNameOverride : Option Name := none) :
   TermElabM (Array ScheduleDep) := do
-
   let inductiveName := constrainingInductive
   let outputFVars := outputVars.map Expr.fvarId!
   let mut outputIdxs : Array Nat := #[]
@@ -1048,7 +1138,6 @@ def collectSpecDependencies
       else if let some outIdx := outputIdxs.findIdx? (· == i) then
         outputVars[outIdx]!.fvarId!.getUserName
       else throwError m!"{ident} is expected to be a variable.")
-    -- Freshen arg names, then derive schedule per constructor to collect deps
   let argNamesTypes := argNames.zip argTypes
   withLocalDeclsDND argNamesTypes (fun _ => do
     let mut localCtx ← getLCtx
@@ -1063,16 +1152,16 @@ def collectSpecDependencies
     let outputNamesTypesIndices : List (Name × Expr × Nat) :=
       (List.range outputIdxs.size).map (fun i =>
         (freshenedOutputNames[i]!, outputTypes[i]!, outputIdxs[i]!))
-    -- Accumulate all unique non-recursive deps across constructors
     let freshRecFnName := recFnNameOverride.getD (localCtx.getUnusedName `aux_arb)
     let mut allDeps : Array ScheduleDep := #[]
     for ctorName in inductiveVal.ctors do
-      let scheduleOption ← (UnifyM.runInMetaM
+      let resultOption ← (UnifyM.runInMetaM
         (getProducerScheduleForInductiveConstructor inductiveName ctorName outputNamesTypesIndices
           freshenedInputNamesExcludingOutput freshUnknowns deriveSort localCtx freshRecFnName)
           emptyUnifyState)
-      match scheduleOption with
-      | some (scheduleSteps, _) =>
+      match resultOption with
+      | some result =>
+        let (scheduleSteps, _) := result.schedule
         let rewrittenSteps := scheduleRewriter scheduleSteps
         let deps := collectNonRecDeps rewrittenSteps
         for dep in deps do
@@ -1092,8 +1181,8 @@ def deriveConstrainedProducerParts
   (recFnNameOverride : Option Name := none) :
   TermElabM (TSyntax `term × TSyntax `term × Array Name × TSyntaxArray `term × Array Expr × LocalContext × Name × List Level × ProducerSort) := do
   let producerSort := convertDeriveSortToProducerSort deriveSort
-  let inductiveName := constrainingInductive
   -- Identify which argument positions are outputs (to be generated)
+  let inductiveName := constrainingInductive
   let outputFVars := outputVars.map Expr.fvarId!
   let mut outputIdxs : Array Nat := #[]
   for i in [:constrArgs.size] do
@@ -1115,9 +1204,12 @@ def deriveConstrainedProducerParts
   let argNamesTypes := argNames.zip argTypes
   -- Build the output product type (e.g., α × β for two outputs)
   let _outputType ← tupleOfListM (throwError "no output types")
-    (fun t rest => mkAppM ``Prod #[t, rest]) outputTypes.toList
-  -- Freshen argument names to avoid capture, then derive schedules per constructor
+    (fun t rest => do
+      let u ← Meta.mkFreshLevelMVar
+      let v ← Meta.mkFreshLevelMVar
+      pure (Lean.mkApp2 (Lean.mkConst ``Prod [u, v]) t rest)) outputTypes.toList
   let (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, localCtx) ←
+  -- Freshen argument names to avoid capture, then derive schedules per constructor
     withLocalDeclsDND argNamesTypes (fun _ => do
       let mut localCtx ← getLCtx
       let mut freshUnknowns := #[]
@@ -1140,12 +1232,13 @@ def deriveConstrainedProducerParts
         | .Generator => `aux_arb | .Enumerator => `aux_enum | _ => `aux_dec))
       -- For each constructor: derive a schedule, compile to syntax
       for ctorName in inductiveVal.ctors do
-        let scheduleOption ← (UnifyM.runInMetaM
+        let resultOption ← (UnifyM.runInMetaM
           (getProducerScheduleForInductiveConstructor inductiveName ctorName outputNamesTypesIndices
             freshenedInputNamesExcludingOutput freshUnknowns deriveSort localCtx freshRecFnName)
             emptyUnifyState)
-        match scheduleOption with
-        | some (scheduleSteps, scheduleSort) =>
+        match resultOption with
+        | some result =>
+          let (scheduleSteps, scheduleSort) := result.schedule
           let rewrittenSteps := scheduleRewriter scheduleSteps
           let schedule := (rewrittenSteps, scheduleSort)
           let (subProducer, requiredInsts) ← StateT.run (s := #[]) (do
@@ -1394,8 +1487,8 @@ def elabDeriveMutual : CommandElab := fun stx => do
             if kw.isOfKind `null && kw.getArgs.isEmpty then
               (.Generator, ⟨tm⟩)
             else
-              let sort := if kw.getArgs.any (fun a => a.isIdent && a.getId == `checker) then .Checker
-                else if kw.getArgs.any (fun a => a.isIdent && a.getId == `enumerator) then .Enumerator
+              let sort := if kw.getArgs.any (fun a => a.getKind == `token.checker) then .Checker
+                else if kw.getArgs.any (fun a => a.getKind == `token.enumerator) then .Enumerator
                 else .Generator
               (sort, ⟨tm⟩)
           else
@@ -1434,8 +1527,8 @@ def elabDeriveMutual : CommandElab := fun stx => do
           usedKeys := collectUsedDeps key finalMemo usedKeys
         -- Add all used deps to specMeta (so they're included in the mutual block)
         for key in usedKeys.toList do
-          let inBlock := specMeta.any fun (sIndName, sOutIdxs, _, _) =>
-            sIndName == key.inductiveName && sOutIdxs == key.outputIndices
+          let inBlock := specMeta.any fun (sIndName, sOutIdxs, _, sDs) =>
+            sIndName == key.inductiveName && sOutIdxs == key.outputIndices && sDs == key.deriveSort
           if !inBlock then
             let uid ← liftTermElabM (Lean.Core.mkFreshUserName `specimen_mutual)
             let globalName := Name.mkSimple s!"{uid}_{key.inductiveName.toString.replace "." "_"}_auto"
@@ -1443,7 +1536,367 @@ def elabDeriveMutual : CommandElab := fun stx => do
         -- Use SCC-based compilation from memo
         -- Step 3: SCC decomposition and compilation
         let components := computeSpecSCC usedKeys.toList finalMemo
-        logInfo m!"derive_mutual: {usedKeys.size} specs in {components.length} components"
+        -- Print dependency graph + emission order as rich HTML
+        let getNumArgs (k : SpecKey) : CommandElabM Nat := liftTermElabM do
+          try pure ((← getComponentsOfArrowType (← getConstInfoInduct k.inductiveName).type).size - 1)
+          catch _ => pure k.outputIndices.length
+        let mut totalEdges : Nat := 0
+        for k in usedKeys.toList do
+          match finalMemo[k]? with
+          | some (.done indSched) =>
+            let allScheds := indSched.baseSchedules ++ indSched.recSchedules
+            let deps := allScheds.flatMap (fun (_, (steps, _)) => collectNonRecDeps steps)
+            let relDeps := deps.filter (fun d => d.kind == .relation || d.kind == .checker)
+            let depKeys := relDeps.map (fun d => SpecKey.mk d.inductiveName d.outputIndices d.deriveSort)
+              |>.filter (usedKeys.contains ·) |>.eraseDups
+            totalEdges := totalEdges + depKeys.length
+          | _ => pure ()
+        -- Build HTML output using ProofWidgets (controlled by specimen.richOutput)
+        let richOutput := Lean.Option.get (← getOptions) specimen.richOutput
+        let mkSpan (style : Json) (text : String) : Html :=
+          .element "span" #[("style", style)] #[.text text]
+        let headerStyle := json% {"fontWeight": "bold", "fontSize": "1.2em", "color": "#4fc1ff"}
+        let srcStyle := json% {"color": "#dcdcaa", "fontWeight": "bold"}
+        let dstStyle := json% {"color": "#9cdcfe"}
+        let reqStyle := json% {"color": "#c586c0", "fontStyle": "italic"}
+        let ctorStyle := json% {"color": "#4ec9b0"}
+        let schedStyle := json% {"color": "#ce9178", "fontSize": "0.9em", "whiteSpace": "pre", "fontFamily": "var(--vscode-editor-font-family, monospace)"}
+        let singletonStyle := json% {"color": "#b5cea8"}
+        let mutualStyle := json% {"color": "#ce9178", "fontWeight": "bold"}
+        let scoreStyle := json% {"color": "#808080", "fontSize": "0.9em"}
+        let mut htmlChildren : Array Html := #[]
+        -- Title
+        htmlChildren := htmlChildren.push (.element "div" #[("style", json% {"marginBottom": "12px"})] #[
+          mkSpan headerStyle s!"⚙ derive_mutual — {usedKeys.size} specs, {components.length} components"
+        ])
+        -- Merged emission order + constructor schedules (topological)
+        -- Compute score color: green (good) through yellow to red (bad) via HSL interpolation
+        -- Badness ∈ [0, 1] mapped to hue 120° (green) → 0° (red)
+        let scoreToColor (score : ScheduleScore) : String :=
+          let badness : Float :=
+            if score.length == 0 then 0.0
+            else
+              let checkRatio := Float.ofNat score.checks / Float.ofNat score.length
+              let uncRatio := Float.ofNat score.unconstrained / Float.ofNat score.length
+              let lengthPenalty := min 1.0 (Float.ofNat score.length / 12.0)
+              min 1.0 (checkRatio * 2.0 + uncRatio * 0.5 + lengthPenalty * 0.3)
+          let hue := (1.0 - badness) * 120.0
+          s!"hsl({Float.toString hue}, 70%, 60%)"
+        -- Aggregate spec-level color: blend of worst and mean constructor badness
+        let specColor (indSched : InductiveSchedule) : String :=
+          let allScheds := indSched.baseSchedules ++ indSched.recSchedules
+          if allScheds.isEmpty then "hsl(120, 70%, 60%)"
+          else
+            let scores := allScheds.map (fun (_, (steps, _)) => scheduleStepsScore steps)
+            let badnesses := scores.map fun score =>
+              if score.length == 0 then 0.0
+              else
+                let checkRatio := Float.ofNat score.checks / Float.ofNat score.length
+                let uncRatio := Float.ofNat score.unconstrained / Float.ofNat score.length
+                let lengthPenalty := min 1.0 (Float.ofNat score.length / 12.0)
+                min 1.0 (checkRatio * 2.0 + uncRatio * 0.5 + lengthPenalty * 0.3)
+            let worst := badnesses.foldl max 0.0
+            let avg := badnesses.foldl (· + ·) 0.0 / Float.ofNat badnesses.length
+            let blended := worst * 0.7 + avg * 0.3
+            let hue := (1.0 - blended) * 120.0
+            s!"hsl({Float.toString hue}, 70%, 60%)"
+        let mkCtorItems (indSched : InductiveSchedule) : Array Html := Id.run do
+          let allScheds := indSched.baseSchedules ++ indSched.recSchedules
+          let mut items : Array Html := #[]
+          for (ctorName, schedule@(steps, _)) in allScheds do
+            let isBase := indSched.baseSchedules.any (fun (n, _) => n == ctorName)
+            let tag := if isBase then "base" else "rec"
+            let tagColor := if isBase then json% {"color": "#4ec9b0"} else json% {"color": "#d7ba7d"}
+            let (ctorInfoStr, ctorColor) := match indSched.ctorStats.find? (fun (n, _, _, _) => n == ctorName) with
+              | some (_, us, count, score) =>
+                let timeStr := if us >= 1000 then s!"{us / 1000}ms" else if us > 0 then s!"{us}μs" else ""
+                let countStr := if count > 1 then s!"{count} considered" else ""
+                let scoreStr := s!"{score.checks}chk/{score.length}steps/{score.unconstrained}unc"
+                let parts := [timeStr, countStr, scoreStr].filter (· != "")
+                (s!" ({String.intercalate ", " parts})", scoreToColor score)
+              | none =>
+                let fallbackScore := scheduleStepsScore steps
+                ("", scoreToColor fallbackScore)
+            let ctorNameStyle := json% {"color": $(ctorColor), "fontWeight": "bold"}
+            items := items.push (Html.element "details" #[] #[
+              .element "summary" #[("style", json% {"cursor": "pointer", "marginBottom": "2px"})] #[
+                mkSpan ctorNameStyle ctorName.getString!,
+                .text " ",
+                mkSpan tagColor s!"[{tag}]",
+                mkSpan scoreStyle ctorInfoStr
+              ],
+              .element "div" #[("style", json% {"marginLeft": "16px", "marginBottom": "6px", "padding": "4px 8px", "background": "#1a1a2e", "borderRadius": "4px", "border": "1px solid #2a2a4a", "whiteSpace": "pre", "fontFamily": "var(--vscode-editor-font-family, monospace)", "fontSize": "0.9em", "lineHeight": "1.5"})]
+                (let stepHtmls := steps.toArray.map fun step =>
+                  let stepStr := ppStep step
+                  let color := match step with
+                    | .Check _ false => "hsl(0, 70%, 60%)"
+                    | .Check (.NonRec (name, _)) true =>
+                      let depKey := SpecKey.mk name [] .Checker
+                      match finalMemo[depKey]? with
+                      | some (.done depSched) => specColor depSched
+                      | _ => "hsl(30, 70%, 60%)"
+                    | .Check _ true => "hsl(30, 70%, 60%)"
+                    | .Unconstrained _ (.NonRec (name, _)) _ =>
+                      let depKey := SpecKey.mk name [] .Generator
+                      match finalMemo[depKey]? with
+                      | some (.done depSched) => specColor depSched
+                      | _ => "hsl(60, 70%, 60%)"
+                    | .Unconstrained _ _ _ => "hsl(60, 70%, 60%)"
+                    | .SuchThat vs (.NonRec (name, args)) ps =>
+                      let outNames := vs.map Prod.fst
+                      let outIdxs := computeOutputIndices args outNames
+                      let ds := match ps with | .Generator => DeriveSort.Generator | .Enumerator => .Enumerator
+                      let depKey := SpecKey.mk name outIdxs ds
+                      match finalMemo[depKey]? with
+                      | some (.done depSched) => specColor depSched
+                      | _ => "hsl(90, 70%, 60%)"
+                    | .SuchThat _ (.Rec ..) _ => "hsl(200, 50%, 60%)"
+                    | .SuchThat _ (.MutRec ..) _ => "hsl(200, 50%, 60%)"
+                    | .Match .. => "hsl(120, 40%, 60%)"
+                  Html.element "div" #[] #[mkSpan (json% {"color": $(color)}) stepStr]
+                let (_, sort) := schedule
+                let conclusionStr := match sort with
+                  | .ProducerSchedule _ conclusion =>
+                    let outputStr := match conclusion with
+                      | [e] => ppConstructorExpr e
+                      | es => s!"({String.intercalate ", " (es.map ppConstructorExpr)})"
+                    s!"return {outputStr}"
+                  | .CheckerSchedule => "return ok"
+                  | .TheoremSchedule hyp _ => s!"check_conclusion {ppHypothesisExpr hyp}"
+                let conclusionHtml := Html.element "div" #[] #[mkSpan (json% {"color": "hsl(120, 70%, 70%)"}) conclusionStr]
+                stepHtmls.push conclusionHtml)
+            ])
+          items
+        let mut orderItems : Array Html := #[]
+        for comp in components do
+          if comp.length > 1 then
+            let mut mutualItems : Array Html := #[]
+            for k in comp do
+              let numArgs ← getNumArgs k
+              match finalMemo[k]? with
+              | some (.done indSched) =>
+                let timeStr := if indSched.derivationTimeUs >= 1000 then s!" {indSched.derivationTimeUs / 1000}ms"
+                  else if indSched.derivationTimeUs > 0 then s!" {indSched.derivationTimeUs}μs" else ""
+                let nCtors := indSched.baseSchedules.length + indSched.recSchedules.length
+                let ctorItems := mkCtorItems indSched
+                let specNameStyle := json% {"color": $(specColor indSched), "fontWeight": "bold"}
+                mutualItems := mutualItems.push (Html.element "details" #[] #[
+                  .element "summary" #[("style", json% {"cursor": "pointer", "marginBottom": "2px"})] #[
+                    mkSpan specNameStyle (k.prettyPrint numArgs),
+                    mkSpan scoreStyle s!" ({nCtors} ctors{timeStr})"
+                  ],
+                  .element "div" #[("style", json% {"marginLeft": "12px"})] ctorItems
+                ])
+              | _ => pure ()
+            orderItems := orderItems.push (.element "div" #[("style", json% {"marginBottom": "6px", "paddingLeft": "4px", "borderLeft": "3px solid #ce9178"})] (#[
+              mkSpan mutualStyle s!"◆ mutual ({comp.length}):",
+              .element "br" #[] #[]
+            ] ++ mutualItems))
+          else
+            let k := comp.head!
+            let numArgs ← getNumArgs k
+            match finalMemo[k]? with
+            | some (.done indSched) =>
+              if indSched.alreadyExists then
+                orderItems := orderItems.push (.element "div" #[("style", json% {"marginBottom": "2px"})] #[
+                  .text "● ", mkSpan singletonStyle (k.prettyPrint numArgs),
+                  mkSpan scoreStyle " (pre-existing)"
+                ])
+              else
+                let timeStr := if indSched.derivationTimeUs >= 1000 then s!" {indSched.derivationTimeUs / 1000}ms"
+                  else if indSched.derivationTimeUs > 0 then s!" {indSched.derivationTimeUs}μs" else ""
+                let nCtors := indSched.baseSchedules.length + indSched.recSchedules.length
+                let ctorItems := mkCtorItems indSched
+                let specNameStyle := json% {"color": $(specColor indSched), "fontWeight": "bold"}
+                orderItems := orderItems.push (Html.element "details" #[] #[
+                  .element "summary" #[("style", json% {"cursor": "pointer", "marginBottom": "2px"})] #[
+                    .text "● ",
+                    mkSpan specNameStyle (k.prettyPrint numArgs),
+                    mkSpan scoreStyle s!" ({nCtors} ctors{timeStr})"
+                  ],
+                  .element "div" #[("style", json% {"marginLeft": "12px"})] ctorItems
+                ])
+            | _ => pure ()
+        htmlChildren := htmlChildren.push (Html.element "details" #[("open", json% true)] #[
+          .element "summary" #[("style", json% {"cursor": "pointer", "fontWeight": "bold", "color": "#569cd6", "marginBottom": "6px"})] #[
+            .text "📋 Derived Specs (topological order)"
+          ],
+          .element "div" #[("style", json% {"marginLeft": "8px"})] orderItems
+        ])
+        -- Dependency graph with clickable constructors showing schedules
+        if totalEdges > 0 then
+          let getCtorSchedule (specKey : SpecKey) (ctorName : String) : String :=
+            match finalMemo[specKey]? with
+            | some (.done indSched) =>
+              let allScheds := indSched.baseSchedules ++ indSched.recSchedules
+              match allScheds.find? (fun (n, _) => n.getString! == ctorName) with
+              | some (_, schedule) => ppSchedule schedule
+              | none => "(schedule not found)"
+            | _ => "(not derived)"
+          -- Build graph section
+          let mut graphItems : Array Html := #[]
+          for k in usedKeys.toList do
+            let nArgs ← getNumArgs k
+            let label := k.prettyPrint nArgs
+            match finalMemo[k]? with
+            | some (.done indSched) =>
+              let allScheds := indSched.baseSchedules ++ indSched.recSchedules
+              let mut depCtors : Std.HashMap SpecKey (List Name) := {}
+              for (ctorName, schedule@(steps, _)) in allScheds do
+                let deps := collectNonRecDeps steps
+                let relDeps := deps.filter (fun d => d.kind == .relation || d.kind == .checker)
+                for d in relDeps do
+                  let dk := SpecKey.mk d.inductiveName d.outputIndices d.deriveSort
+                  if usedKeys.contains dk then
+                    let existing := depCtors.getD dk []
+                    if ctorName ∉ existing then
+                      depCtors := depCtors.insert dk (existing ++ [ctorName])
+              if !depCtors.isEmpty then
+                let mut dstItems : Array Html := #[]
+                for (dk, ctors) in depCtors.toList do
+                  let dkArgs ← getNumArgs dk
+                  -- Each constructor is a clickable details showing its schedule
+                  let ctorElements ← ctors.toArray.mapM fun ctorName => do
+                    let schedText := getCtorSchedule k ctorName.getString!
+                    pure (Html.element "details" #[("style", json% {"display": "inline"})] #[
+                      .element "summary" #[("style", json% {"cursor": "pointer", "display": "inline", "color": "#4ec9b0"})] #[
+                        .text ctorName.getString!
+                      ],
+                      .element "div" #[("style", json% {"marginLeft": "24px", "marginBottom": "4px", "padding": "4px 8px", "background": "#1e1e1e", "borderRadius": "4px", "border": "1px solid #3c3c3c"})] #[
+                        mkSpan schedStyle schedText
+                      ]
+                    ])
+                  let ctorSep := ctorElements.foldl (init := (#[] : Array Html)) fun acc el =>
+                    if acc.isEmpty then #[el] else acc ++ #[.text ", ", el]
+                  dstItems := dstItems.push (.element "div" #[("style", json% {"marginLeft": "16px", "marginBottom": "3px"})] #[
+                    mkSpan reqStyle "requires ",
+                    mkSpan dstStyle (dk.prettyPrint dkArgs),
+                    .text "  via ",
+                    .element "span" #[] ctorSep
+                  ])
+                graphItems := graphItems.push (.element "details" #[] #[
+                  .element "summary" #[("style", json% {"cursor": "pointer", "marginBottom": "2px"})] #[
+                    mkSpan srcStyle label,
+                    mkSpan (json% {"color": "#808080"}) s!" ({depCtors.size} deps)"
+                  ],
+                  .element "div" #[] dstItems
+                ])
+            | _ => pure ()
+          htmlChildren := htmlChildren.push (Html.element "details" #[] #[
+            .element "summary" #[("style", json% {"cursor": "pointer", "fontWeight": "bold", "color": "#569cd6", "marginTop": "12px", "marginBottom": "6px"})] #[
+              .text s!"📊 Dependency Graph ({totalEdges} edges)"
+            ],
+            .element "div" #[("style", json% {"marginLeft": "8px", "borderLeft": "2px solid #3c3c3c", "paddingLeft": "12px"})] graphItems
+          ])
+        -- Emit the full HTML (if richOutput enabled)
+        if richOutput then
+          let fullHtml := Html.element "div" #[("style", json% {"fontFamily": "var(--vscode-editor-font-family, monospace)", "fontSize": "13px", "lineHeight": "1.6", "padding": "8px"})] htmlChildren
+          let graphMsg ← liftCoreM <| Lean.MessageData.ofHtml fullHtml
+            s!"derive_mutual: {usedKeys.size} specs in {components.length} components"
+          logInfo graphMsg
+        -- Plain-text output (accessible to LLMs and non-IDE tooling)
+        -- Levels: 0=off, 1=names+quality, 2=full schedules for poor-quality, 3=everything
+        let textLevel := Lean.Option.get (← getOptions) specimen.textOutput
+        if textLevel > 0 then
+          let scoreBadness (score : ScheduleScore) : Float :=
+            if score.length == 0 then 0.0
+            else
+              let checkRatio := Float.ofNat score.checks / Float.ofNat score.length
+              let uncRatio := Float.ofNat score.unconstrained / Float.ofNat score.length
+              let lengthPenalty := min 1.0 (Float.ofNat score.length / 12.0)
+              min 1.0 (checkRatio * 2.0 + uncRatio * 0.5 + lengthPenalty * 0.3)
+          let scoreQuality (score : ScheduleScore) : String :=
+            let b := scoreBadness score
+            if b ≤ 0.2 then "★★★"
+            else if b ≤ 0.5 then "★★☆"
+            else if b ≤ 0.8 then "★☆☆"
+            else "☆☆☆"
+          let specBadness (indSched : InductiveSchedule) : Float :=
+            let allScheds := indSched.baseSchedules ++ indSched.recSchedules
+            if allScheds.isEmpty then 0.0
+            else
+              let badnesses := allScheds.map (fun (_, (steps, _)) => scoreBadness (scheduleStepsScore steps))
+              let worst := badnesses.foldl max 0.0
+              let avg := badnesses.foldl (· + ·) 0.0 / Float.ofNat badnesses.length
+              worst * 0.7 + avg * 0.3
+          let specQuality (indSched : InductiveSchedule) : String :=
+            let b := specBadness indSched
+            if b ≤ 0.2 then "★★★"
+            else if b ≤ 0.5 then "★★☆"
+            else if b ≤ 0.8 then "★☆☆"
+            else "☆☆☆"
+          let showSchedules (indSched : InductiveSchedule) : Bool :=
+            textLevel ≥ 3 || (textLevel ≥ 2 && specBadness indSched > 0.5)
+          let mut lines : Array String := #[]
+          lines := lines.push s!"⚙ derive_mutual — {usedKeys.size} specs, {components.length} components"
+          lines := lines.push ""
+          lines := lines.push "── Derived Specs (topological order) ──"
+          for comp in components do
+            if comp.length > 1 then
+              lines := lines.push s!"  ◆ mutual ({comp.length}):"
+              for k in comp do
+                let numArgs ← getNumArgs k
+                match finalMemo[k]? with
+                | some (.done indSched) =>
+                  let nCtors := indSched.baseSchedules.length + indSched.recSchedules.length
+                  lines := lines.push s!"    {specQuality indSched} {k.prettyPrint numArgs} ({nCtors} ctors)"
+                  if showSchedules indSched then
+                    let allScheds := indSched.baseSchedules ++ indSched.recSchedules
+                    for (ctorName, schedule) in allScheds do
+                      let isBase := indSched.baseSchedules.any (fun (n, _) => n == ctorName)
+                      let tag := if isBase then "base" else "rec"
+                      let (steps, _) := schedule
+                      let score := scheduleStepsScore steps
+                      lines := lines.push s!"      {scoreQuality score} {ctorName.getString!} [{tag}] ({score.checks}chk/{score.length}steps/{score.unconstrained}unc)"
+                      lines := lines.push s!"        {ppSchedule schedule}"
+                | _ => pure ()
+            else
+              let k := comp.head!
+              let numArgs ← getNumArgs k
+              match finalMemo[k]? with
+              | some (.done indSched) =>
+                if indSched.alreadyExists then
+                  lines := lines.push s!"  ● {k.prettyPrint numArgs} (pre-existing)"
+                else
+                  let nCtors := indSched.baseSchedules.length + indSched.recSchedules.length
+                  lines := lines.push s!"  ● {specQuality indSched} {k.prettyPrint numArgs} ({nCtors} ctors)"
+                  if showSchedules indSched then
+                    let allScheds := indSched.baseSchedules ++ indSched.recSchedules
+                    for (ctorName, schedule) in allScheds do
+                      let isBase := indSched.baseSchedules.any (fun (n, _) => n == ctorName)
+                      let tag := if isBase then "base" else "rec"
+                      let (steps, _) := schedule
+                      let score := scheduleStepsScore steps
+                      lines := lines.push s!"      {scoreQuality score} {ctorName.getString!} [{tag}] ({score.checks}chk/{score.length}steps/{score.unconstrained}unc)"
+                      lines := lines.push s!"        {ppSchedule schedule}"
+              | _ => pure ()
+          if textLevel ≥ 2 && totalEdges > 0 then
+            lines := lines.push ""
+            lines := lines.push s!"── Dependency Graph ({totalEdges} edges) ──"
+            for k in usedKeys.toList do
+              let nArgs ← getNumArgs k
+              let label := k.prettyPrint nArgs
+              match finalMemo[k]? with
+              | some (.done indSched) =>
+                let allScheds := indSched.baseSchedules ++ indSched.recSchedules
+                let mut depCtors : Std.HashMap SpecKey (List Name) := {}
+                for (ctorName, (steps, _)) in allScheds do
+                  let deps := collectNonRecDeps steps
+                  let relDeps := deps.filter (fun d => d.kind == .relation || d.kind == .checker)
+                  for d in relDeps do
+                    let dk := SpecKey.mk d.inductiveName d.outputIndices d.deriveSort
+                    if usedKeys.contains dk then
+                      let existing := depCtors.getD dk []
+                      if ctorName ∉ existing then
+                        depCtors := depCtors.insert dk (existing ++ [ctorName])
+                if !depCtors.isEmpty then
+                  lines := lines.push s!"  {label} ({depCtors.size} deps)"
+                  for (dk, ctors) in depCtors.toList do
+                    let dkArgs ← getNumArgs dk
+                    let ctorStrs := ctors.map (fun n => n.getString!)
+                    lines := lines.push s!"    requires {dk.prettyPrint dkArgs}  via {String.intercalate ", " ctorStrs}"
+              | _ => pure ()
+          logInfo m!"{String.intercalate "\n" lines.toList}"
         -- For each component: assign names, compile, emit
         for comp in components do
           -- Assign global names for this component
@@ -1470,20 +1923,24 @@ def elabDeriveMutual : CommandElab := fun stx => do
               catch e =>
                 logWarning m!"Failed to compile {key.inductiveName}{key.outputIndices}{repr key.deriveSort}: {e.toMessageData}"
             | _ => logWarning m!"No schedule found for {key.inductiveName}{key.outputIndices}"
+          let getNumArgs (k : SpecKey) : CommandElabM Nat := liftTermElabM do
+            try pure ((← getComponentsOfArrowType (← getConstInfoInduct k.inductiveName).type).size - 1)
+            catch _ => pure k.outputIndices.length
           -- Emit: mutual block for multi-element, standalone for singletons
           let specDescs ← compMeta.toList.mapM fun (k, _) => do
-            let numArgs ← liftTermElabM do
-              try
-                let comps ← getComponentsOfArrowType (← getConstInfoInduct k.inductiveName).type
-                pure (comps.size - 1)
-              catch _ => pure k.outputIndices.length
-            pure (k.prettyPrint numArgs)
+            let numArgs ← getNumArgs k
+            let scoreStr := match finalMemo[k]? with
+              | some (.done indSched) =>
+                if indSched.alreadyExists then "(pre-existing)"
+                else s!"({indSched.baseSchedules.length} base, {indSched.recSchedules.length} rec)"
+              | _ => ""
+            pure s!"{k.prettyPrint numArgs} {scoreStr}"
           if defCmds.size > 1 then
-            logInfo m!"  mutual block ({defCmds.size}):\n    {String.intercalate "\n    " specDescs}"
+            logInfo m!"  ◆ mutual ({defCmds.size}):\n    {String.intercalate "\n    " specDescs}"
             let mutualCmd ← `(command| mutual $defCmds* end)
             elabCommand mutualCmd
           else if defCmds.size == 1 then
-            logInfo m!"  singleton: {specDescs.head!}"
+            logInfo m!"  ● {specDescs.head!}"
             elabCommand defCmds[0]!
           for instCmd in instCmds do
             elabCommand instCmd
