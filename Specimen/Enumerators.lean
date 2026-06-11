@@ -51,14 +51,14 @@ def failEnum : Enumerator α :=
      where a variable `x` is left-equal to some value `val`.
     (Note: `val` can be the result of a fully-applied function application,
      which is typically how this typeclass is used!) -/
-instance {α : Type} [BEq α] {val : α} : EnumSizedSuchThat α (fun x => x = val) where
+instance {α : Type} {val : α} : EnumSizedSuchThat α (fun x => x = val) where
   enumSizedST _ := return val
 
 /-- `EnumSizedSuchThat` instance for equality propositions
      where a variable `x` is right-equal to some value `val`.
      (Note: `val` can be the result of a fully-applied function application,
      which is typically how this typeclass is used!) -/
-instance {α : Type} [BEq α] {val : α} : EnumSizedSuchThat α (fun x => val = x) where
+instance {α : Type} {val : α} : EnumSizedSuchThat α (fun x => val = x) where
   enumSizedST _ := return val
 
 /-- `Alternative` instance for `Enumerator`s.

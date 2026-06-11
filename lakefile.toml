@@ -16,9 +16,14 @@ name = "Specimen"
 [[require]]
 name = "batteries"
 scope = "leanprover-community"
-rev = "main"
+rev = "9acabf83fb0369d00ba2e2410ca68db581a96bcc"
 
 [[require]]
 name = "plausible"
 scope = "leanprover-community"
-rev = "main"
+rev = "264309b5c0c10e569025a53ab6440a45c03133e4"
+
+[[require]]
+name = "proofwidgets"
+scope = "leanprover-community"
+rev = "v0.0.96"
