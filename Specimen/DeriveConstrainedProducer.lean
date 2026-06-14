@@ -1559,7 +1559,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
         let srcStyle := json% {"color": "#dcdcaa", "fontWeight": "bold"}
         let dstStyle := json% {"color": "#9cdcfe"}
         let reqStyle := json% {"color": "#c586c0", "fontStyle": "italic"}
-        let ctorStyle := json% {"color": "#4ec9b0"}
+        let _ctorStyle := json% {"color": "#4ec9b0"}
         let schedStyle := json% {"color": "#ce9178", "fontSize": "0.9em", "whiteSpace": "pre", "fontFamily": "var(--vscode-editor-font-family, monospace)"}
         let singletonStyle := json% {"color": "#b5cea8"}
         let mutualStyle := json% {"color": "#ce9178", "fontWeight": "bold"}
@@ -1742,7 +1742,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
             | some (.done indSched) =>
               let allScheds := indSched.baseSchedules ++ indSched.recSchedules
               let mut depCtors : Std.HashMap SpecKey (List Name) := {}
-              for (ctorName, schedule@(steps, _)) in allScheds do
+              for (ctorName, (steps, _)) in allScheds do
                 let deps := collectNonRecDeps steps
                 let relDeps := deps.filter (fun d => d.kind == .relation || d.kind == .checker)
                 for d in relDeps do
