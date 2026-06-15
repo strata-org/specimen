@@ -1,6 +1,8 @@
 import Specimen.PatternCoverage
+import Specimen.DeriveConstrainedProducer
+import Specimen.Scoring
 
-open Lean Meta PatternCoverage Schedules
+open Lean Meta Elab Term PatternCoverage Schedules Scoring
 
 -- Test inductives
 
@@ -18,8 +20,17 @@ inductive MyTy
   | base : MyTy
   | arrow : MyTy → MyTy → MyTy
 
+def lookup (Γ : List (Nat × MyTy)) (x : Nat) :=
+  match Γ with
+  | [] => none
+  | ((x',τ) :: Γ) => if x = x' then some τ else lookup Γ x
+
+-- Function app in conclusion args (lookup)
+inductive HasType (Γ : List (Nat × MyTy)) : Nat → MyTy → Prop
+  | found : ∀ x τ, lookup Γ x = some τ → HasType Γ x τ
+
 inductive MyTyping : List (Nat × MyTy) → MyExp → MyTy → Prop
-  | tvar : ∀ Γ x τ, MyTyping Γ (.var x) τ
+  | tvar : ∀ Γ x τ, HasType Γ x τ → MyTyping Γ (.var x) τ
   | tabs : ∀ Γ x e τ₁ τ₂, MyTyping ((x, τ₁) :: Γ) e τ₂ → MyTyping Γ (.abs x e) (.arrow τ₁ τ₂)
   | tapp : ∀ Γ e₁ e₂ τ₁ τ₂, MyTyping Γ e₁ (.arrow τ₁ τ₂) → MyTyping Γ e₂ τ₁ → MyTyping Γ (.app e₁ e₂) τ₂
 
@@ -73,9 +84,7 @@ inductive Interleave : List Nat → List Nat → List Nat → Prop
   | left : ∀ x xs ys zs, Interleave xs ys zs → Interleave (x :: xs) ys (x :: zs)
   | right : ∀ y xs ys zs, Interleave xs ys zs → Interleave xs (y :: ys) (y :: zs)
 
--- Function app in conclusion args (lookup)
-inductive HasType (Γ : Nat → Option Nat) : Nat → Nat → Prop
-  | found : ∀ x τ, Γ x = some τ → HasType Γ x τ
+
 
 -- Deep nesting
 inductive DeepList : List (List Nat) → Prop
@@ -95,7 +104,8 @@ inductive IsVowel : Char → Prop
   | e : IsVowel 'e'
   | i : IsVowel 'i'
 
-def testCoverage (indName : Name) (outputIndices : List Nat) : MetaM String := do
+def testCoverage (indName : Name) (outputIndices : List Nat) : TermElabM String := do
+  let bundle ← Scoring.getActiveScorerBundle
   let indInfo ← getConstInfoInduct indName
   let mut patterns : List (Name × CovPattern) := []
   for ctorName in indInfo.ctors do
@@ -104,7 +114,7 @@ def testCoverage (indName : Name) (outputIndices : List Nat) : MetaM String := d
       conclusionToCovPattern indName conclusion outputIndices indInfo.numParams
     patterns := patterns ++ [(ctorName, pat)]
 
-  let mut result := s!"=== Coverage for {indName} (numParams={indInfo.numParams}, numIndices={indInfo.numIndices}, outputs: {outputIndices}) ===\n"
+  let mut result := s!"=== Coverage for {indName} (outputs: {outputIndices}) ===\n"
   result := result ++ s!"Constructors and their input patterns:\n"
   for (name, pat) in patterns do
     let shortName := name.componentsRev.head?.getD name |>.toString
@@ -119,76 +129,159 @@ def testCoverage (indName : Name) (outputIndices : List Nat) : MetaM String := d
 
   let leaves := collectLeaves tree
 
-  let fakeScores : List (Name × ScheduleScore) := indInfo.ctors.zipIdx.map fun (c, i) =>
-    (c, { checks := i % 3, length := 3 + i, unconstrained := i % 2 })
-  let annotated := annotateLeaves leaves fakeScores
+  -- Derive real schedules and get per-constructor scores
+  let memo ← IO.mkRef ({} : Std.HashMap SpecKey MemoEntry)
+  let deriveSort := if outputIndices.isEmpty then DeriveSort.Checker else .Generator
+  let specKey : SpecKey := { inductiveName := indName, outputIndices := outputIndices, deriveSort := deriveSort }
+  let _ ← deriveBestInductiveSchedule specKey memo
+  let memoState : Std.HashMap SpecKey MemoEntry ← memo.get
+  let ctorScores : List (Name × Score) := match memoState[specKey]? with
+    | some (.done indSched) => indSched.ctorStats.map fun (name, _, _, score) => (name, score)
+    | _ => []
 
-  result := result ++ s!"\nLeaves ({annotated.length}):\n"
-  for leaf in annotated do
-    let ctorsStr := ", ".intercalate (leaf.coveringCtors.map fun (r, s) =>
-      let shortName := r.componentsRev.head?.getD r |>.toString
-      s!"{shortName}({s.checks}chk/{s.length}len/{s.unconstrained}unc)")
-    if leaf.coveringCtors.isEmpty then
-      result := result ++ s!"  {ppCovPattern leaf.pattern} → UNCOVERED\n"
+  -- Use the bundle to aggregate leaf + inductive scores
+  let leafScores := leaves.map fun (pat, rules) =>
+    let covering : List (Name × Score) := rules.filterMap fun r =>
+      ctorScores.find? (fun x => x.1 == r)
+    let leafScore := bundle.leafAggregator covering
+    (pat, covering, leafScore)
+
+  result := result ++ s!"\nLeaves ({leafScores.length}):\n"
+  for (pat, covering, leafScore) in leafScores do
+    if covering.isEmpty then
+      result := result ++ s!"  {ppCovPattern pat} → UNCOVERED\n"
     else
-      result := result ++ s!"  {ppCovPattern leaf.pattern} → [{ctorsStr}]\n"
+      let ctorsStr := ", ".intercalate (covering.map fun (r, s) =>
+        let shortName := r.componentsRev.head?.getD r |>.toString
+        s!"{shortName}({bundle.reprScore s})")
+      result := result ++ s!"  {ppCovPattern pat} → [{ctorsStr}]\n"
 
-  let score := aggregateCoverageScore annotated
-  result := result ++ s!"\nAggregated SpecScore: checks={score.checks}, unconstrained={score.unconstrained}, backtracking={score.backtracking}\n"
+  let finalScore := bundle.inductiveAggregator (leafScores.map fun (_, _, s) => s)
+  result := result ++ s!"\nInductive score: {bundle.reprScore finalScore}\n"
   return result
 
 -- Basic: list structure splitting
-#eval show MetaM _ from do IO.println (← testCoverage ``IsSorted [])
+#eval show TermElabM _ from do IO.println (← testCoverage ``IsSorted [])
 
 -- Nat literals (zero/succ)
-#eval show MetaM _ from do IO.println (← testCoverage ``Even [])
+#eval show TermElabM _ from do IO.println (← testCoverage ``Even [])
 
 -- All-wild (no splitting needed)
-#eval show MetaM _ from do IO.println (← testCoverage ``Reach [])
+#eval show TermElabM _ from do IO.println (← testCoverage ``Reach [])
 
 -- Generator mode (output excluded)
-#eval show MetaM _ from do IO.println (← testCoverage ``Reach [1])
+#eval show TermElabM _ from do IO.println (← testCoverage ``Reach [1])
 
 -- Multiple constructors, uncovered leaf
-#eval show MetaM _ from do IO.println (← testCoverage ``MyTyping [])
+#eval show TermElabM _ from do IO.println (← testCoverage ``MyTyping [])
 
 -- Output position with constructor splitting
-#eval show MetaM _ from do IO.println (← testCoverage ``MyTyping [2])
+#eval show TermElabM _ from do IO.println (← testCoverage ``MyTyping [2])
 
 -- Tree structure splitting
-#eval show MetaM _ from do IO.println (← testCoverage ``IsBST [])
+#eval show TermElabM _ from do IO.println (← testCoverage ``IsBST [])
 
 -- Generator for tree (all inputs wild)
-#eval show MetaM _ from do IO.println (← testCoverage ``IsBST [0])
+#eval show TermElabM _ from do IO.println (← testCoverage ``IsBST [0])
 
 -- Polymorphic type param
-#eval show MetaM _ from do IO.println (← testCoverage ``Elem [])
+#eval show TermElabM _ from do IO.println (← testCoverage ``Elem [])
 
 -- Polymorphic with output
-#eval show MetaM _ from do IO.println (← testCoverage ``Elem [0])
+#eval show TermElabM _ from do IO.println (← testCoverage ``Elem [0])
 
 -- Instance parameter (DecidableEq)
-#eval show MetaM _ from do IO.println (← testCoverage ``UniqueList [])
+#eval show TermElabM _ from do IO.println (← testCoverage ``UniqueList [])
 
 -- Function application in conclusion (xs ++ [x])
-#eval show MetaM _ from do IO.println (← testCoverage ``Palindrome [])
+#eval show TermElabM _ from do IO.println (← testCoverage ``Palindrome [])
 
 -- Mutual inductives
-#eval show MetaM _ from do IO.println (← testCoverage ``MutEven [])
-#eval show MetaM _ from do IO.println (← testCoverage ``MutOdd [])
+#eval show TermElabM _ from do IO.println (← testCoverage ``MutEven [])
+#eval show TermElabM _ from do IO.println (← testCoverage ``MutOdd [])
 
 -- Multiple inputs with constructors in several positions
-#eval show MetaM _ from do IO.println (← testCoverage ``Interleave [])
-#eval show MetaM _ from do IO.println (← testCoverage ``Interleave [2])
+#eval show TermElabM _ from do IO.println (← testCoverage ``Interleave [])
+#eval show TermElabM _ from do IO.println (← testCoverage ``Interleave [2])
 
 -- Function app in conclusion (Γ x = some τ)
-#eval show MetaM _ from do IO.println (← testCoverage ``HasType [])
+#eval show TermElabM _ from do IO.println (← testCoverage ``HasType [])
 
 -- Deep nesting (List (List Nat))
-#eval show MetaM _ from do IO.println (← testCoverage ``DeepList [])
+#eval show TermElabM _ from do IO.println (← testCoverage ``DeepList [])
 
 -- String literals
-#eval show MetaM _ from do IO.println (← testCoverage ``Greeting [])
+#eval show TermElabM _ from do IO.println (← testCoverage ``Greeting [])
 
 -- Char literals
-#eval show MetaM _ from do IO.println (← testCoverage ``IsVowel [])
+#eval show TermElabM _ from do IO.println (← testCoverage ``IsVowel [])
+
+----------------------------------------------
+-- Scoring strategy tests
+----------------------------------------------
+
+def testStrategy (indName : Name) (outputIndices : List Nat) (bundle : ScorerBundle) : TermElabM String := do
+  let indInfo ← getConstInfoInduct indName
+  let mut patterns : List (Name × CovPattern) := []
+  for ctorName in indInfo.ctors do
+    let ctorInfo ← getConstInfoCtor ctorName
+    let pat ← forallTelescopeReducing ctorInfo.type fun _ conclusion => do
+      conclusionToCovPattern indName conclusion outputIndices indInfo.numParams
+    patterns := patterns ++ [(ctorName, pat)]
+  let numAllArgs := indInfo.numParams + indInfo.numIndices
+  let initChildren := (List.range numAllArgs).map fun i =>
+    if i ∈ outputIndices then CovPattern.output else .wild
+  let tree ← coverPatterns patterns (.ctr indName initChildren)
+  let leaves := collectLeaves tree
+
+  -- Get real schedules
+  let memo ← IO.mkRef ({} : Std.HashMap SpecKey MemoEntry)
+  let ds := if outputIndices.isEmpty then DeriveSort.Checker else .Generator
+  let key : SpecKey := { inductiveName := indName, outputIndices, deriveSort := ds }
+  let _ ← deriveBestInductiveSchedule key memo
+  let memoState : Std.HashMap SpecKey MemoEntry ← memo.get
+  let ctorScheds : List (Name × List ScheduleStep) := match memoState[key]? with
+    | some (.done s) =>
+      (s.baseSchedules ++ s.recSchedules).map fun (n, schedule) => (n, schedule.1)
+    | _ => []
+
+  -- Score each ctor with the bundle
+  let ctorScores : List (Name × Score) := ctorScheds.map fun (name, steps) =>
+    let stepScores := steps.map fun step => bundle.stepScorer key memoState step
+    (name, bundle.scheduleScorer stepScores)
+
+  -- Leaf + inductive aggregation
+  let leafScores := leaves.map fun (_, rules) =>
+    let covering : List (Name × Score) := rules.filterMap fun r =>
+      ctorScores.find? (fun x => x.1 == r)
+    bundle.leafAggregator covering
+  let final := bundle.inductiveAggregator leafScores
+
+  return s!"  [{bundle.scoreTypeName}] {bundle.reprScore final}"
+
+-- Compare strategies
+#eval show TermElabM _ from do
+  let bundles ← scorerBundles.get
+  let mut output := "=== Strategy comparison for IsSorted (checker) ===\n"
+  for bundle in bundles do
+    output := output ++ (← testStrategy ``IsSorted [] bundle) ++ "\n"
+  output := output ++ "\n=== Strategy comparison for Interleave (checker) ===\n"
+  for bundle in bundles do
+    output := output ++ (← testStrategy ``Interleave [] bundle) ++ "\n"
+  output := output ++ "\n=== Strategy comparison for IsBST (checker) ===\n"
+  for bundle in bundles do
+    output := output ++ (← testStrategy ``IsBST [] bundle) ++ "\n"
+  output := output ++ "\n=== Strategy comparison for Typing (output type) ===\n"
+  for bundle in bundles do
+    output := output ++ (← testStrategy ``MyTyping [0, 1 , 2] bundle) ++ "\n"
+  IO.println output
+
+
+set_option specimen.scoreType "Scoring.DensityScore"
+#eval show TermElabM _ from do IO.println (← testCoverage ``MyTyping [1,2])
+deriving instance Plausible.Arbitrary for MyTy
+deriving instance DecidableEq for MyTy
+set_option specimen.autoDeriveDeps true
+set_option specimen.multiOutput true
+derive_mutual
+  (fun a c => ∃ b, MyTyping a b c)

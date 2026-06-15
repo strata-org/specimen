@@ -3,6 +3,17 @@ import Lean
 
 open Lean Meta LocalContext Std
 
+/-- A type-erased score value. Used by the modular scoring framework.
+    All scoring layers agree on the same concrete type (enforced by the registry),
+    so casts between layers always succeed. -/
+structure Score where
+  val : Dynamic
+  reprFn : Dynamic → String := fun _ => "<score>"
+
+private structure ScorePlaceholder deriving TypeName
+instance : Inhabited Score := ⟨{ val := Dynamic.mk ({} : ScorePlaceholder) }⟩
+instance : Repr Score where reprPrec s _ := s.reprFn s.val
+
 /-- Folds a non-empty list into a right-nested pair using a monadic pairing function.
     Produces `pair a (pair b c)` for `[a, b, c]`. -/
 def tupleOfListM [Monad m] (onEmpty : m α) (pair : α → α → m α) : List α → m α

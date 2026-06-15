@@ -452,14 +452,14 @@ structure InductiveSchedule where
   baseSchedules : List (Name × Schedule)
   /-- Per-constructor schedules for recursive constructors -/
   recSchedules : List (Name × Schedule)
-  /-- Quality score for this derivation -/
-  score : SpecScore
+  /-- Quality score for this derivation (type-erased, from active scoring bundle) -/
+  score : Score
   /-- True if this spec already has an instance in the environment (no need to compile) -/
   alreadyExists : Bool := false
   /-- Time taken to derive the full spec (in microseconds, includes dep derivation) -/
   derivationTimeUs : Nat := 0
   /-- Per-constructor stats: (name, time in μs, schedules considered, score) -/
-  ctorStats : List (Name × Nat × Nat × ScheduleScore) := []
+  ctorStats : List (Name × Nat × Nat × Score) := []
   deriving Repr
 
 /-- Result of deriving a schedule, stored in the dependency memo. -/

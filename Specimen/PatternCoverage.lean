@@ -1,4 +1,5 @@
 import Specimen.Schedules
+import Specimen.Scoring
 import Lean
 
 namespace PatternCoverage
@@ -242,6 +243,11 @@ partial def coverPatterns (rules : List (Name × CovPattern)) (initPat : CovPatt
   return tree
 
 ----------------------------------------------
+-- Dep-aware schedule scoring
+----------------------------------------------
+
+
+----------------------------------------------
 -- Leaf collection + scoring
 ----------------------------------------------
 
@@ -347,9 +353,11 @@ partial def conclusionToCovPattern (indName : Name) (conclusion : Expr)
   return .ctr indName pats
 
 /-- Full pipeline: build coverage tree + annotate + aggregate.
-    Called after all per-constructor schedules are derived. -/
+    Called after all per-constructor schedules are derived.
+    Uses the active scoring bundle's leaf and inductive aggregators. -/
 partial def computeInductiveScore (indName : Name) (outputIndices : List Nat)
-    (ctorScores : List (Name × ScheduleScore)) : MetaM SpecScore := do
+    (ctorScores : List (Name × Score)) : MetaM Score := do
+  let bundle ← Scoring.getActiveScorerBundle
   let indInfo ← getConstInfoInduct indName
   let mut patterns : List (Name × CovPattern) := []
   for ctorName in indInfo.ctors do
@@ -364,8 +372,12 @@ partial def computeInductiveScore (indName : Name) (outputIndices : List Nat)
   let initPat := CovPattern.ctr indName initChildren
   let tree ← coverPatterns patterns initPat
   let leaves := collectLeaves tree
-  let annotated := annotateLeaves leaves ctorScores
-  return aggregateCoverageScore annotated
+  -- Annotate leaves with type-erased scores and aggregate via bundle
+  let annotatedLeaves := leaves.map fun (_, rules) =>
+    let covering : List (Name × Score) := rules.filterMap fun r =>
+      ctorScores.find? (fun x => x.1 == r) |>.map (·)
+    bundle.leafAggregator covering
+  return bundle.inductiveAggregator annotatedLeaves
 
 ----------------------------------------------
 -- Pretty printing (for debugging traces)

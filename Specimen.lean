@@ -21,4 +21,5 @@ import Specimen.DeriveSchedules
 import Specimen.MExp
 import Specimen.LazyRoseTree
 import Specimen.SearchTree
+import Specimen.Scoring
 import Specimen.PatternCoverage
