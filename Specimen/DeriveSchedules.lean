@@ -1,4 +1,5 @@
 import Lean.Expr
+import Lean.Elab.Term
 import Specimen.Utils
 import Specimen.Schedules
 import Specimen.Scoring
@@ -11,7 +12,7 @@ import Lean.Util.SCC
 
 namespace Schedules
 
-open Lean Meta
+open Lean Meta Elab Term
 open Schedules
 
 -- Adapted from QuickChick source code

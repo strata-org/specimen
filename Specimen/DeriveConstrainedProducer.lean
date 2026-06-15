@@ -380,7 +380,9 @@ structure ScheduleResult where
 def getScheduleForInductiveRelationConstructor
   (inductiveName : Name) (ctorName : Name) (inputNames : List Name)
   (deriveSort : DeriveSort) (outputNameTypeOption : Option (List (Name × Expr × Nat))) (unknownsArray : Array Unknown) (localCtx : LocalContext) (recFnName : Name := defaultRecFnName deriveSort)
-  (depMemo : Std.HashMap SpecKey MemoEntry := {}) : UnifyM ScheduleResult := do
+  (depMemo : Std.HashMap SpecKey MemoEntry := {})
+  (memoRef : Option (IO.Ref (Std.HashMap SpecKey MemoEntry)) := none)
+  (deriveDep : SpecKey → MetaM Unit := fun _ => pure ()) : UnifyM ScheduleResult := do
   trace[plausible.deriving.arbitrary] "Schedule requested for inductive {inductiveName}'s constructor, {ctorName} with inputs: {inputNames} and variables: {unknownsArray}"
 
   let ctorInfo ← getConstInfoCtor ctorName
@@ -515,49 +517,58 @@ def getScheduleForInductiveRelationConstructor
       trace[plausible.deriving.arbitrary] m!"Updated ForAll Vars: {repr updatedForAllVars}"
       trace[plausible.deriving.arbitrary] m!"Fixed Vars: {repr fixedVars}"
 
-      -- Enumerate candidate schedules and select the best by score (checks < length < unconstrained)
+      -- Enumerate candidate schedules and select the best by score
       let multiOutput := Lean.Option.get (← getOptions) specimen.multiOutput
-      let possibleSchedules := possibleSchedules
-        (vars := updatedForAllVars)
-        (hypotheses := hypothesisExprs.toList)
-        ctorName
-        deriveSort
-        recCall
-        fixedVars
-        recFnName
-        multiOutput
-
-      match possibleSchedules with
-      | .lnil => throwError m!"Unable to compute any possible schedules"
-      | .lcons fstSchdM rest =>
-
-      let searchStart ← IO.monoNanosNow
-      let (fstSchd, countSeen) ← fstSchdM
-
-      let mut countProcessed  := 1
       let bundle ← Scoring.getActiveScorerBundle
-      let scoreSchedule := fun (steps : List ScheduleStep) =>
-        let key : SpecKey := { inductiveName := inductiveName, outputIndices := (Prod.snd recCall), deriveSort := deriveSort }
-        let stepScores := steps.map fun step => bundle.stepScorer key depMemo step
-        bundle.scheduleScorer stepScores
-      let mut bestScore := scoreSchedule fstSchd
-      let mut bestSchedule   := fstSchd
-
-      trace[plausible.deriving.results] m!"First Schedule: {ppScheduleSteps bestSchedule} \nScore: {bundle.reprScore bestScore}\nSchedules Considered: {repr countSeen}\nSchedules Processed: {repr countProcessed}"
+      let key : SpecKey := { inductiveName := inductiveName, outputIndices := (Prod.snd recCall), deriveSort := deriveSort }
       let limit := 200000
-      for schdM in rest.get do
-        let (schd, countSeen) ← schdM
-        let score := scoreSchedule schd
-        countProcessed := countProcessed + 1
-        if bundle.isBetter score bestScore then
-          bestSchedule := schd
-          bestScore := score
-          trace[plausible.deriving.results] m!"Better Schedule: {ppScheduleSteps bestSchedule} \nScore: {bundle.reprScore bestScore}\nSchedules Considered: {repr countSeen}\nSchedules Processed: {repr countProcessed}"
-        if countProcessed > limit then
-          break
-      let searchEnd ← IO.monoNanosNow
+      let searchStart ← IO.monoNanosNow
 
-      trace[plausible.deriving.results] m!"Chosen Schedule: {ppScheduleSteps bestSchedule} \nScore: {bundle.reprScore bestScore}\nSchedules Considered: {repr countSeen}\nSchedules Processed: {repr countProcessed}"
+      let (bestSchedule, bestScore, countProcessed) ←
+        if bundle.usesMonadicPath then do
+          match memoRef with
+          | none => throwError "Monadic pruning requires memoRef"
+          | some ref =>
+          let result ← monadLift <| searchBestScheduleM
+            (ctorName := ctorName) (vars := updatedForAllVars)
+            (hypotheses := hypothesisExprs.toList) (deriveSort := deriveSort)
+            (recCall := recCall) (fixedVars := fixedVars) (recFnName := recFnName)
+            (multiOutput := multiOutput) (bundle := bundle) (memo := ref)
+            (key := key) (limit := limit) (deriveDep := deriveDep)
+          match result with
+          | some (steps, score, count) => pure (steps, score, count)
+          | none => throwError m!"Unable to compute any possible schedules (monadic path)"
+        else do
+          -- Legacy path: structural pruning with post-hoc bundle scoring
+          let possibleSchedules := possibleSchedules
+            (vars := updatedForAllVars)
+            (hypotheses := hypothesisExprs.toList)
+            ctorName deriveSort recCall fixedVars recFnName multiOutput
+          match possibleSchedules with
+          | .lnil => throwError m!"Unable to compute any possible schedules"
+          | .lcons fstSchdM rest =>
+          let (fstSchd, countSeen) ← fstSchdM
+          let scoreSchedule := fun (steps : List ScheduleStep) =>
+            let stepScores := steps.map fun step => bundle.stepScorer key depMemo step
+            bundle.scheduleScorer stepScores
+          let mut countProcessed := 1
+          let mut bestScore := scoreSchedule fstSchd
+          let mut bestSchedule := fstSchd
+          trace[plausible.deriving.results] m!"First Schedule: {ppScheduleSteps bestSchedule} \nScore: {bundle.reprScore bestScore}\nSchedules Considered: {repr countSeen}\nSchedules Processed: {repr countProcessed}"
+          for schdM in rest.get do
+            let (schd, countSeen) ← schdM
+            let score := scoreSchedule schd
+            countProcessed := countProcessed + 1
+            if bundle.isBetter score bestScore then
+              bestSchedule := schd
+              bestScore := score
+              trace[plausible.deriving.results] m!"Better Schedule: {ppScheduleSteps bestSchedule} \nScore: {bundle.reprScore bestScore}\nSchedules Considered: {repr countSeen}\nSchedules Processed: {repr countProcessed}"
+            if countProcessed > limit then
+              break
+          pure (bestSchedule, bestScore, countProcessed)
+
+      let searchEnd ← IO.monoNanosNow
+      trace[plausible.deriving.results] m!"Chosen Schedule: {ppScheduleSteps bestSchedule} \nScore: {bundle.reprScore bestScore}\nSchedules Processed: {repr countProcessed}"
       trace[plausible.deriving.results] m!"  Search time: {(searchEnd - searchStart) / 1000000}ms"
 
       -- Update the best schedule with the result of unification
@@ -591,8 +602,10 @@ def getScheduleForInductiveRelationConstructor
 def getProducerScheduleForInductiveConstructor
   (inductiveName : Name) (ctorName : Name) (outputNamesTypesIndices : List (Name × Expr × Nat)) (inputNames : List Name)
   (unknowns : Array Unknown) (deriveSort : DeriveSort) (localCtx : LocalContext) (recFnName : Name := defaultRecFnName deriveSort)
-  (depMemo : Std.HashMap SpecKey MemoEntry := {}) : UnifyM ScheduleResult :=
-  getScheduleForInductiveRelationConstructor inductiveName ctorName inputNames deriveSort (some outputNamesTypesIndices) unknowns localCtx recFnName depMemo
+  (depMemo : Std.HashMap SpecKey MemoEntry := {})
+  (memoRef : Option (IO.Ref (Std.HashMap SpecKey MemoEntry)) := none)
+  (deriveDep : SpecKey → MetaM Unit := fun _ => pure ()) : UnifyM ScheduleResult :=
+  getScheduleForInductiveRelationConstructor inductiveName ctorName inputNames deriveSort (some outputNamesTypesIndices) unknowns localCtx recFnName depMemo memoRef deriveDep
 
 
 /-- Produces an instance of a typeclass for a constrained producer (either `ArbitrarySizedSuchThat` or `EnumSizedSuchThat`).
@@ -1067,10 +1080,13 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
         try
           let ctorStart ← IO.monoNanosNow
           let currentMemo ← memo.get
+          let termElabCtx ← readThe Lean.Elab.Term.Context
+          let deriveDep : SpecKey → MetaM Unit := fun depKey => do
+            let _ ← (deriveBestInductiveSchedule depKey memo scheduleRewriter).run termElabCtx
           let resultOption ← (UnifyM.runInMetaM
             (getProducerScheduleForInductiveConstructor key.inductiveName ctorName
               freshenedOutputNamesTypesIndices freshenedInputNames freshUnknowns
-              key.deriveSort localCtx freshRecFnName currentMemo)
+              key.deriveSort localCtx freshRecFnName currentMemo (some memo) deriveDep)
               emptyUnifyState)
           let ctorEnd ← IO.monoNanosNow
           let ctorElapsed := (ctorEnd - ctorStart) / 1000

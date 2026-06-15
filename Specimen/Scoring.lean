@@ -133,19 +133,20 @@ def wrapInductiveAggregator [Inhabited S] [TypeName S] [Repr S] (f : InductiveAg
 -- Scorer registry
 ----------------------------------------------
 
-/-- Pruning strategy for the SearchTree. Controls how schedule enumeration
-    prunes branches during hypothesis ordering search.
-    - `usePrimary`: use this bundle's own stepScorer/scheduleScorer/isBetter for pruning.
-      Valid when: (a) insertion around anchors can only bind more vars for existing hyps,
-      (b) more bound vars → step score worsens or stays same, (c) adding steps never
-      improves aggregate. All built-in strategies satisfy this.
-    - `useAlternate s`: use a separate scorer bundle `s` for pruning (e.g. structural
-      check-counting as a conservative fallback).
-    - `noPruning`: disable branch pruning entirely (exhaustive search). -/
+/-- Pruning strategy for the SearchTree. All options use the monadic `searchBestScheduleM`
+    path (with on-demand dep derivation). The strategy controls how aggressively branches
+    are pruned during exploration.
+    - `usePrimary`: prune with this bundle's own stepScorer/scheduleScorer/isBetter.
+      Valid when scoring is monotone under variable binding (all built-in strategies).
+    - `useAlternate s`: prune with a separate scorer.
+    - `noPruning`: explore all branches (no pruning, but still uses monadic path).
+    - `legacy`: use the old pure `possibleSchedules` path with structural check-count
+      pruning. No on-demand derivation. For backwards compatibility only. -/
 inductive PruneStrategy where
   | usePrimary
   | useAlternate (alt : ResolvedStepScorer × ResolvedScheduleScorer × (Score → Score → Bool) × Score)
   | noPruning
+  | legacy
 
 structure ScorerBundle where
   scoreTypeName : Name
@@ -197,13 +198,11 @@ instance : Inhabited ScorerBundle where
     pruneStrategy := .noPruning
   }
 
-/-- Resolve the effective pruning scorer from a bundle's pruneStrategy.
-    Returns (stepScorer, scheduleScorer, isBetter, emptyScore) or none for noPruning. -/
-def ScorerBundle.getPruneScorer (b : ScorerBundle) : Option (ResolvedStepScorer × ResolvedScheduleScorer × (Score → Score → Bool) × Score) :=
+/-- Whether this bundle uses the monadic searchBestScheduleM path (all except legacy). -/
+def ScorerBundle.usesMonadicPath (b : ScorerBundle) : Bool :=
   match b.pruneStrategy with
-  | .usePrimary => some (b.stepScorer, b.scheduleScorer, b.isBetter, b.emptyScore)
-  | .useAlternate alt => some alt
-  | .noPruning => none
+  | .legacy => false
+  | _ => true
 
 initialize scorerBundles : IO.Ref (Array ScorerBundle) ← IO.mkRef #[]
 
