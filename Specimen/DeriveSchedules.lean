@@ -1,6 +1,7 @@
 import Lean.Expr
 import Specimen.Utils
 import Specimen.Schedules
+import Specimen.Scoring
 import Specimen.UnificationMonad
 import Specimen.MakeConstrainedProducerInstance
 import Specimen.LazyList
@@ -1264,3 +1265,231 @@ def possibleSchedules (ctorName : Name) (vars : List TypedVar) (hypotheses : Lis
   let lazySchedules := prunedImprovingTypedPreSchedules.mapLazyList
     ((ReaderT.run . scheduleEnv) ∘ (fun (s,c) => return (← s.flatMapM <| preScheduleStepToScheduleStep ctorName, c)))
   lazySchedules
+
+/-- Bundle-aware schedule search using monadic SearchTree pruning.
+    Faithfully replicates the enumeration logic of `possiblePreSchedulesWithAdvancedPruning`
+    and `enumSchedulesChunkedWithPruning`, but uses the scoring bundle for all quality
+    decisions and `minTreePruningM` for branch-and-bound over hypothesis orderings
+    within each SCC component.
+
+    The `deriveDep` callback is invoked when scoring encounters a dependency not yet
+    in the memo. The caller can wire this to `deriveBestInductiveSchedule` to trigger
+    on-demand recursive derivation (avoids circular imports).
+
+    Returns `none` if no valid schedule exists. -/
+partial def searchBestScheduleM (ctorName : Name) (vars : List TypedVar)
+    (hypotheses : List HypothesisExpr) (deriveSort : DeriveSort)
+    (recCall : Name × List Nat) (fixedVars : List Name)
+    (recFnName : Name := defaultRecFnName deriveSort) (multiOutput : Bool := false)
+    (bundle : Scoring.ScorerBundle) (memo : IO.Ref (Std.HashMap SpecKey MemoEntry))
+    (key : SpecKey) (limit : Nat := 200000)
+    (deriveDep : SpecKey → MetaM Unit := fun _ => pure ()) : MetaM (Option (List ScheduleStep × Score × Nat)) := do
+  -- 1. Set up ScheduleEnv (same as possiblePreSchedulesWithAdvancedPruning)
+  let typeVars := vars.filterMap fun ⟨v,t⟩ => if t.isSort then some v else none
+  let sortedHypotheses := mkSortedHypothesesVariablesMap hypotheses
+  let varNames := vars.map (fun x => x.var)
+  let prodSort := convertDeriveSortToProducerSort deriveSort
+  let scheduleEnv : ScheduleEnv := ⟨vars, sortedHypotheses, deriveSort, prodSort, recCall,
+    fixedVars, recFnName, multiOutput, [], some memo⟩
+
+  -- 2. Collect initially-checked hypotheses (same as existing)
+  let (newCheckedIdxs, newCheckedHyps) := List.unzip <| (collectCheckedHypotheses scheduleEnv fixedVars [])
+
+  -- 3. Compute SCC groups and build per-component SearchTrees
+  let remainingSortedHypotheses := filterWithIndex (fun i _ => i ∉ newCheckedIdxs) sortedHypotheses
+  let rawHypotheses := remainingSortedHypotheses.map (fun hv => (hv, List.flatten hv.snd))
+  let sccGroups := computeSCC rawHypotheses
+  -- Each component gets its own SearchTree (faithful to pure pipeline)
+  let componentTrees := sccGroups.map fun scc =>
+    (scc, SearchTree.enumDependencySatisfyingOrderingsTree scc)
+
+  let matchableSet := Std.HashSet.ofList typeVars
+  let nameTypeMap := List.foldl (fun m ⟨name,ty⟩ => NameMap.insert m name ty) ∅ vars
+  let remainingVarNames := List.filter (fun v => not <| fixedVars.contains v) varNames
+
+  -- Mutable state for global tracking
+  let done ← IO.mkRef false
+  let countRef ← IO.mkRef (0 : Nat)
+  let bestRef ← IO.mkRef (none : Option (List ScheduleStep × Score))
+
+  -- Helper: score a single pre-schedule step using the bundle
+  let scorePreStep := fun (memoState : Std.HashMap SpecKey MemoEntry)
+      (step : PreScheduleStep HypothesisExpr Name) (_env : Std.HashSet Name) => do
+    let typedStep := typePreScheduleStep nameTypeMap step
+    let schedSteps ← (preScheduleStepToScheduleStep ctorName typedStep).run scheduleEnv
+    let stepScores := schedSteps.map fun s => bundle.stepScorer key memoState s
+    return stepScores
+
+  -- Helper: process mode choices for one hypothesis (replicates processChoice logic)
+  -- Returns (newPreSteps, remainingHyps, newEnv, newEnvSet)
+  let processModeChoices := fun (hyp : HypothesisExpr) (potential_output_indices : List (List Name))
+      (always_bound_variables : List Name) (rest : List (HypothesisExpr × List (List Name) × List Name))
+      (currentEnv : List Name) (currentEnvSet : Std.HashSet Name) => do
+    let (some_bound_output_indices, all_unbound_output_indices) := potential_output_indices.partition
+      (fun l =>
+        l.any (fun v => currentEnvSet.contains v && !matchableSet.contains v)
+        || l.all matchableSet.contains)
+    -- Enumerate mode choices (same logic as enumSchedulesChunkedWithPruning)
+    let choices : List (List (List Name) × List (List Name)) := if multiOutput then
+        [(all_unbound_output_indices, [])]
+      else
+        ([], all_unbound_output_indices) :: (select all_unbound_output_indices).toList.map (fun (a, b) => ([a], b))
+    -- Filter through processChoice to get valid choices
+    let validChoices := choices.filterMap (fun (out, bound) =>
+      processChoice multiOutput hyp out bound some_bound_output_indices
+        always_bound_variables rest currentEnv currentEnvSet)
+    match validChoices with
+    | [] =>
+      -- No valid choice (shouldn't happen in well-formed input, but handle gracefully)
+      pure (([] : List (PreScheduleStep HypothesisExpr Name)), rest, currentEnv, currentEnvSet)
+    | [single] => pure single
+    | multiple =>
+      -- Score each valid choice and pick the best
+      let memoState ← memo.get
+      let scored ← multiple.mapM fun choice => do
+        let (newSteps, _, _, _) := choice
+        let stepScores ← newSteps.flatMapM (scorePreStep memoState · currentEnvSet)
+        let score := bundle.scheduleScorer stepScores
+        return (choice, score)
+      let best := scored.foldl (fun acc (choice, score) =>
+        match acc with
+        | none => some (choice, score)
+        | some (_, bestScore) =>
+          if bundle.isBetter score bestScore then some (choice, score) else acc) none
+      match best with
+      | none => pure ([], rest, currentEnv, currentEnvSet)
+      | some (choice, _) => pure choice
+
+  -- Helper: given a hypothesis ordering for one component, process it through
+  -- mode choices and return the resulting pre-schedule steps + final env
+  let processOrdering := fun (ordering : List (HypothesisExpr × List (List Name)))
+      (env : List Name) (envSet : Std.HashSet Name) => do
+    let constructedHyps := ordering.map (constructHypothesis typeVars)
+    let mut currentEnv := env
+    let mut currentEnvSet := envSet
+    let mut sched : List (PreScheduleStep HypothesisExpr Name) := []
+    let mut remaining := constructedHyps
+    while !remaining.isEmpty do
+      match remaining with
+      | [] => break
+      | (hyp, potential_output_indices, always_bound_variables) :: rest =>
+        let (newSteps, to_be_satisfied', finalEnv, finalEnvSet) ←
+          processModeChoices hyp potential_output_indices always_bound_variables rest currentEnv currentEnvSet
+        sched := sched ++ newSteps
+        currentEnv := finalEnv
+        currentEnvSet := finalEnvSet
+        remaining := to_be_satisfied'
+    return (sched, currentEnv, currentEnvSet)
+
+  -- Dominance pruning: tracks best score for each env state (sorted bound var set)
+  let envDominanceRef ← IO.mkRef ({} : Std.HashMap (List Name) Score)
+
+  -- Helper: score an ordering via processChoice → ScheduleSteps → bundle.
+  -- Dominance: if this env state was reached before with a better score, return penaltyScore.
+  -- On-demand: derives unknown deps before scoring.
+  let scoreComponentOrdering := fun (env : List Name) (envSet : Std.HashSet Name)
+      (ordering : List (HypothesisExpr × List (List Name))) => do
+    let (compSched, compEnv, _) ← processOrdering ordering env envSet
+    let typedSteps := compSched.map (typePreScheduleStep nameTypeMap)
+    let schedSteps ← (typedSteps.flatMapM (preScheduleStepToScheduleStep ctorName)).run scheduleEnv
+    -- On-demand dep derivation
+    let deps := collectNonRecDeps schedSteps
+    for dep in deps do
+      if dep.kind == DepKind.relation || dep.kind == DepKind.checker then
+        let depKey : SpecKey := { inductiveName := dep.inductiveName,
+                                  outputIndices := dep.outputIndices,
+                                  deriveSort := dep.deriveSort }
+        if depKey != key then
+          let m ← memo.get
+          unless m.contains depKey do deriveDep depKey
+    -- Score
+    let memoState ← memo.get
+    let score := bundle.scheduleScorer (schedSteps.map fun step => bundle.stepScorer key memoState step)
+    -- Dominance check (same structure as original: if dominated, signal pruning)
+    let envKey := compEnv.eraseDups |>.mergeSort (fun a b => compare a b |>.isLE)
+    let envDom ← envDominanceRef.get
+    match envDom[envKey]? with
+    | some prevBest =>
+      if bundle.isBetter prevBest score then return bundle.penaltyScore
+    | none => pure ()
+    envDominanceRef.modify fun m =>
+      match m[envKey]? with
+      | some prev => if bundle.isBetter score prev then m.insert envKey score else m
+      | none => m.insert envKey score
+    return score
+
+  -- 4. Process SCC components sequentially using minTreePruningM per component
+  let mut accSched : List (PreScheduleStep HypothesisExpr Name) := []
+  let mut accEnv : List Name := fixedVars
+  let mut accEnvSet : Std.HashSet Name := Std.HashSet.ofList fixedVars
+
+  for (_, tree) in componentTrees do
+    if ← done.get then break
+    -- Use minTreePruningM to find the best ordering for this component
+    let componentDone ← IO.mkRef false
+    -- Tree yields List α where α = HypothesisExpr × List (List Name)
+    -- (the List Name from rawHypotheses is consumed as v for SCC edges)
+    let componentBestRef ← IO.mkRef (none : Option (List (PreScheduleStep HypothesisExpr Name) × List Name × Std.HashSet Name × Score))
+    let componentWorst := bundle.penaltyScore
+    let envSnapshot := accEnv
+    let envSetSnapshot := accEnvSet
+
+    let _ ← SearchTree.minTreePruningM tree (scoreComponentOrdering envSnapshot envSetSnapshot)
+      bundle.isBetter componentWorst componentDone
+      fun (ordering, score) currentBest => do
+        let c ← countRef.get
+        countRef.set (c + 1)
+        if c + 1 > limit then
+          done.set true
+          componentDone.set true
+          return currentBest
+        -- Process this ordering through mode choices
+        let (compSched, compEnv, compEnvSet) ← processOrdering ordering envSnapshot envSetSnapshot
+        -- Track best for this component
+        match ← componentBestRef.get with
+        | none =>
+          componentBestRef.set (some (compSched, compEnv, compEnvSet, score))
+        | some (_, _, _, prevScore) =>
+          if bundle.isBetter score prevScore then
+            componentBestRef.set (some (compSched, compEnv, compEnvSet, score))
+        -- Return the score for pruning decisions
+        return if bundle.isBetter score currentBest then score else currentBest
+
+    -- Use the best ordering found for this component
+    match ← componentBestRef.get with
+    | none => pure ()
+    | some (compSched, compEnv, compEnvSet, _) =>
+      accSched := accSched ++ compSched
+      accEnv := compEnv
+      accEnvSet := compEnvSet
+
+  -- 5. Build final schedule: firstChecks + component schedules + remaining vars
+  let remainingUninstantiated := remainingVarNames.filter (!accEnvSet.contains ·)
+  let finalPreSteps := (PreScheduleStep.Checks newCheckedHyps.reverse :: accSched ++
+    prune_empties [.InstVars remainingUninstantiated]).map (typePreScheduleStep nameTypeMap)
+
+  -- Convert to ScheduleSteps
+  let scheduleSteps ← (finalPreSteps.flatMapM (preScheduleStepToScheduleStep ctorName)).run scheduleEnv
+
+  -- 6. Trigger on-demand dep derivation for unknown deps
+  let deps := collectNonRecDeps scheduleSteps
+  for dep in deps do
+    if dep.kind == .relation || dep.kind == .checker then
+      let depKey : SpecKey := { inductiveName := dep.inductiveName,
+                                outputIndices := dep.outputIndices,
+                                deriveSort := dep.deriveSort }
+      if depKey != key then
+        let memoState ← memo.get
+        unless memoState.contains depKey do
+          deriveDep depKey
+
+  -- 7. Score using the bundle with up-to-date memo
+  let memoState ← memo.get
+  let fullScore := bundle.scheduleScorer
+    (scheduleSteps.map fun step => bundle.stepScorer key memoState step)
+  bestRef.set (some (scheduleSteps, fullScore))
+
+  let count ← countRef.get
+  match ← bestRef.get with
+  | none => return none
+  | some (steps, score) => return some (steps, score, count)

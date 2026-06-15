@@ -154,6 +154,7 @@ structure ScorerBundle where
   leafAggregator : ResolvedLeafAggregator
   inductiveAggregator : ResolvedInductiveAggregator
   isBetter : Score → Score → Bool
+  combineScores : Score → Score → Score
   reprScore : Score → String
   emptyScore : Score
   penaltyScore : Score
@@ -173,6 +174,7 @@ def mkScorerBundle [Inhabited S] [TypeName S] [Repr S] [Scorable S]
     leafAggregator := wrapLeafAggregator leaf
     inductiveAggregator := wrapInductiveAggregator inductive_
     isBetter := fun a b => Scorable.isBetter (Score.unwrap S a) (Score.unwrap S b)
+    combineScores := fun a b => Score.wrap (Scorable.combine (Score.unwrap S a) (Score.unwrap S b))
     reprScore := fun s => reprStr (Score.unwrap S s)
     emptyScore := Score.wrap (Scorable.empty : S)
     penaltyScore := Score.wrap (Scorable.uncoveredPenalty : S)
@@ -187,6 +189,7 @@ instance : Inhabited ScorerBundle where
     leafAggregator := fun _ => default
     inductiveAggregator := fun _ => default
     isBetter := fun _ _ => false
+    combineScores := fun a _ => a
     reprScore := fun _ => "<default>"
     emptyScore := default
     penaltyScore := default

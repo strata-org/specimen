@@ -499,15 +499,15 @@ def enumDependencySatisfyingOrderingsWithAdvancedPruning {α v} [BEq α] [Repr �
 /-- Monadic tree traversal with branch-and-bound pruning and early termination.
     Explores best-first (children sorted by score), prunes when partial score exceeds best.
     - `score`: monadic scoring function (may trigger on-demand dep derivation)
+    - `isBetter`: returns true if first arg is strictly better than second
     - `done`: IO.Ref flag; consumer sets to `true` to stop exploration
     - `yield`: callback receiving (leaf value, its score) and current best; returns updated best -/
-partial def minTreePruningM [Monad m] [MonadLiftT BaseIO m]
-    {α σ : Type} [LT σ] [DecidableRel (fun (a b : σ) => a < b)]
-    (tree : LazyRoseTree α) (score : α → m σ) (bestScore : σ)
+partial def minTreePruningM [Monad m] [MonadLiftT BaseIO m] {α σ : Type}
+    (tree : LazyRoseTree α) (score : α → m σ) (isBetter : σ → σ → Bool) (bestScore : σ)
     (done : IO.Ref Bool) (yield : (α × σ) → σ → m σ) : m σ := do
   if ← liftM (m := BaseIO) done.get then return bestScore
   let nodeScore ← score tree.val
-  if bestScore < nodeScore then return bestScore
+  if isBetter bestScore nodeScore then return bestScore
   let children := tree.children.get
   if children.isEmpty then
     yield (tree.val, nodeScore) bestScore
@@ -516,9 +516,9 @@ partial def minTreePruningM [Monad m] [MonadLiftT BaseIO m]
     for child in children do
       let s ← score child.val
       scoredChildren := scoredChildren.push (child, s)
-    let sorted := scoredChildren.qsort (fun a b => a.2 < b.2)
+    let sorted := scoredChildren.qsort (fun a b => isBetter a.2 b.2)
     let mut currentBest := bestScore
     for (child, _) in sorted do
       if ← liftM (m := BaseIO) done.get then break
-      currentBest ← minTreePruningM child score currentBest done yield
+      currentBest ← minTreePruningM child score isBetter currentBest done yield
     return currentBest
