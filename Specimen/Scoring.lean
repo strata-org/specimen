@@ -133,6 +133,20 @@ def wrapInductiveAggregator [Inhabited S] [TypeName S] [Repr S] (f : InductiveAg
 -- Scorer registry
 ----------------------------------------------
 
+/-- Pruning strategy for the SearchTree. Controls how schedule enumeration
+    prunes branches during hypothesis ordering search.
+    - `usePrimary`: use this bundle's own stepScorer/scheduleScorer/isBetter for pruning.
+      Valid when: (a) insertion around anchors can only bind more vars for existing hyps,
+      (b) more bound vars → step score worsens or stays same, (c) adding steps never
+      improves aggregate. All built-in strategies satisfy this.
+    - `useAlternate s`: use a separate scorer bundle `s` for pruning (e.g. structural
+      check-counting as a conservative fallback).
+    - `noPruning`: disable branch pruning entirely (exhaustive search). -/
+inductive PruneStrategy where
+  | usePrimary
+  | useAlternate (alt : ResolvedStepScorer × ResolvedScheduleScorer × (Score → Score → Bool) × Score)
+  | noPruning
+
 structure ScorerBundle where
   scoreTypeName : Name
   stepScorer : ResolvedStepScorer
@@ -144,6 +158,7 @@ structure ScorerBundle where
   emptyScore : Score
   penaltyScore : Score
   scoreBadness : Score → Float
+  pruneStrategy : PruneStrategy := .usePrimary
 
 /-- Build a complete ScorerBundle from typed scorers. -/
 def mkScorerBundle [Inhabited S] [TypeName S] [Repr S] [Scorable S]
@@ -161,7 +176,8 @@ def mkScorerBundle [Inhabited S] [TypeName S] [Repr S] [Scorable S]
     reprScore := fun s => reprStr (Score.unwrap S s)
     emptyScore := Score.wrap (Scorable.empty : S)
     penaltyScore := Score.wrap (Scorable.uncoveredPenalty : S)
-    scoreBadness := fun s => Scorable.badness (Score.unwrap S s) }
+    scoreBadness := fun s => Scorable.badness (Score.unwrap S s)
+    pruneStrategy := .usePrimary }
 
 instance : Inhabited ScorerBundle where
   default := {
@@ -175,7 +191,16 @@ instance : Inhabited ScorerBundle where
     emptyScore := default
     penaltyScore := default
     scoreBadness := fun _ => 0.0
+    pruneStrategy := .noPruning
   }
+
+/-- Resolve the effective pruning scorer from a bundle's pruneStrategy.
+    Returns (stepScorer, scheduleScorer, isBetter, emptyScore) or none for noPruning. -/
+def ScorerBundle.getPruneScorer (b : ScorerBundle) : Option (ResolvedStepScorer × ResolvedScheduleScorer × (Score → Score → Bool) × Score) :=
+  match b.pruneStrategy with
+  | .usePrimary => some (b.stepScorer, b.scheduleScorer, b.isBetter, b.emptyScore)
+  | .useAlternate alt => some alt
+  | .noPruning => none
 
 initialize scorerBundles : IO.Ref (Array ScorerBundle) ← IO.mkRef #[]
 
