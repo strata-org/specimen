@@ -525,9 +525,9 @@ def getScheduleForInductiveRelationConstructor
       let searchStart ← IO.monoNanosNow
 
       let (bestSchedule, bestScore, countProcessed) ←
-        if bundle.usesMonadicPath then do
+        if bundle.usesMonadicPath && memoRef.isSome then do
           match memoRef with
-          | none => throwError "Monadic pruning requires memoRef"
+          | none => unreachable!
           | some ref =>
           let result ← monadLift <| searchBestScheduleM
             (ctorName := ctorName) (vars := updatedForAllVars)
