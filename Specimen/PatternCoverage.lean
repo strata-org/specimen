@@ -38,6 +38,7 @@ structure AnnotatedLeaf where
 -- Pure pattern helpers
 ----------------------------------------------
 
+/-- A pattern position is splittable if it hasn't been refined yet (wild or otherLit). -/
 def isSplittable : CovPattern → Bool
   | .wild => true
   | .otherLit => true

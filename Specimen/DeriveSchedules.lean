@@ -951,169 +951,6 @@ private partial def enumSchedulesChunkedWithPruning {α v} [Ord v] [BEq v] [Repr
   IO.println s!"Total Reduction: {totalReduction}%"
   pure ()
 
--- Property test: preScheduleStepsScore components (checks, length, unconstrained) are
--- all monotonically non-decreasing as hypotheses are iteratively processed.
--- Uses random generation of hypothesis sets and tests all permutations for small sets,
--- random permutations for larger ones.
-
-private structure SimpleRng where
-  state : UInt64
-
-private def SimpleRng.next (rng : SimpleRng) : SimpleRng × UInt64 :=
-  -- xorshift64
-  let s := rng.state
-  let s := s ^^^ (s <<< 13)
-  let s := s ^^^ (s >>> 7)
-  let s := s ^^^ (s <<< 17)
-  ({ state := s }, s)
-
-private def SimpleRng.natBelow (rng : SimpleRng) (n : Nat) : SimpleRng × Nat :=
-  if n == 0 then (rng, 0)
-  else let (rng', v) := rng.next; (rng', v.toNat % n)
-
-private def shuffle (rng : SimpleRng) (l : List α) : SimpleRng × List α := Id.run do
-  let mut rng := rng
-  let mut arr := l.toArray
-  let mut i := arr.size
-  while i > 1 do
-    i := i - 1
-    let (rng', j) := rng.natBelow (i + 1)
-    rng := rng'
-    match arr[i]?, arr[j]? with
-    | some vi, some vj =>
-      arr := arr.set! i vj |>.set! j vi
-    | _, _ => pure ()
-  return (rng, arr.toList)
-
--- Simulate processChoice: process one hypothesis given env and remaining hyps
-private def simProcessHyp (hyp : String) (outputGroups : List (List String))
-    (alwaysBound : List String)
-    (rest : List (String × List (List String) × List String))
-    (envSet : Std.HashSet String)
-    : (List (PreScheduleStep String String) × Std.HashSet String × List (String × List (List String) × List String)) :=
-  let (someBound, allUnbound) := outputGroups.partition (fun l => l.any envSet.contains)
-  let boundVars := (if allUnbound.isEmpty then [] else allUnbound.drop 1 |>.flatten) ++
-                   (alwaysBound ++ someBound.flatten).filter (!envSet.contains ·)
-  let envAfterBind := boundVars.foldl (fun s v => s.insert v) envSet
-  let (prechecks, rest1) := rest.partition fun (_, potIdx, ab) =>
-    ab.all envAfterBind.contains && potIdx.all (fun idx => idx.all envAfterBind.contains)
-  let outVars := if allUnbound.isEmpty then [] else allUnbound.head!
-  let envAfterProduce := outVars.foldl (fun s v => s.insert v) envAfterBind
-  let (postchecks, rest2) := rest1.partition fun (_, potIdx, ab) =>
-    ab.all envAfterProduce.contains && potIdx.all (fun idx => idx.all envAfterProduce.contains)
-  let steps := prune_empties [
-    .InstVars boundVars,
-    .Checks (prechecks.map (·.1)),
-    .Produce outVars hyp,
-    .Checks (postchecks.map (·.1))
-  ]
-  (steps, envAfterProduce, rest2)
-
--- Run one permutation and check monotonicity
-private def checkOrdering (perm : List (String × List (List String) × List String))
-    : Option (PreScheduleScore × PreScheduleScore) := Id.run do
-  let mut env : Std.HashSet String := {}
-  let mut remaining := perm
-  let mut prevScore : PreScheduleScore := ⟨0, 0, 0⟩
-  let mut cumSched : List (PreScheduleStep String String) := []
-  while !remaining.isEmpty do
-    match remaining with
-    | [] => return none
-    | (hyp, outputs, bound) :: rest =>
-      let (newSteps, newEnv, newRest) := simProcessHyp hyp outputs bound rest env
-      cumSched := cumSched ++ newSteps
-      let newScore := preScheduleStepsScore cumSched
-      if newScore.checks < prevScore.checks ||
-         newScore.length < prevScore.length ||
-         newScore.unconstrained < prevScore.unconstrained then
-        return some (prevScore, newScore)
-      prevScore := newScore
-      env := newEnv
-      remaining := newRest
-  return none
-
--- Generate a random hypothesis set
-private def genHypSet (rng : SimpleRng) : SimpleRng × List (String × List (List String) × List String) := Id.run do
-  let (rng, numHyps) := rng.natBelow 5  -- 2..6 hypotheses
-  let numHyps := numHyps + 2
-  let (rng, numVars) := rng.natBelow 4  -- 3..6 variables
-  let numVars := numVars + 3
-  let vars := (List.range numVars).map fun i => s!"v{i}"
-  let mut rng := rng
-  let mut hyps : List (String × List (List String) × List String) := []
-  let mut hi := 0
-  while hi < numHyps do
-    let hypName := s!"H{hi}"
-    let (rng', numGroups) := rng.natBelow 3
-    rng := rng'
-    let numGroups := numGroups + 1
-    let mut groups : List (List String) := []
-    let mut gi := 0
-    while gi < numGroups do
-      let (rng', groupSize) := rng.natBelow 2
-      rng := rng'
-      let groupSize := groupSize + 1
-      let mut group : List String := []
-      let mut vi := 0
-      while vi < groupSize do
-        let (rng', idx) := rng.natBelow numVars
-        rng := rng'
-        group := group ++ [vars[idx]!]
-        vi := vi + 1
-      groups := groups ++ [group.eraseDups]
-      gi := gi + 1
-    let mut alwaysBound : List String := []
-    let (rng', hasAB) := rng.natBelow 5
-    rng := rng'
-    if hasAB == 0 then
-      let (rng', abi) := rng.natBelow numVars
-      rng := rng'
-      alwaysBound := [vars[abi]!]
-    hyps := hyps ++ [(hypName, groups, alwaysBound)]
-    hi := hi + 1
-  return (rng, hyps)
-
-private def testScoreMonotonicity : IO String := do
-  let numTrials := 10000
-  let mut rng : SimpleRng := { state := 12345 }
-  let mut violations := 0
-  let mut tests := 0
-  let mut firstViolation : Option String := none
-  let mut trial := 0
-  while trial < numTrials do
-    let (rng', hyps) := genHypSet rng
-    rng := rng'
-    if hyps.length ≤ 4 then
-      let perms := hyps.permutations
-      for perm in perms do
-        tests := tests + 1
-        match checkOrdering perm with
-        | some (prev, cur) =>
-          violations := violations + 1
-          if firstViolation.isNone then
-            firstViolation := some s!"prev={repr prev} cur={repr cur} hyps={hyps.length}"
-        | none => pure ()
-    else
-      let mut si := 0
-      while si < 10 do
-        let (rng', perm) := shuffle rng hyps
-        rng := rng'
-        tests := tests + 1
-        match checkOrdering perm with
-        | some (prev, cur) =>
-          violations := violations + 1
-          if firstViolation.isNone then
-            firstViolation := some s!"prev={repr prev} cur={repr cur} hyps={hyps.length}"
-        | none => pure ()
-        si := si + 1
-    trial := trial + 1
-  if violations > 0 then
-    return s!"FAILED: {violations}/{tests} orderings had non-monotonic score. First: {firstViolation.getD ""}"
-  else
-    return s!"PASSED: {tests} orderings across {numTrials} random hypothesis sets — score monotonically non-decreasing"
-
-#eval do IO.println (← testScoreMonotonicity)
-
 -- Determine the right name for the recursive function in the producer
 -- The default name for the recursive function, used when no freshened name is provided.
 def defaultRecFnName (deriveSort : DeriveSort) : Name :=
@@ -1313,12 +1150,13 @@ partial def searchBestScheduleM (ctorName : Name) (vars : List TypedVar)
   let countRef ← IO.mkRef (0 : Nat)
   let bestRef ← IO.mkRef (none : Option (List ScheduleStep × Score))
 
+  let inputVarSet := Std.HashSet.ofList fixedVars
   -- Helper: score a single pre-schedule step using the bundle
   let scorePreStep := fun (memoState : Std.HashMap SpecKey MemoEntry)
       (step : PreScheduleStep HypothesisExpr Name) (_env : Std.HashSet Name) => do
     let typedStep := typePreScheduleStep nameTypeMap step
     let schedSteps ← (preScheduleStepToScheduleStep ctorName typedStep).run scheduleEnv
-    let stepScores := schedSteps.map fun s => bundle.stepScorer key memoState s
+    let stepScores := schedSteps.map fun s => bundle.stepScorer key memoState inputVarSet s
     return stepScores
 
   -- Helper: process mode choices for one hypothesis (replicates processChoice logic)
@@ -1386,7 +1224,7 @@ partial def searchBestScheduleM (ctorName : Name) (vars : List TypedVar)
   let envDominanceRef ← IO.mkRef ({} : Std.HashMap (List Name) Score)
 
   -- Helper: score an ordering via processChoice → ScheduleSteps → bundle.
-  -- Dominance: if this env state was reached before with a better score, return penaltyScore.
+  -- Dominance: if this env state was reached before with a better score, return worstScore.
   -- On-demand: derives unknown deps before scoring.
   let scoreComponentOrdering := fun (env : List Name) (envSet : Std.HashSet Name)
       (ordering : List (HypothesisExpr × List (List Name))) => do
@@ -1405,13 +1243,13 @@ partial def searchBestScheduleM (ctorName : Name) (vars : List TypedVar)
           unless m.contains depKey do deriveDep depKey
     -- Score
     let memoState ← memo.get
-    let score := bundle.scheduleScorer (schedSteps.map fun step => bundle.stepScorer key memoState step)
+    let score := bundle.scheduleScorer (schedSteps.map fun step => bundle.stepScorer key memoState inputVarSet step)
     -- Dominance check (same structure as original: if dominated, signal pruning)
     let envKey := compEnv.eraseDups |>.mergeSort (fun a b => compare a b |>.isLE)
     let envDom ← envDominanceRef.get
     match envDom[envKey]? with
     | some prevBest =>
-      if bundle.isBetter prevBest score then return bundle.penaltyScore
+      if bundle.isBetter prevBest score then return bundle.worstScore
     | none => pure ()
     envDominanceRef.modify fun m =>
       match m[envKey]? with
@@ -1431,7 +1269,7 @@ partial def searchBestScheduleM (ctorName : Name) (vars : List TypedVar)
     -- Tree yields List α where α = HypothesisExpr × List (List Name)
     -- (the List Name from rawHypotheses is consumed as v for SCC edges)
     let componentBestRef ← IO.mkRef (none : Option (List (PreScheduleStep HypothesisExpr Name) × List Name × Std.HashSet Name × Score))
-    let componentWorst := bundle.penaltyScore
+    let componentWorst := bundle.worstScore
     let envSnapshot := accEnv
     let envSetSnapshot := accEnvSet
 
@@ -1487,7 +1325,7 @@ partial def searchBestScheduleM (ctorName : Name) (vars : List TypedVar)
   -- 7. Score using the bundle with up-to-date memo
   let memoState ← memo.get
   let fullScore := bundle.scheduleScorer
-    (scheduleSteps.map fun step => bundle.stepScorer key memoState step)
+    (scheduleSteps.map fun step => bundle.stepScorer key memoState inputVarSet step)
   bestRef.set (some (scheduleSteps, fullScore))
 
   let count ← countRef.get

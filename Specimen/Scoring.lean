@@ -17,6 +17,8 @@ class Scorable (S : Type) where
   isBetter : S → S → Bool
   bestOf : List S → S
   uncoveredPenalty : S
+  /-- Must be worse than any real schedule under `isBetter`. -/
+  worst : S
   badness : S → Float
 
 ----------------------------------------------
@@ -26,8 +28,9 @@ class Scorable (S : Type) where
 /-- Scores a single schedule step. Receives:
     - The current spec being derived (inductiveName + outputIndices + deriveSort)
     - The dependency memo (for looking up sub-relation scores)
+    - The set of input variables (fixed at schedule start, NOT generated)
     - The step itself -/
-abbrev StepScorer (S : Type) := SpecKey → Std.HashMap SpecKey MemoEntry → ScheduleStep → S
+abbrev StepScorer (S : Type) := SpecKey → Std.HashMap SpecKey MemoEntry → Std.HashSet Name → ScheduleStep → S
 
 /-- Combines a list of step scores into a schedule-level score. -/
 abbrev ScheduleScorer (S : Type) := List S → S
@@ -49,7 +52,7 @@ abbrev InductiveAggregator (S : Type) := List S → S
 ----------------------------------------------
 
 /-- A resolved step scorer that produces type-erased scores. -/
-abbrev ResolvedStepScorer := SpecKey → Std.HashMap SpecKey MemoEntry → ScheduleStep → Score
+abbrev ResolvedStepScorer := SpecKey → Std.HashMap SpecKey MemoEntry → Std.HashSet Name → ScheduleStep → Score
 
 /-- A resolved schedule scorer. -/
 abbrev ResolvedScheduleScorer := List Score → Score
@@ -88,6 +91,7 @@ instance : Scorable DefaultScore where
   isBetter a b := a < b
   bestOf scores := scores.foldl (fun acc s => if s < acc then s else acc) (scores.headD {})
   uncoveredPenalty := { checks := 1 }
+  worst := { checks := 1000, length := 1000, unconstrained := 1000 }
   badness s :=
     if s.length == 0 then 0.0
     else
@@ -103,6 +107,7 @@ instance : Scorable DefaultScore where
 def Score.wrap [TypeName S] [Repr S] (s : S) : Score :=
   { val := Dynamic.mk s, reprFn := fun d => match d.get? S with | some v => reprStr v | none => "<cast failed>" }
 
+/-- Extract typed score from the Dynamic wrapper. Returns `default` on type mismatch. -/
 unsafe def Score.unwrapImpl (S : Type) [Inhabited S] [TypeName S] (score : Score) : S :=
   match score.val.get? S with
   | some v => v
@@ -115,7 +120,7 @@ instance : Inhabited Score where default := Score.wrap ({} : DefaultScore)
 
 /-- Wrap a typed scorer into a ResolvedStepScorer. -/
 def wrapStepScorer [Inhabited S] [TypeName S] [Repr S] (f : StepScorer S) : ResolvedStepScorer :=
-  fun key memo step => Score.wrap (f key memo step)
+  fun key memo inputVars step => Score.wrap (f key memo inputVars step)
 
 /-- Wrap a typed schedule scorer into a ResolvedScheduleScorer. -/
 def wrapScheduleScorer [Inhabited S] [TypeName S] [Repr S] (f : ScheduleScorer S) : ResolvedScheduleScorer :=
@@ -148,6 +153,9 @@ inductive PruneStrategy where
   | noPruning
   | legacy
 
+/-- A fully resolved scoring bundle: type-erased scorers for steps, schedules,
+    leaves, and inductives, plus comparison/display utilities.
+    Registered bundles are selected at runtime via `specimen.scoreType` option. -/
 structure ScorerBundle where
   scoreTypeName : Name
   stepScorer : ResolvedStepScorer
@@ -157,8 +165,14 @@ structure ScorerBundle where
   isBetter : Score → Score → Bool
   combineScores : Score → Score → Score
   reprScore : Score → String
+  /-- Score of an empty schedule (no steps). Identity for `combineScores`. -/
   emptyScore : Score
+  /-- Penalty added to leaf score when no constructor covers it. -/
   penaltyScore : Score
+  /-- Absolute worst score — guaranteed worse than any real schedule.
+      Used as the initial bound in branch-and-bound search. -/
+  worstScore : Score
+  /-- Map score to [0,1] for HSL color display (0 = best, 1 = worst). -/
   scoreBadness : Score → Float
   pruneStrategy : PruneStrategy := .usePrimary
 
@@ -179,6 +193,7 @@ def mkScorerBundle [Inhabited S] [TypeName S] [Repr S] [Scorable S]
     reprScore := fun s => reprStr (Score.unwrap S s)
     emptyScore := Score.wrap (Scorable.empty : S)
     penaltyScore := Score.wrap (Scorable.uncoveredPenalty : S)
+    worstScore := Score.wrap (Scorable.worst : S)
     scoreBadness := fun s => Scorable.badness (Score.unwrap S s)
     pruneStrategy := .usePrimary }
 
@@ -194,6 +209,7 @@ instance : Inhabited ScorerBundle where
     reprScore := fun _ => "<default>"
     emptyScore := default
     penaltyScore := default
+    worstScore := default
     scoreBadness := fun _ => 0.0
     pruneStrategy := .noPruning
   }
@@ -244,7 +260,7 @@ def getActiveScorerBundle : MetaM ScorerBundle := do
 -- Built-in: default strategy (sum of best)
 ----------------------------------------------
 
-def defaultStepScorer : StepScorer DefaultScore := fun _key memo step =>
+def defaultStepScorer : StepScorer DefaultScore := fun _key memo _inputVars step =>
   let baseScore : DefaultScore := match step with
     | .Check .. => { checks := 1, length := 1 }
     | .Unconstrained .. => { length := 1, unconstrained := 1 }
@@ -307,6 +323,7 @@ instance : Scorable WorstLeafScore where
   isBetter a b := a < b
   bestOf scores := scores.foldl (fun acc s => if s < acc then s else acc) (scores.headD {})
   uncoveredPenalty := { checks := 1 }
+  worst := { checks := 1000, length := 1000, unconstrained := 1000 }
   badness s :=
     if s.length == 0 then 0.0
     else
@@ -314,7 +331,7 @@ instance : Scorable WorstLeafScore where
       let uncRatio := Float.ofNat s.unconstrained / Float.ofNat s.length
       min 1.0 (checkRatio * 2.0 + uncRatio * 0.5)
 
-def worstLeafStepScorer : StepScorer WorstLeafScore := fun _key _memo step =>
+def worstLeafStepScorer : StepScorer WorstLeafScore := fun _key _memo _inputVars step =>
   match step with
   | .Check .. => { checks := 1, length := 1 }
   | .Unconstrained .. => { length := 1, unconstrained := 1 }
@@ -391,31 +408,38 @@ instance : Scorable DensityScore where
   isBetter a b := a < b
   bestOf scores := scores.foldl (fun acc s => if s < acc then s else acc) (scores.headD {})
   uncoveredPenalty := { density := .Partial, varDeps := 0 }
+  worst := { density := .Checking, varDeps := 1000 }
   badness s :=
     let rawLevel := s.density.toNat.toFloat / 3.0
     let level := if s.forChecker then 1.0 - rawLevel else rawLevel
     let depPenalty := min 0.2 (s.varDeps.toFloat * 0.05)
     min 1.0 (level + depPenalty)
 
-private def sourceVarCount : Source → Nat
-  | .NonRec (_, args) => args.length
-  | .Rec _ args => args.length
-  | .MutRec _ args => args.length
+private def sourceArgs : Source → List ConstructorExpr
+  | .NonRec (_, args) => args
+  | .Rec _ args => args
+  | .MutRec _ args => args
+
+private def countGeneratedVarDeps (inputVars : Std.HashSet Name) (src : Source) : Nat :=
+  let args := sourceArgs src
+  let allVars := args.flatMap varsInConstructorExpr
+  allVars.filter (!inputVars.contains ·) |>.length
 
 /-- Density step scorer (Section 4 of the paper):
     - Unconstrained → Total, 0 deps
-    - Check → Checking, #vars deps
+    - Check → Checking, #generated-var deps
     - Match → Backtracking, 0 deps
-    - SuchThat (recursive) → Partial, #output deps
-    - SuchThat (non-recursive) → dep's density from memo, #output deps -/
-def densityStepScorer : StepScorer DensityScore := fun key memo step =>
+    - SuchThat → dep's density from memo, #generated-var deps
+    varDeps counts source args that were generated (not original inputs). -/
+def densityStepScorer : StepScorer DensityScore := fun key memo inputVars step =>
   let isChecker := key.deriveSort == .Checker || key.deriveSort == .Enumerator
   match step with
   | .Unconstrained .. => { density := .Total, varDeps := 0, forChecker := isChecker }
-  | .Check src _ => { density := .Checking, varDeps := sourceVarCount src, forChecker := isChecker }
+  | .Check src _ => { density := .Checking, varDeps := countGeneratedVarDeps inputVars src, forChecker := isChecker }
   | .Match .. => { density := .Backtracking, varDeps := 0, forChecker := isChecker }
   | .SuchThat outputs src _ =>
-    let vars := outputs.length
+    let outputNames := Std.HashSet.ofList (outputs.map (·.1))
+    let varDeps := countGeneratedVarDeps (inputVars.union outputNames) src
     let depDensity : Density := match src with
       | .Rec .. => .Partial
       | .MutRec .. => .Partial
@@ -427,7 +451,7 @@ def densityStepScorer : StepScorer DensityScore := fun key memo step =>
         else match memo[depKey]? with
           | some (.done depSched) => (Score.unwrap DensityScore depSched.score).density
           | _ => .Partial
-    { density := depDensity, varDeps := vars, forChecker := isChecker }
+    { density := depDensity, varDeps := varDeps, forChecker := isChecker }
 
 def densityScheduleScorer : ScheduleScorer DensityScore := fun stepScores =>
   stepScores.foldl Scorable.combine Scorable.empty

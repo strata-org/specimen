@@ -548,8 +548,9 @@ def getScheduleForInductiveRelationConstructor
           | .lnil => throwError m!"Unable to compute any possible schedules"
           | .lcons fstSchdM rest =>
           let (fstSchd, countSeen) ← fstSchdM
+          let inputVarSet := Std.HashSet.ofList fixedVars
           let scoreSchedule := fun (steps : List ScheduleStep) =>
-            let stepScores := steps.map fun step => bundle.stepScorer key depMemo step
+            let stepScores := steps.map fun step => bundle.stepScorer key depMemo inputVarSet step
             bundle.scheduleScorer stepScores
           let mut countProcessed := 1
           let mut bestScore := scoreSchedule fstSchd

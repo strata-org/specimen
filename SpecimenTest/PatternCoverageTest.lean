@@ -246,8 +246,14 @@ def testStrategy (indName : Name) (outputIndices : List Nat) (bundle : ScorerBun
     | _ => []
 
   -- Score each ctor with the bundle
+  let inputVarSet : Std.HashSet Name := match memoState[key]? with
+    | some (.done s) =>
+      let inputNames := s.argNames.filter fun n =>
+        key.outputIndices.all fun idx => s.argNames.getD idx `_ != n
+      Std.HashSet.ofList inputNames
+    | _ => {}
   let ctorScores : List (Name × Score) := ctorScheds.map fun (name, steps) =>
-    let stepScores := steps.map fun step => bundle.stepScorer key memoState step
+    let stepScores := steps.map fun step => bundle.stepScorer key memoState inputVarSet step
     (name, bundle.scheduleScorer stepScores)
 
   -- Leaf + inductive aggregation
@@ -277,7 +283,7 @@ def testStrategy (indName : Name) (outputIndices : List Nat) (bundle : ScorerBun
   IO.println output
 
 
-set_option specimen.scoreType "Scoring.DensityScore"
+set_option specimen.scoreType "Scoring.DensityScore" in
 #eval show TermElabM _ from do IO.println (← testCoverage ``MyTyping [1,2])
 deriving instance Plausible.Arbitrary for MyTy
 deriving instance DecidableEq for MyTy
