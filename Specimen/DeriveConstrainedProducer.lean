@@ -973,8 +973,8 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
               for i in [:outputFVars.length] do
                 if outputFVars.length == 1 then projections := projections.push currentExpr
                 else if i < outputFVars.length - 1 then
-                  projections := projections.push (← mkAppM ``Prod.fst #[currentExpr])
-                  currentExpr ← mkAppM ``Prod.snd #[currentExpr]
+                  projections := projections.push (.proj ``Prod 0 currentExpr)
+                  currentExpr := .proj ``Prod 1 currentExpr
                 else projections := projections.push currentExpr
               let mut appArgs : Array Expr := #[]
               let mut outIdx := 0
