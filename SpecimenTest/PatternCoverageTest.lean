@@ -147,7 +147,7 @@ def testCoverage (indName : Name) (outputIndices : List Nat) : TermElabM String 
     (pat, covering, leafScore)
 
   result := result ++ s!"\nLeaves ({leafScores.length}):\n"
-  for (pat, covering, leafScore) in leafScores do
+  for (pat, covering, _leafScore) in leafScores do
     if covering.isEmpty then
       result := result ++ s!"  {ppCovPattern pat} → UNCOVERED\n"
     else
@@ -161,59 +161,115 @@ def testCoverage (indName : Name) (outputIndices : List Nat) : TermElabM String 
   return result
 
 -- Basic: list structure splitting
+/--
+info: === Coverage for IsSorted (outputs: []) ===
+Constructors and their input patterns:
+  nil: IsSorted(nil)
+  single: IsSorted(cons(↓, nil))
+  cons: IsSorted(cons(↓, cons(↓, ↓)))
+
+Coverage tree:
+  IsSorted(↓) : []
+    IsSorted(nil) : [nil]
+    IsSorted(cons(↓, ↓)) : []
+      IsSorted(cons(↓, nil)) : [single]
+      IsSorted(cons(↓, cons(↓, ↓))) : [cons]
+
+Leaves (3):
+  IsSorted(nil) → [nil({ checks := 0, length := 0, unconstrained := 0 })]
+  IsSorted(cons(↓, nil)) → [single({ checks := 0, length := 0, unconstrained := 0 })]
+  IsSorted(cons(↓, cons(↓, ↓))) → [cons({ checks := 2, length := 2, unconstrained := 0 })]
+
+Inductive score: { checks := 2, length := 2, unconstrained := 0 }
+
+-/
+#guard_msgs in
 #eval show TermElabM _ from do IO.println (← testCoverage ``IsSorted [])
 
 -- Nat literals (zero/succ)
+#guard_msgs(drop info) in
 #eval show TermElabM _ from do IO.println (← testCoverage ``Even [])
 
 -- All-wild (no splitting needed)
+#guard_msgs(drop info) in
 #eval show TermElabM _ from do IO.println (← testCoverage ``Reach [])
 
 -- Generator mode (output excluded)
+#guard_msgs(drop info) in
 #eval show TermElabM _ from do IO.println (← testCoverage ``Reach [1])
 
 -- Multiple constructors, uncovered leaf
+#guard_msgs(drop info) in
 #eval show TermElabM _ from do IO.println (← testCoverage ``MyTyping [])
 
 -- Output position with constructor splitting
+#guard_msgs(drop info) in
 #eval show TermElabM _ from do IO.println (← testCoverage ``MyTyping [2])
 
 -- Tree structure splitting
+#guard_msgs(drop info) in
 #eval show TermElabM _ from do IO.println (← testCoverage ``IsBST [])
 
 -- Generator for tree (all inputs wild)
+#guard_msgs(drop info) in
 #eval show TermElabM _ from do IO.println (← testCoverage ``IsBST [0])
 
 -- Polymorphic type param
+#guard_msgs(drop info) in
 #eval show TermElabM _ from do IO.println (← testCoverage ``Elem [])
 
 -- Polymorphic with output
+#guard_msgs(drop info) in
 #eval show TermElabM _ from do IO.println (← testCoverage ``Elem [0])
 
 -- Instance parameter (DecidableEq)
+#guard_msgs(drop info) in
 #eval show TermElabM _ from do IO.println (← testCoverage ``UniqueList [])
 
 -- Function application in conclusion (xs ++ [x])
+#guard_msgs(drop info) in
 #eval show TermElabM _ from do IO.println (← testCoverage ``Palindrome [])
 
 -- Mutual inductives
+#guard_msgs(drop info) in
 #eval show TermElabM _ from do IO.println (← testCoverage ``MutEven [])
+#guard_msgs(drop info) in
 #eval show TermElabM _ from do IO.println (← testCoverage ``MutOdd [])
 
 -- Multiple inputs with constructors in several positions
+#guard_msgs(drop info) in
 #eval show TermElabM _ from do IO.println (← testCoverage ``Interleave [])
+#guard_msgs(drop info) in
 #eval show TermElabM _ from do IO.println (← testCoverage ``Interleave [2])
 
 -- Function app in conclusion (Γ x = some τ)
+/--
+info: === Coverage for HasType (outputs: []) ===
+Constructors and their input patterns:
+  found: HasType(↓, ↓, ↓)
+
+Coverage tree:
+  HasType(↓, ↓, ↓) : [found]
+
+Leaves (1):
+  HasType(↓, ↓, ↓) → [found({ checks := 1, length := 1, unconstrained := 0 })]
+
+Inductive score: { checks := 1, length := 1, unconstrained := 0 }
+
+-/
+#guard_msgs in
 #eval show TermElabM _ from do IO.println (← testCoverage ``HasType [])
 
 -- Deep nesting (List (List Nat))
+#guard_msgs(drop info) in
 #eval show TermElabM _ from do IO.println (← testCoverage ``DeepList [])
 
 -- String literals
+#guard_msgs(drop info) in
 #eval show TermElabM _ from do IO.println (← testCoverage ``Greeting [])
 
 -- Char literals
+#guard_msgs(drop info) in
 #eval show TermElabM _ from do IO.println (← testCoverage ``IsVowel [])
 
 ----------------------------------------------
@@ -266,6 +322,29 @@ def testStrategy (indName : Name) (outputIndices : List Nat) (bundle : ScorerBun
   return s!"  [{bundle.scoreTypeName}] {bundle.reprScore final}"
 
 -- Compare strategies
+/--
+info: === Strategy comparison for IsSorted (checker) ===
+  [Scoring.DefaultScore] { checks := 2, length := 5, unconstrained := 0 }
+  [Scoring.WorstLeafScore] { checks := 2, length := 3, unconstrained := 0 }
+  [Scoring.DensityScore] { density := Scoring.Density.Checking, varDeps := 4, forChecker := true }
+
+=== Strategy comparison for Interleave (checker) ===
+  [Scoring.DefaultScore] { checks := 10, length := 15, unconstrained := 0 }
+  [Scoring.WorstLeafScore] { checks := 2, length := 4, unconstrained := 0 }
+  [Scoring.DensityScore] { density := Scoring.Density.Checking, varDeps := 12, forChecker := true }
+
+=== Strategy comparison for IsBST (checker) ===
+  [Scoring.DefaultScore] { checks := 4, length := 6, unconstrained := 0 }
+  [Scoring.WorstLeafScore] { checks := 4, length := 5, unconstrained := 0 }
+  [Scoring.DensityScore] { density := Scoring.Density.Checking, varDeps := 6, forChecker := true }
+
+=== Strategy comparison for Typing (output type) ===
+  [Scoring.DefaultScore] { checks := 0, length := 3, unconstrained := 2 }
+  [Scoring.WorstLeafScore] { checks := 0, length := 3, unconstrained := 2 }
+  [Scoring.DensityScore] { density := Scoring.Density.Total, varDeps := 2, forChecker := false }
+
+-/
+#guard_msgs in
 #eval show TermElabM _ from do
   let bundles ← scorerBundles.get
   let mut output := "=== Strategy comparison for IsSorted (checker) ===\n"
@@ -283,11 +362,29 @@ def testStrategy (indName : Name) (outputIndices : List Nat) (bundle : ScorerBun
   IO.println output
 
 
+/--
+info: === Coverage for MyTyping (outputs: [1, 2]) ===
+Constructors and their input patterns:
+  tvar: MyTyping(↓, ↑, ↑)
+  tabs: MyTyping(↓, ↑, ↑)
+  tapp: MyTyping(↓, ↑, ↑)
+
+Coverage tree:
+  MyTyping(↓, ↑, ↑) : [tapp, tabs, tvar]
+
+Leaves (1):
+  MyTyping(↓, ↑, ↑) → [tapp({ density := Scoring.Density.Partial, varDeps := 3, forChecker := false }), tabs({ density := Scoring.Density.Partial, varDeps := 3, forChecker := false }), tvar({ density := Scoring.Density.Backtracking, varDeps := 1, forChecker := false })]
+
+Inductive score: { density := Scoring.Density.Partial, varDeps := 3, forChecker := false }
+
+-/
+#guard_msgs in
 set_option specimen.scoreType "Scoring.DensityScore" in
 #eval show TermElabM _ from do IO.println (← testCoverage ``MyTyping [1,2])
 deriving instance Plausible.Arbitrary for MyTy
 deriving instance DecidableEq for MyTy
 set_option specimen.autoDeriveDeps true
 set_option specimen.multiOutput true
+#guard_msgs(drop info) in
 derive_mutual
   (fun a c => ∃ b, MyTyping a b c)
