@@ -216,3 +216,17 @@ def runEnum [Enum α] (size : Nat) (limit : Nat := 10) : IO (List α) :=
     returning the enumerated list of `Except GenError α` values (containing up to `limit` elements) in the `IO` monad -/
 def runSizedEnum (sizedEnum : Nat → ExceptT GenError Enumerator α) (size : Nat) (limit : Nat := 10) : IO (List (Except GenError α)) :=
   return (LazyList.take limit $ (sizedEnum size) size)
+
+/-- Like `runSizedEnum`, but filters out errors and pairs each successful value with the
+    accumulated error count seen so far. A nonzero error count means the enumeration was
+    incomplete at this size — try a larger size for more results. -/
+def runSizedEnumOk (sizedEnum : Nat → ExceptT GenError Enumerator α) (size : Nat) : LazyList (α × Nat) :=
+  let raw := (sizedEnum size) size
+  let rec go (l : LazyList (Except GenError α)) (errCount : Nat) : LazyList (α × Nat) :=
+    match l with
+    | .lnil => .lnil
+    | .lcons x xs =>
+      match x with
+      | .ok v => .lcons (v, errCount) (Thunk.mk fun _ => go xs.get errCount)
+      | .error _ => go xs.get (errCount + 1)
+  go raw 0

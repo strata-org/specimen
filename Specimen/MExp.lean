@@ -436,9 +436,8 @@ def scheduleStepToMExp (step : ScheduleStep) (defFuel : MExp) (k : MExp) (output
       pure $ .MBind monadSort producer typedVars k
     | Source.Rec f args | Source.MutRec f args =>
       pure $ .MBind monadSort (recCall f fuelPrimeName sizePrimeName args) typedVars k
-  | .Check src _ =>
+  | .Check src polarity =>
 
-    -- TODO: double check if we need to pattern-match on `scheduleSort` here
     let checker :=
       match src with
       | Source.NonRec hypExpr =>
@@ -446,9 +445,10 @@ def scheduleStepToMExp (step : ScheduleStep) (defFuel : MExp) (k : MExp) (output
       | Source.Rec f args | Source.MutRec f args =>
         recCall f fuelPrimeName sizePrimeName args
 
-    -- TODO: handle checking hypotheses w/ negative polarity (currently not handled)
+    let checker :=
+      if polarity then checker
+      else .MApp .allowImplicit (.MConst ``DecOpt.negOpt) [checker]
 
-    -- TODO: double check if this is right
     pure $ .MBind .Checker checker [] k
   | .Match explicit scrutinee pattern =>
     pure $ .MMatch explicit (.MId scrutinee) [(pattern, k), (wildCardPattern, .MFail)]

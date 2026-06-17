@@ -25,6 +25,9 @@ def auxDecFn : Ident := mkIdent $ Name.mkStr1 "aux_dec"
 /-- Ident for the `DecOpt.andOptList` checker combinator (see `DecOpt.lean`) -/
 def andOptListFn : Ident := mkIdent $ Name.mkStr2 "DecOpt" "andOptList"
 
+/-- Ident for the `DecOpt.negOpt` checker combinator (see `DecOpt.lean`) -/
+def negOptFn : Ident := mkIdent $ Name.mkStr2 "DecOpt" "negOpt"
+
 /-- Ident for `GeneratorCombinators.backtrack`. -/
 def genBacktrackFn : Ident := mkIdent $ Name.mkStr2 "GeneratorCombinators" "backtrack"
 

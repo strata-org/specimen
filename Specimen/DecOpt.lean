@@ -60,4 +60,10 @@ def andOpt (a : Except GenError Bool) (b : Except GenError Bool) : Except GenErr
 def andOptList (bs : List (Except GenError Bool)) : Except GenError Bool :=
   List.foldl andOpt (.ok true) bs
 
+/-- Negation lifted to `Except GenError Bool`: flips `ok true ↔ ok false`, propagates errors -/
+def negOpt (a : Except GenError Bool) : Except GenError Bool :=
+  match a with
+  | .ok b => .ok (!b)
+  | .error e => .error e
+
 end DecOpt

@@ -31,12 +31,10 @@ derive_enumerator ∃ (n : _), onetrue' n
 info: 1
 -/
 #guard_msgs(info) in
-#eval (List.length) <$>
-  (runSizedEnum (limit := 10) (EnumSizedSuchThat.enumSizedST (fun t => onetrue t)) 5)
+#eval (LazyList.toList (runSizedEnumOk (EnumSizedSuchThat.enumSizedST (fun t => onetrue t)) 5)).length
 
 /--
 info: 1
 -/
 #guard_msgs(all) in
-#eval ((List.length) <$>
-  (runSizedEnum (limit := 10) (EnumSizedSuchThat.enumSizedST (fun t => onetrue' t)) 5))
+#eval (LazyList.toList (runSizedEnumOk (EnumSizedSuchThat.enumSizedST (fun t => onetrue' t)) 5)).length
