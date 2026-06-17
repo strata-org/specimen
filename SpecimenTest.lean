@@ -44,6 +44,7 @@ import SpecimenTest.DeriveArbitrarySuchThat.NonLinearPatternsTest
 import SpecimenTest.DeriveArbitrarySuchThat.MultiOutputTest
 import SpecimenTest.DeriveArbitrarySuchThat.MultiOutputSTLCTest
 import SpecimenTest.DeriveArbitrarySuchThat.EqMultiOutputTest
+import SpecimenTest.DeriveArbitrarySuchThat.UserInstancePriorityTest
 
 -- Tests for instances of `Enum` for simple types and for correctness of enumerator combinators
 import SpecimenTest.Enum.EnumInstancesTest
