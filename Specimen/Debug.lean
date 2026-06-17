@@ -43,6 +43,14 @@ register_option specimen.textOutput : Nat := {
   descr := "plain-text output verbosity (0=off, 1=summary, 2=problems, 3=full)"
 }
 
+/-- Maximum number of hypothesis orderings to evaluate per constructor before
+    stopping the search. Guards against combinatorial explosion on relations
+    with many hypotheses. -/
+register_option specimen.searchLimit : Nat := {
+  defValue := 200000
+  descr := "max hypothesis orderings to evaluate per constructor during schedule search"
+}
+
 /-- Global flag for enabling/disabling debug messages -/
 def globalDebugFlag : Bool := false
 

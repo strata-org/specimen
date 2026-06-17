@@ -1,6 +1,41 @@
 import Specimen.Schedules
 import Lean
 
+/-!
+# Modular Scoring Framework
+
+Scores quantify the quality of a derived schedule.  What "better" means is
+defined by the active strategy — some rank lower values as better (fewer checks),
+others prefer higher values (more density).
+
+The framework is parameterized so that different scoring **strategies** can be
+swapped at runtime (via `set_option specimen.scoreType`).
+
+## Key abstractions
+
+- **`Scorable S`** — typeclass for a concrete score type `S`.  Defines how
+  scores combine (additive or max-based), compare (`isBetter`), and map to a
+  [0,1] badness float for UI coloring.
+
+- **`ScorerBundle`** — a fully type-erased collection of scoring functions,
+  built from a concrete `Scorable S` via `mkScorerBundle`.  At runtime only one
+  bundle is active; it is resolved by name from the global registry.
+
+- **Scoring layers** (each a function type):
+  `StepScorer` → `ScheduleScorer` → `LeafAggregator` → `InductiveAggregator`
+  These compose bottom-up: score each schedule step, fold into a per-constructor
+  schedule score, aggregate across coverage-trie leaves, then across all leaves
+  to produce the final inductive score.
+
+## Built-in strategies
+
+| Name | Key idea |
+|------|----------|
+| `DefaultScore` | Sum of (checks, length, unconstrained) — original heuristic |
+| `WorstLeafScore` | Max (not sum) across leaves — penalizes worst-case paths |
+| `DensityScore` | Categorical density (Total/Partial/Backtracking/Checking) from §4 of "Testing Theorems, Fully Automatically" |
+-/
+
 namespace Scoring
 
 open Lean Meta Schedules
@@ -10,7 +45,14 @@ open Lean Meta Schedules
 ----------------------------------------------
 
 /-- Typeclass that defines how scores combine and compare.
-    The score type is the index — different types enable different strategies. -/
+    The score type is the index — different types enable different strategies.
+    - `empty`: identity for `combine` (a zero-step schedule)
+    - `combine`: merge two scores (e.g. sum steps, or take max)
+    - `isBetter`: strict ordering used by branch-and-bound
+    - `bestOf`: pick the best from a list (for leaf: best covering ctor)
+    - `uncoveredPenalty`: score assigned to a leaf with no covering constructor
+    - `worst`: initial upper bound for branch-and-bound (must lose to any real score)
+    - `badness`: map to [0,1] for HSL color (0 = green/good, 1 = red/bad) -/
 class Scorable (S : Type) where
   empty : S
   combine : S → S → S
@@ -466,5 +508,74 @@ def densityInductiveAggregator : InductiveAggregator DensityScore := fun leafSco
 
 initialize registerScoringBundle (mkScorerBundle `Scoring.DensityScore
   densityStepScorer densityScheduleScorer densityLeafAggregator densityInductiveAggregator)
+
+----------------------------------------------
+-- Built-in: uniform density (no checker inversion)
+----------------------------------------------
+
+/-- Like DensityScore but without inverting the ordering for checkers/enumerators.
+    Lower density is always better regardless of deriveSort. This avoids the
+    extra enumerator/checker derivations that the inverted ordering triggers. -/
+structure UniformDensityScore where
+  density : Density := .Total
+  varDeps : Nat := 0
+  deriving Repr, BEq, Inhabited
+
+deriving instance TypeName for UniformDensityScore
+
+instance : Ord UniformDensityScore where
+  compare a b :=
+    match compare a.density.toNat b.density.toNat with
+    | .eq => compare a.varDeps b.varDeps
+    | r => r
+
+instance : LT UniformDensityScore := ltOfOrd
+
+instance : Scorable UniformDensityScore where
+  empty := {}
+  combine a b := { density := Density.max a.density b.density, varDeps := a.varDeps + b.varDeps }
+  isBetter a b := a < b
+  bestOf scores := scores.foldl (fun acc s => if s < acc then s else acc) (scores.headD {})
+  uncoveredPenalty := { density := .Partial, varDeps := 0 }
+  worst := { density := .Checking, varDeps := 1000 }
+  badness s :=
+    let level := s.density.toNat.toFloat / 3.0
+    let depPenalty := min 0.2 (s.varDeps.toFloat * 0.05)
+    min 1.0 (level + depPenalty)
+
+def uniformDensityStepScorer : StepScorer UniformDensityScore := fun _key memo inputVars step =>
+  match step with
+  | .Unconstrained .. => { density := .Total, varDeps := 0 }
+  | .Check src _ => { density := .Checking, varDeps := countGeneratedVarDeps inputVars src }
+  | .Match .. => { density := .Backtracking, varDeps := 0 }
+  | .SuchThat outputs src _ =>
+    let outputNames := Std.HashSet.ofList (outputs.map (·.1))
+    let varDeps := countGeneratedVarDeps (inputVars.union outputNames) src
+    let depDensity : Density := match src with
+      | .Rec .. => .Partial
+      | .MutRec .. => .Partial
+      | .NonRec (indName, args) =>
+        let outputIdxs := outputs.filterMap fun (n, _) =>
+          args.findIdx? fun a => match a with | .Unknown v => v == n | _ => false
+        let depKey : SpecKey := { inductiveName := indName, outputIndices := outputIdxs, deriveSort := _key.deriveSort }
+        if depKey == _key then .Partial
+        else match memo[depKey]? with
+          | some (.done depSched) => (Score.unwrap UniformDensityScore depSched.score).density
+          | _ => .Partial
+    { density := depDensity, varDeps := varDeps }
+
+def uniformDensityScheduleScorer : ScheduleScorer UniformDensityScore := fun stepScores =>
+  stepScores.foldl Scorable.combine Scorable.empty
+
+def uniformDensityLeafAggregator : LeafAggregator UniformDensityScore := fun ctors =>
+  match ctors with
+  | [] => Scorable.uncoveredPenalty
+  | _ => Scorable.bestOf (ctors.map Prod.snd)
+
+def uniformDensityInductiveAggregator : InductiveAggregator UniformDensityScore := fun leafScores =>
+  leafScores.foldl Scorable.combine Scorable.empty
+
+initialize registerScoringBundle (mkScorerBundle `Scoring.UniformDensityScore
+  uniformDensityStepScorer uniformDensityScheduleScorer uniformDensityLeafAggregator uniformDensityInductiveAggregator)
 
 end Scoring

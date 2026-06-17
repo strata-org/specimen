@@ -517,11 +517,17 @@ def getScheduleForInductiveRelationConstructor
       trace[plausible.deriving.arbitrary] m!"Updated ForAll Vars: {repr updatedForAllVars}"
       trace[plausible.deriving.arbitrary] m!"Fixed Vars: {repr fixedVars}"
 
-      -- Enumerate candidate schedules and select the best by score
+      -- Enumerate candidate hypothesis orderings and select the best schedule.
+      -- Two paths:
+      --   • Monadic (bundle.usesMonadicPath): uses searchBestScheduleM with
+      --     branch-and-bound pruning and on-demand dependency derivation.
+      --   • Legacy: eagerly enumerates via possibleSchedules (LazyList),
+      --     scores post-hoc. Used when memoRef is unavailable (standalone
+      --     derive_checker / derive_generator without the mutual pipeline).
       let multiOutput := Lean.Option.get (← getOptions) specimen.multiOutput
       let bundle ← Scoring.getActiveScorerBundle
       let key : SpecKey := { inductiveName := inductiveName, outputIndices := (Prod.snd recCall), deriveSort := deriveSort }
-      let limit := 200000
+      let limit := Lean.Option.get (← getOptions) specimen.searchLimit
       let searchStart ← IO.monoNanosNow
 
       let (bestSchedule, bestScore, countProcessed) ←
@@ -906,9 +912,12 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
   -- 1. Check memo
   let current ← memo.get
   match current[key]? with
-  | some .inProgress => return default  -- cycle: optimistic (mutual call = cheap)
+  -- Both cases return `default` which is the empty/zero-cost score.
+  -- In-progress (mutual/recursive) and failed (must be user-provided) deps
+  -- have unknown quality, so we assign a neutral score rather than penalizing.
+  | some .inProgress => return default
   | some (.done indSched) => return indSched.score
-  | some (.failed _) => return default  -- user must provide; assume partial quality
+  | some (.failed _) => return default
   | none => pure ()
 
   -- 2. Non-inductive heads (e.g. LE.le, Not) — try to find an existing instance
@@ -1797,7 +1806,11 @@ def elabDeriveMutual : CommandElab := fun stx => do
             ],
             .element "div" #[("style", json% {"marginLeft": "8px", "borderLeft": "2px solid #3c3c3c", "paddingLeft": "12px"})] graphItems
           ])
-        -- Pattern coverage trie leaves (collapsible per inductive)
+        -- Pattern coverage trie: for each derived inductive, show the leaves of its
+        -- input-space trie. Each leaf is a maximally-refined input pattern annotated
+        -- with which constructors cover it and their schedule scores. Leaves with no
+        -- covering constructor are unsupported inputs; leaves covered only by expensive
+        -- constructors highlight where generation quality is weakest.
         let mut trieItems : Array Html := #[]
         for k in usedKeys.toList do
           match finalMemo[k]? with

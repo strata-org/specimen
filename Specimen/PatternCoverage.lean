@@ -2,6 +2,31 @@ import Specimen.Schedules
 import Specimen.Scoring
 import Lean
 
+/-!
+# Pattern Coverage Analysis
+
+This module partitions the **input space** of an inductive relation into a trie
+of constructor patterns, then scores each leaf to surface weak spots in the
+derived schedule.
+
+## Motivation
+A single inductive relation may have constructors whose patterns overlap (e.g.
+`IsSorted nil`, `IsSorted (cons x nil)`, `IsSorted (cons x (cons y ys))`).
+The coverage trie makes this overlap explicit: each leaf is a maximally-refined
+input shape, annotated with the set of constructors that can fire on it.
+Leaves covered by zero constructors are unsupported by the relation; leaves
+covered by only expensive constructors drag the overall score down.
+
+## Workflow
+1. **Decompose** each constructor's conclusion into a `CovPattern` (nested
+   constructor tree with `wild`/`output`/`typeVar`/… at unrefined positions).
+2. **Refine** the trie by splitting `wild` positions wherever a constructor
+   constrains them (produces the branching tree structure).
+3. **Label** leaves with which constructors cover them (sub-pattern matching).
+4. **Score** via the active `ScorerBundle`: per-leaf aggregation of covering
+   constructor scores, then inductive-level aggregation across all leaves.
+-/
+
 namespace PatternCoverage
 
 open Lean Meta Schedules

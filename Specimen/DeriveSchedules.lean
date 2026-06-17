@@ -10,6 +10,27 @@ import Specimen.SearchTree
 import Specimen.Debug
 import Lean.Util.SCC
 
+/-!
+# Schedule Derivation
+
+This module decides **in what order** to process a constructor's hypotheses and
+how to handle each one (generate, check, match, or delegate to a sub-relation).
+
+## Key concepts
+
+- **PreScheduleStep**: a high-level instruction (before type elaboration) —
+  "generate variable `x` via sub-relation R" or "check hypothesis H".
+- **ScheduleStep**: the elaborated form emitted to code generation (Check,
+  SuchThat, Match, Unconstrained).
+- **ScheduleEnv**: reader-context carrying all the static info that
+  schedule-step construction needs.
+- **SCC decomposition**: hypotheses sharing variables are grouped into
+  strongly-connected components; orderings are explored per-component.
+- **SearchTree + branch-and-bound** (`searchBestScheduleM`): explores the
+  space of dependency-satisfying orderings, pruning branches whose partial
+  score already exceeds the best complete schedule found so far.
+-/
+
 namespace Schedules
 
 open Lean Meta Elab Term
@@ -1104,11 +1125,29 @@ def possibleSchedules (ctorName : Name) (vars : List TypedVar) (hypotheses : Lis
     ((ReaderT.run . scheduleEnv) ∘ (fun (s,c) => return (← s.flatMapM <| preScheduleStepToScheduleStep ctorName, c)))
   lazySchedules
 
-/-- Bundle-aware schedule search using monadic SearchTree pruning.
-    Faithfully replicates the enumeration logic of `possiblePreSchedulesWithAdvancedPruning`
-    and `enumSchedulesChunkedWithPruning`, but uses the scoring bundle for all quality
-    decisions and `minTreePruningM` for branch-and-bound over hypothesis orderings
-    within each SCC component.
+/-- Find the best hypothesis ordering for one constructor, using the active
+    scoring bundle as the objective function.
+
+    **Goal**: given the same set of hypotheses that `possibleSchedules` enumerates,
+    search for the ordering that minimizes (per `bundle.isBetter`) the schedule
+    score — without materializing all permutations eagerly.
+
+    **Algorithm**:
+    1. Partition hypotheses into SCC groups (strongly-connected by shared variables).
+    2. For each SCC component, build a `SearchTree` of dependency-satisfying
+       orderings (same tree that `enumSchedulesChunkedWithPruning` walks lazily).
+    3. Use branch-and-bound (`minTreePruningM`): at each tree node, score the
+       partial schedule so far with the bundle's `stepScorer`/`scheduleScorer`;
+       prune branches whose partial score already exceeds the best complete
+       schedule found.
+    4. When scoring encounters a sub-relation dependency not yet derived,
+       invoke `deriveDep` to derive it on demand (populates the memo).
+    5. Apply dominance pruning: if the same set of bound variables was reached
+       before with a better score, skip.
+
+    **Legacy path**: when `memoRef` is unavailable (e.g. standalone
+    `derive_checker`), the caller falls back to `possibleSchedules` which uses
+    structural check-count pruning without on-demand derivation.
 
     The `deriveDep` callback is invoked when scoring encounters a dependency not yet
     in the memo. The caller can wire this to `deriveBestInductiveSchedule` to trigger
@@ -1122,7 +1161,9 @@ partial def searchBestScheduleM (ctorName : Name) (vars : List TypedVar)
     (bundle : Scoring.ScorerBundle) (memo : IO.Ref (Std.HashMap SpecKey MemoEntry))
     (key : SpecKey) (limit : Nat := 200000)
     (deriveDep : SpecKey → MetaM Unit := fun _ => pure ()) : MetaM (Option (List ScheduleStep × Score × Nat)) := do
-  -- 1. Set up ScheduleEnv (same as possiblePreSchedulesWithAdvancedPruning)
+  -- 1. Build the ScheduleEnv — a reader-context carrying all the static parameters
+  --    that schedule-step construction needs (variable types, hypothesis ordering,
+  --    fixed/output classification, recursion info).
   let typeVars := vars.filterMap fun ⟨v,t⟩ => if t.isSort then some v else none
   let sortedHypotheses := mkSortedHypothesesVariablesMap hypotheses
   let varNames := vars.map (fun x => x.var)

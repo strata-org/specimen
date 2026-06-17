@@ -1,5 +1,6 @@
 import Specimen.UnificationMonad
 import Specimen.Utils
+import Specimen.Score
 
 open Lean
 
