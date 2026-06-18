@@ -252,9 +252,9 @@ container inversion; `Generator-config.md` weighting).
 
 ## Relationship to other docs
 
-- **Experiments** — `SpecimenTest/Experiments/FactoryDrawExp.lean` derives the
+- **Experiments** — `SpecimenTest/StrataExperiments/FactoryDrawExp.lean` derives the
   Indir-style relation and shows the 0%-call failure (guess-and-check lookup);
-  `SpecimenTest/Experiments/FactoryProducerExp.lean` hand-supplies the need-1
+  `SpecimenTest/StrataExperiments/FactoryProducerExp.lean` hand-supplies the need-1
   producer and measures the 0%→80–91% fix plus the two caveats (both projections;
   weighting is secondary).
 - **`Delegated-producer-synthesis.md`** — the container-inversion producer (need 1)
