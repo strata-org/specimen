@@ -51,23 +51,17 @@ obtaining producers:
   - **Coercion-rule control** — bound or exclude non-syntax-directed constructors
     (`tinst`/`tgen`/`talias`) so they don't dominate backtracking.
 
-**Not needed: configurable `def`-unfolding.** An earlier draft listed unfolding
-named `def`s (e.g. `fresh`, `AnnotCompat`, `toMonoType`) as a separate capability.
-It is not. For the defs that actually block `HasType`, unfolding does not help:
-`AnnotCompat` unfolds to `∃σ, AliasEquiv …`, which *still* needs an external
-producer — so you might as well attach the producer to `AnnotCompat` directly; and
-`fresh` unfolds to `x ∉ freeVars e`, which Specimen handles only via
-*generate-and-check* (`negOpt`/`decOpt`) — the very path the freshness producer in
-bucket 1 exists to avoid, so unfolding steers toward the *worse* option. Unfolding
-genuinely helps only for the narrow shape `a = g(inputs)` (output is a computable
-function of inputs), which the unifier can then evaluate without any producer — but
-*no* problematic `HasType` def has that shape. (In synthesis mode the conclusion
-coercions like `toMonoType x_ty hx` are already plain function applications the
-unifier evaluates with no unfolding; in type-directed mode, inverting them is a
-bucket-1 producer problem that unfolding does not solve.) So the right rule is:
-**provide a producer for the predicate as written, rather than unfold it.** This
-also revises Blocker A in `SpecimenTest/LExprGen.lean`: the fix is a supplied/
-delegated producer, not configurable unfolding.
+**Design principle: supply a producer for each opaque predicate as written; do not
+unfold its `def`.** The predicates that block `HasType` (`fresh`, `AnnotCompat`,
+`toMonoType`) are ordinary `def`s, and unfolding them does not help: `AnnotCompat`
+unfolds to `∃σ, AliasEquiv …`, which still needs a producer (so attach the producer
+to `AnnotCompat` directly); `fresh` unfolds to `x ∉ freeVars e`, which Specimen can
+only generate-and-check (`negOpt`/`decOpt`) — the very path bucket 1's freshness
+producer exists to replace. Unfolding would help only for the shape `a = g(inputs)`
+(output computable from inputs), and no blocking `HasType` def has that shape: in
+synthesis mode the conclusion coercions like `toMonoType x_ty hx` are already plain
+applications the unifier evaluates, and in type-directed mode inverting them is a
+bucket-1 producer problem.
 
 In short: **bucket 0 is a one-time port; bucket 1 is the delegated-synthesis
 mechanism doing most of the heavy lifting; bucket 2 is two focused scheduler
@@ -75,8 +69,7 @@ tweaks.** The constructor-by-constructor analysis substantiating this follows.
 
 ## Two generation modes
 
-We contrast two generation modes, because they have very different difficulty
-profiles:
+There are two generation modes, with very different difficulty profiles:
 
 - **Synthesis mode** `HasType(+C, +Γ, −e, −τ)` — "produce some well-typed term
   and its type." `τ` is an *output*. This is closest to what Specimen's STLC
@@ -406,15 +399,11 @@ applications of values Specimen has already produced, so the unifier just
 *evaluates* them to build the conclusion — no unfolding required.
 
 In **type-directed mode**, where the deriver must pattern-match a *given* target
-type against `… .tcons "arrow" [toMonoType …, …] …`, it does need to relate the
-target's structure to the coerced subterms. It is tempting to call for
-**configurable `def`-unfolding** here, but that is the wrong tool (see the
-*Not needed: configurable `def`-unfolding* note in the Summary): unfolding
-`toMonoType`/`isMonoType` either exposes a `a = g(inputs)` shape the unifier could
-already evaluate, or exposes something that *still* needs a producer. The general
-need is **inverting the coercion**, i.e. producing a `ty`/`x_ty` whose `toMonoType`
-matches a given monotype — a bucket-1 producer-synthesis obligation, not an
-unfolding switch.
+type against `… .tcons "arrow" [toMonoType …, …] …`, it must relate the target's
+structure to the coerced subterms. The need is to **invert the coercion** — produce
+a `ty`/`x_ty` whose `toMonoType` matches a given monotype — which is a bucket-1
+producer-synthesis obligation (consistent with the design principle above: supply a
+producer, don't unfold the `def`).
 
 **Capability needed**: bucket-1 producer synthesis for the coercion inverse
 (type-directed mode only); nothing in synthesis mode.
@@ -423,7 +412,7 @@ unfolding switch.
 
 ## Summary table
 
-| Constructor | Synthesis mode | Type-directed mode | New capability beyond design doc §6 |
+| Constructor | Synthesis mode | Type-directed mode | New capability needed |
 |---|---|---|---|
 | `t*_const` | trivial | trivial (τ selects rule) | none |
 | `tvar` | container inversion | filtered container inversion | container-membership generation |
@@ -445,3 +434,12 @@ For the mechanism behind bucket 1, see `Delegated-producer-synthesis.md`; for th
 end-to-end use-case framing and the three blockers (A: opaque defs, B:
 generate-and-check blowup, C: structure-parameter projection), see
 `SpecimenTest/LExprGen.lean`.
+
+For the specific case of generating expressions that **call library functions
+from a Strata `Factory`** (the `top`/`top_annotated` container producers in their
+most consequential application — the Pałka-et-al. "Indir" generation rule), see
+`Factory-directed-generation.md`, grounded in lessons from a prior hand-written
+`LExpr` generator and the experiment
+`SpecimenTest/Experiments/FactoryDrawExp.lean`. That analysis shows bucket 1's
+container inversion is *expressible* today but loses to the trivial base case
+without (a) result-type-directed selection and (b) distribution weighting.

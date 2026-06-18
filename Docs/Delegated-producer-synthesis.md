@@ -233,6 +233,14 @@ keys. This is the single biggest quality win for typing-relation generators, but
 it requires the oracle to reason about container membership, so it is best
 attempted after the freshness loop is solid.
 
+The canonical real-world instance of this container-inversion target is
+**drawing from a Strata `Factory`** to generate library-function calls — both the
+by-key projection (synthesis: enumerate functions) and the by-value projection
+(type-directed: filter functions by result type). See
+`Factory-directed-generation.md`: `FactoryDrawExp.lean` measures the failure mode
+(a derived generator emits ~0% factory calls), and `FactoryProducerExp.lean` shows
+that supplying this producer raises it to 80–91% in type-directed mode.
+
 ## Evidence
 
 All claims above are reproducible from the files under
@@ -247,3 +255,5 @@ All claims above are reproducible from the files under
 | `ExistsHypExp.lean` | a `def`-wrapped existential predicate is opaque → missing instance |
 | `DefWrappedExp.lean` | `def`-wrapped predicate is opaque, but the scheduler still emits a mode-directed call |
 | `ModeDirectedExp.lean` | supplying that producer makes the same derivation compile and generate well |
+| `FactoryDrawExp.lean` | an Indir-style factory-call rule derives but draws ~0% calls (lookup is guess-and-check) |
+| `FactoryProducerExp.lean` | supplying the factory-selection producer raises the call rate to 80–91% |
