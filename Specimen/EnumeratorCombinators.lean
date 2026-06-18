@@ -35,11 +35,9 @@ def enumerateFuel (fuel : Nat) (total : Nat) (es : List (ExceptT GenError Enumer
     -- and pick one out of the `total - k` remaining enumerators
     tryCatch e (fun _ => enumerateFuel fuel' (total - 1) es')
 
-/-- Combines all enumerators, filtering out failed ones -/
+/-- Combines all enumerators into a single lazy list. -/
 def enumerateAll (es : List (ExceptT GenError Enumerator α)) (fuel : Nat) : LazyList (Except GenError α) :=
-  es.foldl (fun acc e =>
-    LazyList.append (LazyList.filter (fun | .ok _ => true | _ => false) (e fuel)) acc
-  ) .lnil
+  es.foldl (fun acc e => LazyList.append (e fuel) acc) .lnil
 
 /-- Tries all enumerators from a list until one returns a `pure` value or all the enumerators have
     failed once. -/
