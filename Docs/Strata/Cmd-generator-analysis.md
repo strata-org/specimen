@@ -93,7 +93,7 @@ This is the same "specialize `T`" workaround the `HasType` doc recommends, but
 here it is mandatory rather than a convenience, because the structure fields are
 the value space. The general (un-specialized) bucket-0 fix also has to be broader
 for `Cmd` than for `LExpr` — see *What bucket 0 must do to cover `Cmd`* below,
-grounded in `SpecimenTest/Experiments/StructParamCmdShapeExp.lean`.
+grounded in `SpecimenTest/StrataExperiments/StructParamCmdShapeExp.lean`.
 
 **B. There is no inductive relation — typechecking is a function returning
 `Except`.** This is the deepest difference. Specimen derives constrained producers
@@ -180,7 +180,7 @@ With no inductive relation, the only target is the decision predicate
   can derive a `DecOpt`-style checker and run generate-and-check: produce a random
   `Cmd P` (requires `Arbitrary (Cmd P)`, which requires a concrete `P` — finding
   A), run `typeCheck`, keep `.ok`. This is the `FuncEqExp.lean` shape (a
-  function-result equality) from the experiments, lifted to a `Cmd`.
+  function-result equality) from the StrataExperiments, lifted to a `Cmd`.
 - **The checker is opaque to inversion.** `typeCheck` is a `def` that calls
   `TypeContext` *typeclass methods* (`inferType`, `unifyTypes`, `lookup`, …).
   These are even more opaque than the `def`-wrapped predicates of Blocker A: they
@@ -340,7 +340,7 @@ a producer-synthesis problem* — C is a scheduling/relation-shape concern and D
 
 `Cmd` exercises the structure parameter in two ways that `LExpr` does not, so the
 bucket-0 fix has to be broader than handling a projected *output* type. Both are
-isolated at minimal size in `SpecimenTest/Experiments/StructParamCmdShapeExp.lean`
+isolated at minimal size in `SpecimenTest/StrataExperiments/StructParamCmdShapeExp.lean`
 (run on Lean `v4.30.0-rc1`).
 
 **Shape 1 — projections live in constructor-argument positions.** A `CmdWT`
@@ -387,7 +387,7 @@ So the bucket-0 fix has four parts:
    stays in scope inside it.
 
 `LExpr` exercises only part 4; `Cmd` exercises parts 1–3. Build and test the fix
-against both `SpecimenTest/Experiments/StructParamExp.lean` /
+against both `SpecimenTest/StrataExperiments/StructParamExp.lean` /
 `StructParamPathsExp.lean` (the output-type shape) and `StructParamCmdShapeExp.lean`
 (the argument-position + mixed-fields shape), so "bucket 0 done" means both derive.
 
@@ -470,7 +470,7 @@ structure parameter and bucket 0 does not arise at all.
      a fold and looks in reach; the env-directed mode is the harder analog of
      type-directed `HasType`. This is the one item warranting a dedicated
      experiment (a `StateThreadExp.lean` mirroring the existing
-     `SpecimenTest/Experiments/` style: a tiny relation
+     `SpecimenTest/StrataExperiments/` style: a tiny relation
      `R : Env → List Item → Env → Prop` with a binding-introducing head rule).
   2. **Cross-relation delegation (D).** Confirm Specimen can schedule a hypothesis
      that is itself a *different* derived relation's producer (`ExprWT`/`HasType`),

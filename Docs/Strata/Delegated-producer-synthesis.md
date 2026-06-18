@@ -12,7 +12,7 @@ a call to a sub-producer. When it cannot, Specimen falls back to
 and discharge the hypothesis with a `DecOpt` check, backtracking on failure.
 
 Generate-and-check is the source of almost all the quality problems with derived
-generators. The experiments under `SpecimenTest/Experiments/` show this
+generators. The experiments under `SpecimenTest/StrataExperiments/` show this
 concretely:
 
 - `FuncEqExp.lean` — `isSmall n = true`, `lookupNat l k = some v`: derive, but
@@ -244,7 +244,7 @@ that supplying this producer raises it to 80–91% in type-directed mode.
 ## Evidence
 
 All claims above are reproducible from the files under
-`SpecimenTest/Experiments/`:
+`SpecimenTest/StrataExperiments/`:
 
 | File | Demonstrates |
 |---|---|

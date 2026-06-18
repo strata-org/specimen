@@ -90,7 +90,7 @@ unit) instance and is ignored. `C` is a fixed input in both modes.
 Before any constructor matters, the *whole relation* trips over a derivation-time
 bug. `HasType` is parameterized by `{T : LExprParams}`, and the generated term
 has type `LExpr T.mono` — a projection of the structure-valued parameter `T`.
-`Experiments/StructParamExp.lean` shows that when the **output's type is a
+`StrataExperiments/StructParamExp.lean` shows that when the **output's type is a
 projection of a structure parameter**, derivation aborts with
 `error: unknown free variable p_1` (the parameter name is freshened but not
 re-bound inside the projected type). Plain type parameters and even `Type 1`
@@ -101,7 +101,7 @@ This is a limitation of the **constrained-producer path only**. The unconstraine
 `deriving Arbitrary` handler (`Specimen/DeriveArbitrary.lean`) already handles
 structure parameters with projected type-valued fields (passing test:
 `SpecimenTest/DeriveArbitrary/StructureParameterTest.lean`;
-`Experiments/StructParamPathsExp.lean` shows both paths on the same type — one
+`StrataExperiments/StructParamPathsExp.lean` shows both paths on the same type — one
 succeeds, the other fails). So the fix is well-scoped: **port the working
 parameter-handling logic from `DeriveArbitrary.lean` into the constrained
 deriver** (`derive_generator`/`derive_enumerator`/`derive_mutual`).
@@ -440,6 +440,6 @@ from a Strata `Factory`** (the `top`/`top_annotated` container producers in thei
 most consequential application — the Pałka-et-al. "Indir" generation rule), see
 `Factory-directed-generation.md`, grounded in lessons from a prior hand-written
 `LExpr` generator and the experiment
-`SpecimenTest/Experiments/FactoryDrawExp.lean`. That analysis shows bucket 1's
+`SpecimenTest/StrataExperiments/FactoryDrawExp.lean`. That analysis shows bucket 1's
 container inversion is *expressible* today but loses to the trivial base case
 without (a) result-type-directed selection and (b) distribution weighting.
