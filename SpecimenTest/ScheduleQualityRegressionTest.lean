@@ -59,3 +59,138 @@ fun fuel initSize size n_1 =>
 -/
 #guard_msgs in
 #print instArbitrarySizedSuchThatListNatMemNat.aux_arb
+
+-- ============================================================
+-- Section 6: Generator quality sampling
+-- ============================================================
+
+/-! Sampling-based quality metrics for derived generators.
+    Measures success rate (non-discards), distinct outputs, and size
+    distribution to catch regressions in generation quality.
+    Thresholds are set conservatively — a regression should trip these
+    without false-positiving on random variance. -/
+
+section GeneratorQuality
+
+private def treeDepth : BinaryTree → Nat
+  | .Leaf => 0
+  | .Node _ l r => 1 + max (treeDepth l) (treeDepth r)
+
+structure QualityStats where
+  trials : Nat
+  successes : Nat
+  uniques : Nat
+  maxDepth : Nat
+  depthBuckets : Array Nat  -- [0-1, 2-3, 4-5, 6+]
+  elapsedMs : Nat := 0
+  deriving Repr
+
+private def emptyStats (n : Nat) : QualityStats :=
+  { trials := n, successes := 0, uniques := 0, maxDepth := 0, depthBuckets := #[0, 0, 0, 0] }
+
+private def depthBucket (d : Nat) : Nat :=
+  if d ≤ 1 then 0 else if d ≤ 3 then 1 else if d ≤ 5 then 2 else 3
+
+/-- Sample a generator `trials` times, measuring success rate, unique count,
+    depth distribution, and wall-clock time. -/
+private def sampleQuality (gen : Nat → Gen α) (depth : α → Nat) (eq : α → α → Bool)
+    (trials : Nat := 200) (size : Nat := 3) : IO QualityStats := do
+  let startNs ← IO.monoNanosNow
+  let mut stats := emptyStats trials
+  let mut seen : Array α := #[]
+  for i in [:trials] do
+    try
+      let v ← Gen.run (gen size) (size + i % 4)
+      stats := { stats with successes := stats.successes + 1 }
+      let d := depth v
+      stats := { stats with maxDepth := max stats.maxDepth d }
+      let bucket := depthBucket d
+      stats := { stats with depthBuckets := stats.depthBuckets.modify bucket (· + 1) }
+      if !seen.any (eq v ·) then
+        seen := seen.push v
+    catch _ => pure ()
+  let elapsedNs ← IO.monoNanosNow
+  stats := { stats with uniques := seen.size, elapsedMs := (elapsedNs - startNs) / 1000000 }
+  return stats
+
+private def ppStats (name : String) (s : QualityStats) : String :=
+  let rate := (s.successes.toFloat / s.trials.toFloat * 100.0).round.toUInt32.toNat
+  let bucketStr := s!"{s.depthBuckets[0]!}/{s.depthBuckets[1]!}/{s.depthBuckets[2]!}/{s.depthBuckets[3]!}"
+  s!"{name}: {rate}% success, {s.uniques} uniques, maxDepth={s.maxDepth}, buckets=[{bucketStr}], {s.elapsedMs}ms"
+
+/-- Quality assertions: generators should meet minimum quality bars. -/
+private def assertQuality (name : String) (s : QualityStats)
+    (minSuccessRate : Float := 0.5) (minUniques : Nat := 10) : IO Unit := do
+  let rate := s.successes.toFloat / s.trials.toFloat
+  if rate < minSuccessRate then
+    throw <| IO.userError s!"{name}: success rate {rate} below threshold {minSuccessRate}"
+  if s.uniques < minUniques then
+    throw <| IO.userError s!"{name}: only {s.uniques} uniques, expected at least {minUniques}"
+
+end GeneratorQuality
+
+-- ============================================================
+-- Section 7: Scoring strategy comparison
+-- ============================================================
+
+/-! Derives the same relation under each scoring strategy and compares
+    sampling quality. This catches cases where a strategy change causes
+    a previously-good generator to degrade. -/
+
+section StrategyComparison
+
+-- Compare scoring strategies on the BST generator (deps already derived above).
+-- Since derive_mutual registers global instances, we can't derive three different
+-- instances for the same relation. Instead, we derive once per strategy using
+-- distinct wrapper relations that are isomorphic but have separate instances.
+
+inductive BST_Default : Nat → Nat → BinaryTree → Prop
+  | bstLeaf : BST_Default lo hi .Leaf
+  | bstNode : ∀ x l r lo hi,
+      Between lo x hi → BST_Default lo x l → BST_Default x hi r →
+      BST_Default lo hi (.Node x l r)
+
+inductive BST_WorstLeaf : Nat → Nat → BinaryTree → Prop
+  | bstLeaf : BST_WorstLeaf lo hi .Leaf
+  | bstNode : ∀ x l r lo hi,
+      Between lo x hi → BST_WorstLeaf lo x l → BST_WorstLeaf x hi r →
+      BST_WorstLeaf lo hi (.Node x l r)
+
+inductive BST_Density : Nat → Nat → BinaryTree → Prop
+  | bstLeaf : BST_Density lo hi .Leaf
+  | bstNode : ∀ x l r lo hi,
+      Between lo x hi → BST_Density lo x l → BST_Density x hi r →
+      BST_Density lo hi (.Node x l r)
+
+set_option specimen.autoDeriveDeps true
+set_option specimen.multiOutput true
+
+set_option specimen.scoreType "Scoring.DefaultScore" in
+#guard_msgs(drop info) in
+derive_mutual (fun lo hi => ∃ t, BST_Default lo hi t)
+
+set_option specimen.scoreType "Scoring.WorstLeafScore" in
+#guard_msgs(drop info) in
+derive_mutual (fun lo hi => ∃ t, BST_WorstLeaf lo hi t)
+
+set_option specimen.scoreType "Scoring.DensityScore" in
+#guard_msgs(drop info) in
+derive_mutual (fun lo hi => ∃ t, BST_Density lo hi t)
+
+#guard_msgs(drop info) in
+#eval do
+  let sample (gen : Nat → Gen BinaryTree) (name : String) : IO Unit := do
+    let stats ← sampleQuality gen treeDepth
+      (fun a b => toString (repr a) == toString (repr b)) 200 8
+    IO.println (ppStats name stats)
+    assertQuality name stats (minSuccessRate := 0.5) (minUniques := 10)
+
+  IO.println "=== Strategy comparison: BST [0,10] generator ==="
+  let instD : ArbitrarySizedSuchThat BinaryTree (fun t => BST_Default 0 10 t) := inferInstance
+  sample instD.arbitrarySizedST "  DefaultScore "
+  let instW : ArbitrarySizedSuchThat BinaryTree (fun t => BST_WorstLeaf 0 10 t) := inferInstance
+  sample instW.arbitrarySizedST "  WorstLeafScore"
+  let instDn : ArbitrarySizedSuchThat BinaryTree (fun t => BST_Density 0 10 t) := inferInstance
+  sample instDn.arbitrarySizedST "  DensityScore  "
+
+end StrategyComparison
