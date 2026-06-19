@@ -218,11 +218,37 @@ Similar hierarchy exists for enumerators (`EnumSizedSuchThat` → `EnumSuchThat`
 |--------|---------|-------------|
 | `specimen.autoDeriveDeps` | `false` | Automatically derive dependency instances for sub-relations referenced in constructors |
 | `specimen.multiOutput` | `false` | Allow multi-output production steps (generate multiple `∃`-bound variables per hypothesis) |
+| `specimen.scoreType` | `"Scoring.DefaultScore"` | Scoring strategy for schedule quality evaluation (see below) |
 | `specimen.fuel` | `10000` | Fuel (termination budget) for derived generators/enumerators/checkers |
 | `specimen.richOutput` | `true` | Emit rich HTML widget in the Lean infoview showing schedule details |
 | `specimen.textOutput` | `0` | Plain-text output verbosity: 0=off, 1=summary, 2=problems only, 3=full schedules |
 | `specimen.searchLimit` | `200000` | Max hypothesis orderings to evaluate per constructor during branch-and-bound schedule search |
 | `specimen.debug` | `false` | Enable debug messages from Specimen |
+
+### Scoring Strategies
+
+The `specimen.scoreType` option selects how Specimen evaluates candidate schedules during branch-and-bound search. Different strategies optimize for different quality criteria:
+
+| Strategy | Option value | Description |
+|----------|-------------|-------------|
+| Default | `"Scoring.DefaultScore"` | Sum of (checks, length, unconstrained steps) — the original heuristic. Minimizes total checking work across all coverage-trie leaves. |
+| Worst-leaf | `"Scoring.WorstLeafScore"` | Takes the max (not sum) across leaves — penalizes worst-case input paths rather than average cost. |
+| Density | `"Scoring.DensityScore"` | Categorical density classification from Section 4 of *Testing Theorems, Fully Automatically*. Classifies each step as Total, Partial, Backtracking, or Checking, and prefers schedules that avoid backtracking/checking steps. |
+
+**Example**: To use the *Testing Theorems* density scoring:
+```lean
+set_option specimen.scoreType "Scoring.DensityScore"
+derive_mutual
+  (fun lo hi => ∃ (t : BinaryTree), BST lo hi t)
+```
+
+The density categories form a hierarchy (best to worst):
+- **Total** — unconstrained generation, always succeeds
+- **Partial** — generation with some constraints, may fail
+- **Backtracking** — requires match/pattern-match, may backtrack
+- **Checking** — requires a checker call, most expensive
+
+See `SpecimenTest/ScheduleQualityRegressionTest.lean` for a side-by-side comparison of all strategies on the same relation.
 
 ## How to Use Derived Instances
 

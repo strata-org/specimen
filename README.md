@@ -131,10 +131,28 @@ derive_checker (fun n t => balanced n t)
 |--------|---------|-------------|
 | `specimen.autoDeriveDeps` | `false` | Automatically derive dependency instances for sub-relations in `derive_mutual` |
 | `specimen.multiOutput` | `false` | Allow multi-output production steps (multiple `∃` vars generated per hypothesis) |
+| `specimen.scoreType` | `"Scoring.DefaultScore"` | Scoring strategy for schedule quality evaluation (see below) |
 | `specimen.fuel` | `10000` | Fuel (termination budget) for derived generators/enumerators/checkers |
 | `specimen.richOutput` | `true` | Emit rich HTML widget output in the Lean infoview |
 | `specimen.textOutput` | `0` | Plain-text output verbosity (0=off, 1=summary, 2=problems, 3=full) |
 | `specimen.searchLimit` | `200000` | Max hypothesis orderings to evaluate per constructor during schedule search |
+
+**Scoring strategies** control how Specimen evaluates and selects among candidate schedules during derivation. The `specimen.scoreType` option selects the active strategy:
+
+| Strategy | Option value | Description |
+|----------|-------------|-------------|
+| Default | `"Scoring.DefaultScore"` | Sum of (checks, length, unconstrained) — the original heuristic. Minimizes total checking work. |
+| Worst-leaf | `"Scoring.WorstLeafScore"` | Takes the max (not sum) across coverage-trie leaves — penalizes worst-case input paths. |
+| Density | `"Scoring.DensityScore"` | Categorical density classification (Total/Partial/Backtracking/Checking) from Section 4 of *Testing Theorems, Fully Automatically*. Prefers schedules that avoid backtracking. |
+
+For example, to use the density scoring strategy from the *Testing Theorems* paper:
+```lean
+set_option specimen.scoreType "Scoring.DensityScore"
+derive_mutual
+  (fun lo hi => ∃ (t : BinaryTree), BST lo hi t)
+```
+
+See [`ScheduleQualityRegressionTest.lean`](./SpecimenTest/ScheduleQualityRegressionTest.lean) for a comparison of all three strategies on the same relation.
 
 ## Repo overview
 
