@@ -2,6 +2,7 @@
 Specimen complements the Plausible property-based testing library by automatically deriving generators, enumerators, and checkers for inductive relations.
 
 Specimen's design is heavily inspired by [Coq/Rocq's QuickChick](https://github.com/QuickChick/QuickChick) library and the following papers:
+- *Testing Theorems, Fully Automatically* (OOPSLA 2026)
 - [*Computing Correctly with Inductive Relations* (PLDI 2022)](https://dl.acm.org/doi/10.1145/3519939.3523707)
 - [*Generating Good Generators for Inductive Relations* (POPL 2018)](https://dl.acm.org/doi/10.1145/3158133)
 
@@ -20,15 +21,24 @@ Specimen provides various top-level commands which automatically derive generato
 **1. Deriving unconstrained generators/enumerators**              
 An *unconstrained* generator produces random inhabitants of an algebraic data type, while an unconstrained enumerator *enumerates* (deterministically) these inhabitants. 
           
-Users can write `deriving Arbitrary` and/or `deriving Enum` after an inductive type definition, e.g..
+Users can write `deriving Arbitrary` and/or `deriving Enum` after an inductive type definition, e.g.
 ```lean 
 inductive Foo where
   ...
   deriving Arbitrary, Enum
 ```
-Alternatively, users can also write `deriving instance Arbitrary for T1, ..., Tn` (or `deriving instance Enum ...`) as a top-level command to derive `Arbitrary` / `Enum` instances for types `T1, ..., Tn` simultaneously.
+Alternatively, users can also write `deriving instance Arbitrary for T1, ..., Tn` (or `deriving instance Enum ...`) as a top-level command to derive `Arbitrary` / `Enum` instances for types `T1, ..., Tn` simultaneously. This also works for mutually recursive types:
+```lean
+mutual
+  inductive MutEven where
+    | zero : MutEven
+    | succOdd : MutOdd → MutEven
+  inductive MutOdd where
+    | succEven : MutEven → MutOdd
+end
 
-Note that Plausible also provides support for deriving `Arbitrary` instances, but the version here supports some parametrized inductive relations; hopefully it will be upstreamed soon.
+deriving instance Enum for MutEven, MutOdd
+```
 
 To sample from a derived unconstrained generator, users can simply call `runArbitrary`, specify the type 
 for the desired generated values and provide some `Nat` to act as the generator's size parameter (`10` in the example below):
@@ -37,59 +47,94 @@ for the desired generated values and provide some `Nat` to act as the generator'
 #eval runArbitrary (α := Tree) 10
 ```
 
-Similarly, to return the elements produced form a derived enumerator, users can call `runEnum` like so:
+Similarly, to return the elements produced from a derived enumerator, users can call `runEnum` like so:
 ```lean
 #eval runEnum (α := Tree) 10
 ```
 
-If you are defining your own type it needs instances of `Repr`, `Plausible.Shrinkable` and
-`Plausible.SampleableExt` (or `Plausible.Arbitrary`):
+**2. `derive_mutual` — the recommended command for constrained derivation**
 
-**2. Deriving constrained generators** (for inductive relations)                
-A *constrained* producer only produces values that satisfy a user-specified inductive relation. 
+`derive_mutual` is the primary command for deriving constrained generators, enumerators, and checkers. It supersedes the older `derive_generator`/`derive_enumerator`/`derive_checker` commands by providing:
+- Automatic dependency discovery (derives instances for sub-relations)
+- Multi-output generation (a single hypothesis step can produce multiple existential variables)
+- True mutual recursion (multiple specs compiled into a shared `mutual` block)
+- Quality scoring and schedule search with branch-and-bound optimization
 
-Specimen provides two commands for deriving constrained generators/enumerators. For example, 
-suppose you want to derive constrained producers of `Tree`s satisfying some inductive relation `balanced n t` (height-`n` trees that are `balanced`. To do so, the user would write:
+**Syntax**:
+```lean
+set_option specimen.autoDeriveDeps true
+set_option specimen.multiOutput true
+
+-- Derive a constrained generator (default sort is `generator`)
+derive_mutual
+  (fun n => ∃ (t : BinaryTree), balancedTree n t)
+
+-- Derive multiple specs at once (they can call each other)
+derive_mutual
+  (fun G t => ∃ (e : term), typing G e t)
+
+-- Derive with explicit sort keywords
+derive_mutual
+  generator (fun lo hi => ∃ (t : BinaryTree), BST lo hi t),
+  checker (fun lo hi t => BST lo hi t)
+
+-- Derive an enumerator
+derive_mutual enumerator
+  (fun n => ∃ (t : BinaryTree), balancedTree n t)
+
+-- Multi-output: generate all existentials at once
+derive_mutual
+  (∃ (Γ : List type) (e : term) (τ : type), typing Γ e τ)
+```
+
+Each entry can be prefixed with `generator` (default), `enumerator`, or `checker`. When `specimen.autoDeriveDeps` is `true`, Specimen automatically discovers and derives instances for sub-relations referenced in the constructors. When `specimen.multiOutput` is `true`, the scheduler can produce multiple existential outputs in a single hypothesis step.
+
+To sample from a generator derived via `derive_mutual`:
+```lean
+#eval runSizedGen (ArbitrarySizedSuchThat.arbitrarySizedST (fun t => balanced 5 t)) 10
+```
+
+**3. `derive_generator` / `derive_enumerator` — single-spec constrained derivation**
+
+These commands derive a constrained generator or enumerator for a single specification. They are still supported and useful for quick one-off derivations:
 
 ```lean
--- `derive_generator` & `derive_enumerator` derive constrained generators/enumerators 
--- for `Tree`s that are balanced at some height `n`,
--- where `balanced n t` is a user-defined inductive relation
-derive_generator (fun n => ∃ t, balanced n t) 
+derive_generator (fun n => ∃ t, balanced n t)
 derive_enumerator (fun n => ∃ t, balanced n t)
 ```
-To sample from the derived producer, users invoke `runSizedGen` / `runSizedEnum` & specify the right 
-instance of the `ArbitrarySizedSuchThat` / `EnumSizedSuchThat` typeclass (along with some `Nat` to act as the generator size):
 
+In the command `derive_generator (fun x1 ... xn => ∃ x, P x1 ... x ... xn)`:
+- `P` must be an inductively defined relation
+- `x` is the value to be generated (bound by `∃`)
+- `x1 ... xn` are input parameters (bound by `fun`)
+- Multiple existential outputs are supported: `derive_generator (fun n => ∃ a b, Split n a b)`
+
+To sample from the derived producer:
 ```lean
--- For generators:
 #eval runSizedGen (ArbitrarySizedSuchThat.arbitrarySizedST (fun t => balanced 5 t)) 10
-
--- For enumerators:
--- (we recommend using a smaller `Nat` as the fuel for enumerators to avoid stack overflow)
-#eval runSizedEnum (EnumSizedSuchThat.enumSizedST (fun t => balanced 5 t)) 3
+#eval runSizedEnum (EnumSizedSuchThat.enumSizedST (fun t => balanced 3 t)) 3
 ```
 
-Some extra details about the grammar of the lambda-abstraction that is passed to `derive_generator` / `derive_enumerator`:
+**4. `derive_checker` — partial decision procedures**
 
-Specifically: in the command
-```lean
-derive_generator (fun x1 ... xn => ∃ x, P x1 ... x ... xn)
-```
-`P` must be an inductively defined relation, `x` is the value to be generated (bound by `∃`), and `x1 ... xn` are variable names bound by the `fun`. Following QuickChick, Specimen expects `x1, ..., xn` to be variable names (Specimen does not support literals in the position of the `xi` currently). 
-
-**3. Deriving checkers (partial decision procedures)** (for inductive relations)                                 
 A checker for an inductively-defined `Prop` is a `Nat -> Except GenError Bool` function, which 
 takes a `Nat` argument as fuel and returns an error if it can't decide whether the `Prop` holds (e.g. it runs out of fuel),
 and otherwise returns `ok true` / `ok false` depending on whether the `Prop` holds.
 
-Specimen provides a command elaborator which elaborates the `derive_checker` command:
-
 ```lean
--- `derive_checker` derives a checker which determines whether `Tree`s `t` 
--- satisfy the `balanced` inductive relation mentioned above 
 derive_checker (fun n t => balanced n t)
 ```
+
+**5. Options**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `specimen.autoDeriveDeps` | `false` | Automatically derive dependency instances for sub-relations in `derive_mutual` |
+| `specimen.multiOutput` | `false` | Allow multi-output production steps (multiple `∃` vars generated per hypothesis) |
+| `specimen.fuel` | `10000` | Fuel (termination budget) for derived generators/enumerators/checkers |
+| `specimen.richOutput` | `true` | Emit rich HTML widget output in the Lean infoview |
+| `specimen.textOutput` | `0` | Plain-text output verbosity (0=off, 1=summary, 2=problems, 3=full) |
+| `specimen.searchLimit` | `200000` | Max hypothesis orderings to evaluate per constructor during schedule search |
 
 ## Repo overview
 
@@ -110,18 +155,23 @@ derive_checker (fun n t => balanced n t)
 
 **Algorithm for deriving constrained producers & checkers** (adapted from the QuickChick papers):
 - [`UnificationMonad.lean`](./Specimen/UnificationMonad.lean): The unification monad described in [*Generating Good Generators*](https://dl.acm.org/doi/10.1145/3158133)
-- [`DeriveConstrainedProducer.lean`](./Specimen/DeriveConstrainedProducer.lean): Algorithm for deriving constrained generators using the aforementioned unification algorithm & generator schedules
+- [`DeriveConstrainedProducer.lean`](./Specimen/DeriveConstrainedProducer.lean): Algorithm for deriving constrained generators, including the `derive_mutual` command for multi-spec mutual derivation
 - [`MExp.lean`](./Specimen/MExp.lean): An intermediate representation for monadic expressions (`MExp`), used when compiling schedules to Lean code
 - [`MakeConstrainedProducerInstance.lean`](./Specimen/MakeConstrainedProducerInstance.lean): Auxiliary functions for creating instances of typeclasses for constrained producers (`ArbitrarySuchThat`, `EnumSuchThat`)
 - [`DeriveChecker.lean`](./Specimen/DeriveChecker.lean): Deriver for automatically deriving checkers (instances of the `DecOpt` typeclass)
 - [`Schedules.lean`](./Specimen/Schedules.lean): Type definitions for generator schedules
 - [`DeriveSchedules.lean`](./Specimen/DeriveSchedules.lean): Algorithm for deriving generator schedules
-- [`SearchTree.lean`](./Specimen/SearchTree.lean): Search tree and dependency-aware ordering for schedule derivation
+- [`SearchTree.lean`](./Specimen/SearchTree.lean): Dependency-aware hypothesis ordering via lazy search tree with branch-and-bound pruning
+
+**Schedule scoring & quality analysis**:
+- [`Score.lean`](./Specimen/Score.lean): Type-erased score values used by the modular scoring framework
+- [`Scoring.lean`](./Specimen/Scoring.lean): Modular scoring framework with pluggable strategies (DefaultScore, WorstLeafScore, DensityScore) for evaluating schedule quality
+- [`PatternCoverage.lean`](./Specimen/PatternCoverage.lean): Pattern coverage trie that partitions the input space of an inductive relation, identifies weak spots, and annotates leaves with constructor coverage
 
 **Derivers for unconstrained producers**:
-- [`DeriveArbitrary.lean`](./Specimen/DeriveArbitrary.lean): Deriver for unconstrained generators (instances of the `Arbitrary` / `ArbitrarySized` typeclasses)
+- [`DeriveArbitrary.lean`](./Specimen/DeriveArbitrary.lean): Deriver for unconstrained generators (instances of the `Arbitrary` / `ArbitrarySized` typeclasses), including support for mutually recursive and parameterized types
 - [`DeriveEnum.lean`](./Specimen/DeriveEnum.lean): Deriver for unconstrained enumerators 
-(instances of the `Enum` / `EnumSized` typeclasses) 
+(instances of the `Enum` / `EnumSized` typeclasses), including nested and mutually recursive types
 
 **Miscellany**:
 - [`TSyntaxCombinators.lean`](./Specimen/TSyntaxCombinators.lean): Combinators over `TSyntax` for creating monadic `do`-blocks & other Lean expressions via metaprogramming
@@ -132,12 +182,17 @@ derive_checker (fun n t => balanced n t)
 - [`Debug.lean`](./Specimen/Debug.lean): Debug tracing and option flags for Specimen
 
 ### Tests
-**Overview of snapshot test corpus**:
-- The [`SpecimenTest`](./SpecimenTest/) subdirectory contains [snapshot tests](https://www.cs.cornell.edu/~asampson/blog/turnt.html) (aka [expect tests](https://blog.janestreet.com/the-joy-of-expect-tests/)) for the `derive_generator` & `derive_arbitrary` command elaborators. 
+**Overview of test corpus**:
+- The [`SpecimenTest`](./SpecimenTest/) subdirectory contains [snapshot tests](https://www.cs.cornell.edu/~asampson/blog/turnt.html) (aka [expect tests](https://blog.janestreet.com/the-joy-of-expect-tests/)) for the derivation commands. 
 - Run `lake test` to check that the derived generators in [`SpecimenTest`](./SpecimenTest/) typecheck, and that the code for the derived generators match the expected output.
-- See [`DeriveBSTGenerator.lean`](./SpecimenTest/DeriveArbitrarySuchThat/DeriveBSTGenerator.lean) & [`DeriveBalancedTreeGenerator.lean`](./SpecimenTest/DeriveArbitrarySuchThat/DeriveBalancedTreeGenerator.lean) for examples of snapshot tests. Follow the template in these two files to add new snapshot test file, and remember to import the new test file in [`SpecimenTest.lean`](./SpecimenTest.lean) afterwards.
-
-For more documentation refer to the module docstrings in the individual source and test files.
+- Key test directories:
+  + [`DeriveArbitrarySuchThat/`](./SpecimenTest/DeriveArbitrarySuchThat/) — constrained generators (BST, balanced tree, STLC, regex, permutations, multi-output, mutual recursion)
+  + [`DeriveEnumSuchThat/`](./SpecimenTest/DeriveEnumSuchThat/) — constrained enumerators
+  + [`DeriveDecOpt/`](./SpecimenTest/DeriveDecOpt/) — checkers
+  + [`DeriveArbitrary/`](./SpecimenTest/DeriveArbitrary/) — unconstrained generators (parameterized types, mutually recursive types, structures)
+  + [`DeriveEnum/`](./SpecimenTest/DeriveEnum/) — unconstrained enumerators (nested recursion, mutual recursion)
+  + [`CedarExample/`](./SpecimenTest/CedarExample/) — real-world application: well-typed Cedar policy expression generators
+  + [`ArithCompiler/`](./SpecimenTest/ArithCompiler/) — end-to-end example: compiler correctness testing
 
 ## Security
 

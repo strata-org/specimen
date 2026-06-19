@@ -2,97 +2,136 @@ Specimen extends Plausible with automatic derivation of constrained generators, 
 
 ## Overview of Commands
 
-### 1. `derive_generator` - Constrained Random Generators
+### 1. `derive_mutual` — Unified Multi-Spec Derivation (Recommended)
 
-**Purpose**: Automatically derives a random generator that produces values satisfying an inductive relation.
+**Purpose**: The primary command for deriving constrained generators, enumerators, and/or checkers. It handles mutual recursion, automatic dependency discovery, and multi-output generation.
 
 **Syntax**:
 ```lean
-derive_generator (fun x1 ... xn => ∃ x, P x1 ... x ... xn)
+derive_mutual
+  [sort] spec1,
+  [sort] spec2,
+  ...
+```
+
+Where each `sort` is optionally one of `generator` (default), `enumerator`, or `checker`, and each spec is either:
+- `(fun x1 ... xn => ∃ y1 ... ym, P x1 ... y1 ... xn)` — inputs bound by `fun`, outputs bound by `∃`
+- `(∃ y1 ... ym, P y1 ... ym)` — all positions are outputs (multi-output mode)
+
+**Key Options** (set before calling `derive_mutual`):
+```lean
+set_option specimen.autoDeriveDeps true  -- auto-derive sub-relation instances
+set_option specimen.multiOutput true     -- allow multi-output hypothesis steps
+```
+
+**Creates**: Instances of `ArbitrarySizedSuchThat`, `EnumSizedSuchThat`, or `DecOpt` depending on the sort.
+
+**Examples**:
+
+```lean
+-- Basic: derive a generator for balanced trees
+set_option specimen.autoDeriveDeps true
+set_option specimen.multiOutput true
+
+derive_mutual
+  (fun n => ∃ (t : BinaryTree), balancedTree n t)
+
+-- Multiple specs: generator + checker derived together
+derive_mutual
+  generator (fun lo hi => ∃ (t : BinaryTree), BST lo hi t),
+  checker (fun lo hi t => BST lo hi t)
+
+-- Mutual recursion: typing depends on lookup, both derived automatically
+derive_mutual
+  (fun G t => ∃ (e : term), typing G e t)
+
+-- Multi-output: generate all existential variables at once
+derive_mutual
+  (∃ (Γ : List type) (e : term) (τ : type), typing Γ e τ)
+
+-- Enumerator sort
+derive_mutual enumerator
+  (fun re => ∃ (s : List Nat), ExpMatch s re)
+
+-- Checker sort
+derive_mutual checker
+  (fun Γ e τ => typing Γ e τ)
+```
+
+**How `autoDeriveDeps` works**: When enabled, `derive_mutual` inspects the constructors of the target relation and automatically derives generator/checker instances for any sub-relations (e.g., `typing` depends on `lookup` — both will be derived). This eliminates the need to manually derive dependencies first.
+
+**How `multiOutput` works**: When enabled, hypothesis steps can produce multiple output variables simultaneously. For instance, a hypothesis `typing Γ e τ` can generate both `e` and `τ` in a single step (producing a `Prod`), rather than requiring separate steps.
+
+### 2. `derive_generator` — Single-Spec Constrained Random Generators
+
+**Purpose**: Derives a single constrained random generator. Useful for quick one-off derivations or when you don't need dependency auto-derivation.
+
+**Syntax**:
+```lean
+derive_generator (fun x1 ... xn => ∃ y1 ... ym, P x1 ... y1 ... xn)
 ```
 
 Where:
 - `P` is an inductively defined relation
-- `x` is the value to be generated (bound by `∃`)
+- `y1 ... ym` are values to be generated (bound by `∃`)
 - `x1 ... xn` are input parameters (bound by `fun`)
 
-**Creates**: An instance of `ArbitrarySizedSuchThat` typeclass
+**Creates**: An instance of `ArbitrarySizedSuchThat`
 
-**Example**:
+**Examples**:
 ```lean
--- Define an inductive relation for balanced trees
-inductive balancedTree : Nat → BinaryTree → Prop where
-  | B0 : balancedTree .zero BinaryTree.Leaf
-  | B1 : balancedTree (.succ .zero) BinaryTree.Leaf
-  | BS : ∀ n x l r,
-    balancedTree n l → balancedTree n r →
-    balancedTree (.succ n) (BinaryTree.Node x l r)
-
--- Derive a generator for balanced trees of height n
+-- Single output
 derive_generator (fun n => ∃ (t : BinaryTree), balancedTree n t)
+
+-- Multiple outputs
+derive_generator (fun n => ∃ a b, Split n a b)
+
+-- All outputs (no inputs)
+derive_generator (∃ a n b, Split n a b)
 
 -- Use the generator
 #eval runSizedGen (ArbitrarySizedSuchThat.arbitrarySizedST (fun t => balancedTree 5 t)) 10
 ```
 
-**More Examples**:
-```lean
--- Generate BSTs between bounds
-derive_generator (fun lo hi => ∃ (t : BinaryTree), BST lo hi t)
+### 3. `derive_enumerator` — Single-Spec Constrained Deterministic Enumerators
 
--- Generate well-typed STLC terms
-derive_generator (fun Γ τ => ∃ (e : term), typing Γ e τ)
-
--- Generate strings matching a regex
-derive_generator (fun re => ∃ (s : List Nat), ExpMatch s re)
-```
-
-### 2. `derive_enumerator` - Constrained Deterministic Enumerators
-
-**Purpose**: Automatically derives a deterministic enumerator that systematically produces values satisfying an inductive relation.
+**Purpose**: Derives a deterministic enumerator that systematically produces values satisfying an inductive relation.
 
 **Syntax**: Same as `derive_generator`
 ```lean
-derive_enumerator (fun x1 ... xn => ∃ x, P x1 ... x ... xn)
+derive_enumerator (fun x1 ... xn => ∃ y, P x1 ... y ... xn)
 ```
 
-**Creates**: An instance of `EnumSizedSuchThat` typeclass
+**Creates**: An instance of `EnumSizedSuchThat`
 
 **Example**:
 ```lean
--- Derive an enumerator for balanced trees
 derive_enumerator (fun n => ∃ (t : BinaryTree), balancedTree n t)
 
 -- Use the enumerator (use smaller fuel to avoid stack overflow)
 #eval runSizedEnum (EnumSizedSuchThat.enumSizedST (fun t => balancedTree 3 t)) 3
 ```
 
-**Key Difference from Generators**: Enumerators produce values deterministically in a systematic order, while generators produce random values. Enumerators are useful for exhaustive testing but require more fuel/memory.
+### 4. `derive_checker` — Partial Decision Procedures
 
-### 3. `derive_checker` - Partial Decision Procedures
-
-**Purpose**: Automatically derives a checker (partial decision procedure) for an inductive relation.
+**Purpose**: Derives a checker (partial decision procedure) for an inductive relation.
 
 **Syntax**:
 ```lean
 derive_checker (fun x1 ... xn => P x1 ... xn)
 ```
 
-Where `P` is an inductively defined relation.
-
-**Creates**: An instance of `DecOpt` typeclass
+**Creates**: An instance of `DecOpt`
 
 **Returns**: `Nat → Except GenError Bool` where:
-- `.ok true` - the relation holds
-- `.ok false` - the relation doesn't hold
-- `.error _` - ran out of fuel, couldn't decide
+- `.ok true` — the relation holds
+- `.ok false` — the relation doesn't hold
+- `.error _` — ran out of fuel, couldn't decide
 
 **Example**:
 ```lean
--- Derive a checker for BST property
 derive_checker (fun lo hi t => BST lo hi t)
 
--- Use the checker
 let result := DecOpt.decOpt (BST 0 10 myTree) 100  -- 100 is fuel
 match result with
 | .ok true => IO.println "Is a BST!"
@@ -100,38 +139,33 @@ match result with
 | .error _ => IO.println "Couldn't decide (out of fuel)"
 ```
 
-### 4. `deriving Arbitrary` - Unconstrained Random Generators
+### 5. `deriving Arbitrary` — Unconstrained Random Generators
 
-**Purpose**: Automatically derives an unconstrained random generator for an algebraic data type.
+**Purpose**: Derives an unconstrained random generator for an algebraic data type.
 
 **Syntax**:
 ```lean
--- After type definition
+-- Inline after type definition
 inductive Tree where
   | Leaf : Tree
   | Node : Nat → Tree → Tree → Tree
   deriving Arbitrary
 
--- Or as a separate command
+-- Separate command (also works for multiple/mutual types)
 deriving instance Arbitrary for Tree
+deriving instance Arbitrary for NatTree  -- handles mutually recursive types
 ```
 
-**Creates**: An instance of `ArbitraryFueled` typeclass (from Plausible), which provides `Arbitrary`
+**Creates**: An instance of `ArbitraryFueled` (from Plausible), which provides `Arbitrary`
 
 **Example**:
 ```lean
-inductive Tree where
-  | Leaf : Tree
-  | Node : Nat → Tree → Tree → Tree
-  deriving Arbitrary
-
--- Sample from the generator
 #eval runArbitrary (α := Tree) 10
 ```
 
-### 5. `deriving Enum` - Unconstrained Deterministic Enumerators
+### 6. `deriving Enum` — Unconstrained Deterministic Enumerators
 
-**Purpose**: Automatically derives an unconstrained deterministic enumerator for an algebraic data type.
+**Purpose**: Derives an unconstrained deterministic enumerator for an algebraic data type.
 
 **Syntax**:
 ```lean
@@ -140,24 +174,24 @@ inductive Tree where
   | Node : Nat → Tree → Tree → Tree
   deriving Enum
 
--- Or as a separate command
-deriving instance Enum for Tree
+-- Separate command (supports mutual types)
+deriving instance Enum for MutEven, MutOdd
 ```
 
-**Creates**: An instance of `EnumSized` typeclass
+**Creates**: An instance of `EnumSized`
 
 **Example**:
 ```lean
-deriving instance Enum for Tree
-
--- Enumerate trees
 #eval runEnum (α := Tree) 5
 ```
 
-## Typeclasses Created
+## Typeclasses
 
 | Command | Typeclass | Purpose |
 |---------|-----------|---------|
+| `derive_mutual` (generator) | `ArbitrarySizedSuchThat` | Constrained random generation |
+| `derive_mutual` (enumerator) | `EnumSizedSuchThat` | Constrained enumeration |
+| `derive_mutual` (checker) | `DecOpt` | Partial decision procedure |
 | `derive_generator` | `ArbitrarySizedSuchThat` | Constrained random generation |
 | `derive_enumerator` | `EnumSizedSuchThat` | Constrained enumeration |
 | `derive_checker` | `DecOpt` | Partial decision procedure |
@@ -178,31 +212,38 @@ Arbitrary α                   -- Unsized unconstrained generator (from Plausibl
 
 Similar hierarchy exists for enumerators (`EnumSizedSuchThat` → `EnumSuchThat`, etc.)
 
+## Configuration Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `specimen.autoDeriveDeps` | `false` | Automatically derive dependency instances for sub-relations referenced in constructors |
+| `specimen.multiOutput` | `false` | Allow multi-output production steps (generate multiple `∃`-bound variables per hypothesis) |
+| `specimen.fuel` | `10000` | Fuel (termination budget) for derived generators/enumerators/checkers |
+| `specimen.richOutput` | `true` | Emit rich HTML widget in the Lean infoview showing schedule details |
+| `specimen.textOutput` | `0` | Plain-text output verbosity: 0=off, 1=summary, 2=problems only, 3=full schedules |
+| `specimen.searchLimit` | `200000` | Max hypothesis orderings to evaluate per constructor during branch-and-bound schedule search |
+| `specimen.debug` | `false` | Enable debug messages from Specimen |
+
 ## How to Use Derived Instances
 
 ### Using Constrained Generators
 
 ```lean
--- After deriving
-derive_generator (fun n => ∃ (t : BinaryTree), balancedTree n t)
+-- After deriving (with derive_mutual or derive_generator)
+set_option specimen.autoDeriveDeps true
+set_option specimen.multiOutput true
+derive_mutual
+  (fun n => ∃ (t : BinaryTree), balancedTree n t)
 
--- Method 1: Direct call with explicit size
-#eval Gen.run (ArbitrarySizedSuchThat.arbitrarySizedST (fun t => balancedTree 5 t) 10) 10
-
--- Method 2: Using runSizedGen helper
+-- Sample from the generator
 #eval runSizedGen (ArbitrarySizedSuchThat.arbitrarySizedST (fun t => balancedTree 5 t)) 10
-
--- Method 3: In property-based tests
-def testProperty : IO Unit := do
-  let t ← Gen.run (ArbitrarySizedSuchThat.arbitrarySizedST (fun t => BST 0 10 t) 10) 10
-  -- test property on t
-  pure ()
 ```
 
 ### Using Constrained Enumerators
 
 ```lean
-derive_enumerator (fun n => ∃ (t : BinaryTree), balancedTree n t)
+derive_mutual enumerator
+  (fun n => ∃ (t : BinaryTree), balancedTree n t)
 
 -- Enumerate with fuel parameter (use smaller values to avoid stack overflow)
 #eval runSizedEnum (EnumSizedSuchThat.enumSizedST (fun t => balancedTree 3 t)) 3
@@ -211,10 +252,11 @@ derive_enumerator (fun n => ∃ (t : BinaryTree), balancedTree n t)
 ### Using Checkers
 
 ```lean
-derive_checker (fun lo hi t => BST lo hi t)
+derive_mutual checker
+  (fun lo hi t => BST lo hi t)
 
 -- Check if a tree satisfies BST property
-let isValid := DecOpt.decOpt (BST 0 10 myTree) 100  -- 100 is fuel
+let isValid := DecOpt.decOpt (BST 0 10 myTree) 100
 ```
 
 ### Using Unconstrained Generators
@@ -222,61 +264,72 @@ let isValid := DecOpt.decOpt (BST 0 10 myTree) 100  -- 100 is fuel
 ```lean
 deriving instance Arbitrary for Tree
 
--- Method 1: Direct sampling
+-- Direct sampling
 #eval runArbitrary (α := Tree) 10
 
--- Method 2: In Gen monad
-let tree ← Arbitrary.arbitrary (α := Tree)
-
--- Method 3: With plausible tactic (automatic)
+-- With plausible tactic (automatic)
 example (t : Tree) : mirror (mirror t) = t := by
   plausible  -- automatically uses Arbitrary Tree instance
 ```
 
 ## Common Patterns
 
-### Testing Properties with Derived Generators
+### End-to-End Property Testing
 
 ```lean
 -- Derive generator for valid inputs
-derive_generator (fun lo hi => ∃ (t : BinaryTree), BST lo hi t)
+set_option specimen.autoDeriveDeps true
+set_option specimen.multiOutput true
+derive_mutual
+  (fun lo hi => ∃ (t : BinaryTree), BST lo hi t)
 
 -- Derive checker for output validation
-derive_checker (fun lo hi t => BST lo hi t)
+derive_mutual checker
+  (fun lo hi t => BST lo hi t)
 
--- Test a function
+-- Test a function preserves the BST invariant
 def testInsert (numTrials : Nat) : IO Unit := do
+  let size := 10
   for _ in [:numTrials] do
-    let x ← Gen.run (Gen.chooseNat) 10
-    let t ← Gen.run (ArbitrarySizedSuchThat.arbitrarySizedST (fun t => BST 0 10 t) 10) 10
+    let x ← Gen.run (Subtype.val <$> Gen.chooseNatLt 1 10 (by decide)) size
+    let t ← Gen.run (ArbitrarySizedSuchThat.arbitrarySizedST (fun t => BST 0 10 t) size) size
     let t' := insert x t
-    let isValid := DecOpt.decOpt (BST 0 10 t') 100
-    match isValid with
-    | .ok true => continue
-    | .ok false => IO.println s!"Property violated! x={x}, t={t}"
+    let b := DecOpt.decOpt (BST 0 10 t') size
+    match b with
+    | .ok true => pure ()
+    | .ok false => IO.println s!"Property falsified! t = {repr t}, x = {x}"
     | .error _ => IO.println "Checker ran out of fuel"
 ```
 
-### Combining Multiple Relations
+### Deriving for Complex Relations (STLC Typing)
 
 ```lean
--- Generate values satisfying multiple constraints
-derive_generator (fun n => ∃ (t : BinaryTree), balancedTree n t)
-derive_checker (fun lo hi t => BST lo hi t)
+-- Define types and terms
+inductive typ where | Nat | Fun : typ → typ → typ
+inductive term where | Const : Nat → term | Var : Nat → term | App : term → term → term | Abs : typ → term → term
 
--- Generate balanced tree and check if it's also a BST
-let t ← Gen.run (ArbitrarySizedSuchThat.arbitrarySizedST (fun t => balancedTree 5 t) 10) 10
-let isBST := DecOpt.decOpt (BST 0 100 t) 100
+-- Define the typing relation
+inductive typing : List typ → term → typ → Prop where
+  | TConst : ∀ Γ n, typing Γ (.Const n) .Nat
+  | TAbs : ∀ Γ e τ1 τ2, typing (τ1::Γ) e τ2 → typing Γ (.Abs τ1 e) (.Fun τ1 τ2)
+  | TVar : ∀ Γ x τ, lookup Γ x = some τ → typing Γ (.Var x) τ
+  | TApp : ∀ Γ e1 e2 τ1 τ2, typing Γ e2 τ1 → typing Γ e1 (.Fun τ1 τ2) → typing Γ (.App e1 e2) τ2
+
+-- One command derives everything (typing + lookup sub-relation)
+set_option specimen.autoDeriveDeps true
+set_option specimen.multiOutput true
+derive_mutual
+  (fun G t => ∃ (e : term), typing G e t)
 ```
 
 ## Requirements
 
 For successful derivation, ensure:
 
-1. **For `derive_generator` / `derive_enumerator`**:
+1. **For `derive_mutual` / `derive_generator` / `derive_enumerator`**:
    - The relation `P` must be inductively defined
    - Input types must have `Arbitrary` instances (for generators) or `Enum` instances (for enumerators)
-   - The relation should be well-formed (see limitations below)
+   - With `autoDeriveDeps`, sub-relations are handled automatically; without it, their instances must exist
 
 2. **For `derive_checker`**:
    - The relation must be inductively defined
@@ -289,17 +342,19 @@ For successful derivation, ensure:
 
 ## Limitations
 
-1. **Pattern matching**: Currently expects variable names in lambda positions, not literals
-2. **Mutually recursive relations**: Require manual instance stubs (see `MutuallyRecursiveRelationsTest.lean`)
+1. **Pattern matching**: Expects variable names in lambda positions, not literals
+2. **Opaque definitions**: Types hidden behind `opaque` cannot be unfolded by the deriver
 3. **Enumerator fuel**: Enumerators can stack overflow with large fuel values; use smaller values (3-5)
 4. **Checker fuel**: Checkers may return an error if they run out of fuel on complex relations
+5. **Instance parameters**: Relations with dependent (non-typeclass) implicit arguments may require explicit annotations
 
 ## See Also
 
-- `SpecimenTest/DeriveArbitrarySuchThat/` - Examples of constrained generators
-- `SpecimenTest/DeriveEnumSuchThat/` - Examples of constrained enumerators
-- `SpecimenTest/DeriveDecOpt/` - Examples of checkers
-- `SpecimenTest/DeriveArbitrary/` - Examples of unconstrained generators
-- `SpecimenTest/DeriveEnum/` - Examples of unconstrained enumerators
-- `README.md` - High-level overview
-- `Specimen/README.md` - this file; detailed command overview
+- `SpecimenTest/DeriveArbitrarySuchThat/` — Examples of constrained generators
+- `SpecimenTest/DeriveEnumSuchThat/` — Examples of constrained enumerators
+- `SpecimenTest/DeriveDecOpt/` — Examples of checkers
+- `SpecimenTest/DeriveArbitrary/` — Examples of unconstrained generators
+- `SpecimenTest/DeriveEnum/` — Examples of unconstrained enumerators
+- `SpecimenTest/CedarExample/` — Real-world application: Cedar policy expression generation
+- `SpecimenTest/ArithCompiler/` — End-to-end compiler correctness testing
+- `README.md` — High-level overview
