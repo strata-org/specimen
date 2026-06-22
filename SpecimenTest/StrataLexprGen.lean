@@ -119,39 +119,12 @@ def ppMonoTy : LMonoTy → String
 /-! ## Soundness check: sampled terms really are well-typed
 
 We instantiate the derived generator at the concrete, monomorphic parameters
-`P := ⟨Unit, Unit⟩` and type-check sampled terms with a computable checker
-mirroring Strata's `LExpr.typeCheck`. -/
+`P := ⟨Unit, Unit⟩` and type-check sampled terms with Strata's own computable
+checker `LExpr.typeCheck` (vendored in `LambdaCore.lean`), which is proved
+equivalent to `HasTypeA` upstream — so this is an authoritative soundness check. -/
 
 /-- Concrete, monomorphic expression parameters for sampling. -/
 abbrev P : LExprParams := ⟨Unit, Unit⟩
-
-/-- Computable type-checker for `LExpr P.mono`; returns the type if well-typed. -/
-def typeCheckP (ctx : List LMonoTy) : LExpr P.mono → Option LMonoTy
-  | .const _ c => some c.ty
-  | .op _ _ (some ty) => some ty
-  | .op _ _ none => none
-  | .fvar _ _ (some ty) => some ty
-  | .fvar _ _ none => none
-  | .bvar _ i => ctx[i]?
-  | .abs _ _ (some aty) body => (typeCheckP (aty :: ctx) body).map (.arrow aty ·)
-  | .abs _ _ none _ => none
-  | .quant _ _ _ (some qty) tr body =>
-      match typeCheckP (qty :: ctx) tr, typeCheckP (qty :: ctx) body with
-      | some _, some (.tcons "bool" []) => some .bool
-      | _, _ => none
-  | .quant _ _ _ none _ _ => none
-  | .app _ fn arg =>
-      match typeCheckP ctx fn, typeCheckP ctx arg with
-      | some (.tcons "arrow" [dom, cod]), some aty => if dom = aty then some cod else none
-      | _, _ => none
-  | .ite _ c t e =>
-      match typeCheckP ctx c, typeCheckP ctx t, typeCheckP ctx e with
-      | some (.tcons "bool" []), some tt, some et => if tt = et then some tt else none
-      | _, _, _ => none
-  | .eq _ a b =>
-      match typeCheckP ctx a, typeCheckP ctx b with
-      | some ta, some tb => if ta = tb then some .bool else none
-      | _, _ => none
 
 /-- Pretty-print an `LExpr P.mono` with minimal parenthesization. -/
 def ppLExprP (e : LExpr P.mono) (prec : Nat := 0) : String :=
@@ -195,6 +168,6 @@ def ppLExprP (e : LExpr P.mono) (prec : Nat := 0) : String :=
       let e ← Gen.run (ArbitrarySizedSuchThat.arbitrarySizedST
         (fun e => @LExpr.HasTypeA P ctx e τ) 4) (s * 7 + 1)
       IO.println s!"  {ppLExprP e}"
-      unless typeCheckP ctx e == some τ do
+      unless LExpr.typeCheck ctx e == some τ do
         throw (IO.userError
-          s!"ill-typed sample for {repr ctx} ⊢ _ : {ppMonoTy τ}: {ppLExprP e} : {repr (typeCheckP ctx e)}")
+          s!"ill-typed sample for {repr ctx} ⊢ _ : {ppMonoTy τ}: {ppLExprP e} : {repr (LExpr.typeCheck ctx e)}")
