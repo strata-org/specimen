@@ -218,6 +218,21 @@ def hypothesisExprToTSyntaxTerm (hypExpr : HypothesisExpr) : MetaM (TSyntax `ter
   let ctorArgTerms ← ctorArgs.toArray.mapM constructorExprToTSyntaxTerm
   `($(mkIdent ctorName) $ctorArgTerms:term*)
 
+/-- A `ConstructorExpr` placeholder that emits as a hole (`_`), to be filled in
+    by elaboration. Used for implicit and instance-implicit arguments that
+    cannot otherwise be represented (e.g. the `GetElem?` validity lambda in
+    `getElem?`); these are always inferable from the surrounding explicit
+    arguments, so a hole is sufficient.
+
+    Represented as a *nullary* `FuncApp` whose name is the reserved
+    `holeConstructorExprName`: the emission paths special-case it and render it
+    as the term-level hole `_`, and — crucially — it is treated as a constant by
+    the variable-collection and unification machinery (unlike `.Unknown`, which
+    would be picked up as a fresh unknown variable to generate). -/
+def holeConstructorExpr : ConstructorExpr := .FuncApp holeConstructorExprName []
+
+mutual
+
 /-- Converts an `Expr` to a `ConstructorExpr` -/
 partial def exprToConstructorExpr (e : Expr) : MetaM ConstructorExpr := do
   match e with
@@ -233,22 +248,26 @@ partial def exprToConstructorExpr (e : Expr) : MetaM ConstructorExpr := do
       return .TyCtor name []
     else
       return .FuncApp name []
-  | .app f arg => do
-    let fExpr ← exprToConstructorExpr f
-    let argExpr ← exprToConstructorExpr arg
-    match fExpr with
-    | .TyCtor name args =>
-      return .TyCtor name (args ++ [argExpr])
-    | .Ctor name args =>
-      return .Ctor name (args ++ [argExpr])
-    | .FuncApp name args =>
-      return .FuncApp name (args ++ [argExpr])
+  | .app .. => do
+    -- Classify the application head, then its arguments. We process arguments
+    -- positionally (rather than via the application spine) so we can consult
+    -- each argument's binder info: an argument in an implicit or
+    -- instance-implicit position that cannot itself be classified (e.g. the
+    -- `GetElem?` validity lambda `fun as i => i < as.length`) is replaced by a
+    -- hole, since it is inferable from the explicit arguments. Arguments in
+    -- explicit positions must still classify, as before.
+    let headExpr ← exprToConstructorExpr e.getAppFn
+    let argExprs ← classifyAppArgs e
+    match headExpr with
+    | .TyCtor name args => return .TyCtor name (args ++ argExprs)
+    | .Ctor name args => return .Ctor name (args ++ argExprs)
+    | .FuncApp name args => return .FuncApp name (args ++ argExprs)
     | .Unknown name =>
       throwError m!"exprToConstructorExpr: We do not support higher order application of {name} in Expr {e}"
     | .Lit _ =>
-      throwError m!"exprToConstructorExpr: String and Nat Literals cannot be applied as functions, see: {f} in {e}"
+      throwError m!"exprToConstructorExpr: String and Nat Literals cannot be applied as functions, see: {e.getAppFn} in {e}"
     | .CSort _lvl =>
-      throwError m!"exprToConstructorExpr: String and Nat Literals cannot be applied as functions, see: {f} in {e}"
+      throwError m!"exprToConstructorExpr: String and Nat Literals cannot be applied as functions, see: {e.getAppFn} in {e}"
   | .lit l => return .Lit l
   | .sort lvl => return .CSort lvl
   | .lam .. =>
@@ -265,6 +284,36 @@ partial def exprToConstructorExpr (e : Expr) : MetaM ConstructorExpr := do
   | _ =>
     -- For other expression types (literals, lambdas, etc.), generate a placeholder name
     throwError m!"exprToConstructorExpr can only handle free variables, constants, and applications. Attempted to convert: {e}"
+
+/-- Classifies the arguments of an application `e`, one per argument position.
+
+    An argument in an implicit or instance-implicit position that fails to
+    classify is replaced by a hole (`holeConstructorExpr`) instead of raising —
+    such arguments are always re-inferable from the explicit ones. Arguments in
+    explicit positions are classified normally and a failure there is a genuine
+    error (propagated). -/
+partial def classifyAppArgs (e : Expr) : MetaM (List ConstructorExpr) := do
+  let fn := e.getAppFn
+  let args := e.getAppArgs
+  let fnType ← Meta.inferType fn
+  Meta.forallBoundedTelescope fnType args.size fun bvars _ => do
+    let mut result := #[]
+    for h : i in [:args.size] do
+      let isExplicit ←
+        if h' : i < bvars.size then
+          pure (← bvars[i].fvarId!.getDecl).binderInfo.isExplicit
+        else
+          pure true  -- over-application: extra args are explicit
+      if isExplicit then
+        result := result.push (← exprToConstructorExpr args[i]!)
+      else
+        -- Implicit/instance position: try to classify, fall back to a hole.
+        match ← (try some <$> exprToConstructorExpr args[i]! catch _ => pure none) with
+        | some ce => result := result.push ce
+        | none => result := result.push holeConstructorExpr
+    return result.toList
+
+end
 
 /-- Converts an `Expr` to a `HypothesisExpr` if it is a variable or application of type constructor or function to constructor expressions else throws.
   We also pass in the current constructor name, as a poor person's location info.

@@ -69,10 +69,19 @@ inductive ConstructorExpr
   | CSort : Level → ConstructorExpr
   deriving Repr, BEq, Inhabited
 
+/-- Reserved name marking a `ConstructorExpr` placeholder that should be emitted
+    as an anonymous hole (`_`) and re-inferred during elaboration. Represented as
+    a nullary `FuncApp` with this name (see `Schedules.holeConstructorExpr`); the
+    emission functions special-case it. -/
+def holeConstructorExprName : Name := `_specimenHole
+
 /-- Converts a `ConstructorExpr` to a Lean `Expr` -/
 partial def constructorExprToExpr (ctorExpr : ConstructorExpr) : Expr :=
   match ctorExpr with
   | .Unknown name => mkConst name
+  | .FuncApp name [] =>
+    -- A hole placeholder reconstructs as a fresh metavariable.
+    if name == holeConstructorExprName then mkMVar ⟨name⟩ else mkConst name
   | .Ctor ctorName ctorArgs | .TyCtor ctorName ctorArgs | .FuncApp ctorName ctorArgs =>
     mkAppN (mkConst ctorName) (constructorExprToExpr <$> ctorArgs.toArray)
   | .Lit l => .lit l
@@ -88,6 +97,8 @@ instance : ToExpr ConstructorExpr where
 partial def constructorExprToTSyntaxTerm (ctorExpr : ConstructorExpr) : MetaM (TSyntax `term) :=
   match ctorExpr with
   | .Unknown name => `($(mkIdent name))
+  | .FuncApp name [] =>
+    if name == holeConstructorExprName then `(_) else `($(mkIdent name))
   | .Ctor ctorName ctorArgs
   | .TyCtor ctorName ctorArgs
   | .FuncApp ctorName ctorArgs => do
