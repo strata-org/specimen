@@ -177,6 +177,38 @@ partial def constructorExprToMExp (exp : Explicit) (expr : ConstructorExpr) : ME
   | .Lit l => .MLit l
   | .CSort lvl => .MSort lvl
 
+/-- Recursively drop the arguments of every *data constructor* application in a
+    `ConstructorExpr` that sit at implicit / instance-implicit positions.
+
+    A conclusion output is emitted in implicit-allowing form, so a constructor's
+    implicit arguments — most importantly an output inductive's structure
+    type-parameter, e.g. `LExpr.const`'s `T` in `LExpr.const (T.mono) m c`, but
+    also ordinary ones like `Option.some`'s `α` — must be omitted and left for
+    Lean to infer from the explicit arguments. Constructors whose argument count
+    does not match their arity are left unchanged. `FuncApp`/`TyCtor` nodes are
+    traversed but their own argument lists are not filtered (function/type-former
+    applications are emitted implicit-allowing already). -/
+partial def dropImplicitCtorArgsExpr (ce : ConstructorExpr) : MetaM ConstructorExpr := do
+  match ce with
+  | .Ctor c args =>
+    let args ← args.mapM dropImplicitCtorArgsExpr
+    -- Only genuine data constructors have implicit-position args to drop; some
+    -- `.Ctor` nodes are actually abbreviations/defs (e.g. `LExprParams.mono`).
+    unless (← getEnv).isConstructor c do return .Ctor c args
+    let ctorType := (← getConstInfoCtor c).type
+    let argsArr := args.toArray
+    let kept ← Meta.forallTelescopeReducing ctorType fun bvars _ => do
+      if bvars.size ≠ argsArr.size then return args
+      let mut result := #[]
+      for h : i in [:argsArr.size] do
+        if (← bvars[i]!.fvarId!.getDecl).binderInfo.isExplicit then
+          result := result.push argsArr[i]!
+      return result.toList
+    return .Ctor c kept
+  | .TyCtor c args => return .TyCtor c (← args.mapM dropImplicitCtorArgsExpr)
+  | .FuncApp f args => return .FuncApp f (← args.mapM dropImplicitCtorArgsExpr)
+  | other => return other
+
 partial def mexpToConstructorExpr (m : MExp) : Option ConstructorExpr :=
   match m with
   | .MId u => return .Unknown u
@@ -460,21 +492,23 @@ def scheduleStepToMExp (step : ScheduleStep) (defFuel : MExp) (k : MExp) (output
     - `mfuel` and `defFuel` are auxiliary `MExp`s representing the fuel
       for the function we are deriving (these correspond to `size` and `initSize`
       in the QuickChick code for the derived functions) -/
-def scheduleToMExp (schedule : Schedule) (mfuel : MExp) (defFuel : MExp) (recType : Expr) (fuelPrimeName : Name := `fuel') (sizePrimeName : Name := `size') : CompileScheduleM MExp :=
+def scheduleToMExp (schedule : Schedule) (mfuel : MExp) (defFuel : MExp) (recType : Expr) (fuelPrimeName : Name := `fuel') (sizePrimeName : Name := `size') : CompileScheduleM MExp := do
   let (scheduleSteps, scheduleSort) := schedule
   -- Determine the *epilogue* of the schedule (i.e. what happens after we
   -- have finished executing all the `scheduleStep`s)
-  let epilogue :=
+  let epilogue ← do
     match scheduleSort with
     | .ProducerSchedule _ conclusionOutputs =>
-      -- Convert all the outputs in the conclusion to `mexp`s
+      -- Drop implicit constructor arguments (e.g. an output type's structure
+      -- parameter), then convert all the outputs in the conclusion to `mexp`s.
+      let conclusionOutputs ← conclusionOutputs.mapM (fun ce => (monadLift (dropImplicitCtorArgsExpr ce) : CompileScheduleM _))
       let conclusionMExps := constructorExprToMExp .allowImplicit <$> conclusionOutputs
       -- If there are multiple outputs, wrap them in a tuple
       match conclusionMExps with
       | [] => panic! "No outputs being returned in producer schedule"
-      | [output] => MExp.MRet output
-      | outputs => MExp.MRet (tupleOfList (fun e1 e2 => .MApp .allowImplicit (.MConst ``Prod.mk) [e1, e2]) outputs outputs[0]?)
-    | .CheckerSchedule => okTrue
+      | [output] => pure (MExp.MRet output)
+      | outputs => pure (MExp.MRet (tupleOfList (fun e1 e2 => .MApp .allowImplicit (.MConst ``Prod.mk) [e1, e2]) outputs outputs[0]?))
+    | .CheckerSchedule => pure okTrue
     | .TheoremSchedule conclusion typeClassUsed =>
       -- Create a pattern-match on the result of hte checker
       -- on the conclusion, returning `.ok true` or `.ok false` accordingly
@@ -482,7 +516,7 @@ def scheduleToMExp (schedule : Schedule) (mfuel : MExp) (defFuel : MExp) (recTyp
       let scrutinee :=
         if typeClassUsed then decOptChecker conclusionMExp mfuel
         else conclusionMExp
-      matchExceptBool scrutinee okTrue okFalse
+      pure (matchExceptBool scrutinee okTrue okFalse)
   -- Fold over the `scheduleSteps` and convert each of them to a functional `MExp`
   -- Note that the fold composes the `MExp`, and we use `foldr` since
   -- we want the `epilogue` to be the base-case of the fold

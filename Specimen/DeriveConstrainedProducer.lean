@@ -265,10 +265,14 @@ def getScheduleSort (conclusion : HypothesisExpr)
     - Note: it is the caller's responsibility to check that `conclusion` does indeed contain
       a non-trivial function application (e.g. by using `containsNonTrivialFuncApp`) -/
 def linearizeAndFlatten
-  (hypotheses : Array Expr) (conclusion : Expr) (outputIndices : List Nat) (localCtx : LocalContext) :
+  (hypotheses : Array Expr) (conclusion : Expr) (outputIndices : List Nat) (localCtx : LocalContext)
+  (fixedFVars : Std.HashSet FVarId := {}) :
   UnifyM (Array Expr × Expr × List (Name × Expr) × LocalContext) := do
-  -- Phase 1: flatten function calls into fresh unknowns with equality hypotheses
-  let funcAppExprs ← collectUnmatchableProperSubterms conclusion
+  -- Phase 1: flatten function calls into fresh unknowns with equality hypotheses.
+  -- `fixedFVars` are the producer's fixed inputs; a subterm determined entirely
+  -- by them (e.g. a type parameter `T.mono` where `T` is an input) is left in
+  -- place rather than lifted into a generated unknown.
+  let funcAppExprs ← collectUnmatchableProperSubterms fixedFVars conclusion
   trace[plausible.deriving.arbitrary] m!"Unmatchable exprs: {funcAppExprs} In conclusion: {conclusion}"
   withLCtx' localCtx do
 
@@ -473,8 +477,22 @@ def getScheduleForInductiveRelationConstructor
     -- equal to the result of the function call, and adding an extra hypothesis asserting equality
     -- between the function call and the variable.
     -- `freshNamesAndTypes` is a list containing the names & types of the fresh variables produced during this procedure.
+    -- Identify fixed inputs as fvars, so flattening can leave subterms that are
+    -- determined entirely by the inputs (e.g. an output type's structure
+    -- parameter `T.mono`) in place instead of trying to generate them. The
+    -- conclusion's arguments at non-output (input) positions that are bare
+    -- variables are exactly those inputs (e.g. the inductive's parameter `T`).
+    let curLCtx ← getLCtx
+    let conclArgs := conclusion.getAppArgs
+    let fixedFVars : Std.HashSet FVarId := Id.run do
+      let mut s : Std.HashSet FVarId := {}
+      for h : i in [:conclArgs.size] do
+        if i ∉ outputIndices then
+          if let .fvar fid := conclArgs[i] then
+            s := s.insert fid
+      return s
     let (updatedHypotheses, updatedConclusion, freshNamesAndTypes, updatedLocalCtx) ←
-      linearizeAndFlatten hypotheses conclusion outputIndices (← getLCtx)
+      linearizeAndFlatten hypotheses conclusion outputIndices curLCtx fixedFVars
     -- Enter the updated `LocalContext` containing the fresh variable that was created when rewriting the conclusion
     withLCtx' updatedLocalCtx (do
       let hypothesisExprs := (← monadLift (updatedHypotheses.toList.mapM (exprToHypothesisExpr ctorName))).toArray
