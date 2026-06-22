@@ -377,6 +377,47 @@ structure ScheduleResult where
   score : Score
   deriving Repr
 
+/-- Probe for *delegated producers*: candidate output variables that, although
+    they appear under a function application in an equality premise (and so
+    cannot be produced by inverting the function), can nonetheless be produced
+    via a user- or auto-supplied `ArbitrarySizedSuchThat` / `EnumSizedSuchThat`
+    instance for the whole equality.
+
+    For each equality premise `lhs = rhs` among `hypExprs` and each candidate
+    output variable `v` (named in `outputNames`) that occurs in it, we build the
+    property `fun (v : τ) => lhs = rhs` and check whether an instance of the
+    appropriate constrained-producer class exists. If so, `v` is *delegable*:
+    the scheduler is then permitted to produce it by calling that instance,
+    rather than falling back to generate-and-test.
+
+    Returns the subset of `outputNames` found to be delegable. When no instance
+    is in scope this is empty and downstream scheduling is unchanged, so the
+    feature is strictly additive. -/
+def computeDelegableVars (hypExprs : Array Expr) (outputNames : List Name)
+    (prodSort : Schedules.ProducerSort) : MetaM (List Name) := do
+  let className := match prodSort with
+    | .Generator => ``ArbitrarySizedSuchThat
+    | .Enumerator => ``EnumSizedSuchThat
+  let lctx ← getLCtx
+  -- Resolve each candidate output name to its local fvar (if present).
+  let outputFVars : List (Name × Expr) := outputNames.filterMap (fun n =>
+    (lctx.findFromUserName? n).map (fun d => (n, d.toExpr)))
+  let mut delegable : List Name := []
+  for hyp in hypExprs do
+    -- Only equality premises are probed.
+    let some (_, lhs, rhs) := hyp.eq? | continue
+    for (name, fvar) in outputFVars do
+      if name ∈ delegable then continue
+      -- Only relevant if `v` actually occurs in the premise.
+      unless (lhs.containsFVar fvar.fvarId! || rhs.containsFVar fvar.fvarId!) do continue
+      let ty ← inferType fvar
+      let prop ← mkLambdaFVars #[fvar] hyp
+      let instTy ← mkAppM className #[ty, prop]
+      match ← (try trySynthInstance instTy catch _ => pure .none) with
+      | .some _ => delegable := name :: delegable
+      | _ => pure ()
+  return delegable
+
 def getScheduleForInductiveRelationConstructor
   (inductiveName : Name) (ctorName : Name) (inputNames : List Name)
   (deriveSort : DeriveSort) (outputNameTypeOption : Option (List (Name × Expr × Nat))) (unknownsArray : Array Unknown) (localCtx : LocalContext) (recFnName : Name := defaultRecFnName deriveSort)
@@ -528,6 +569,21 @@ def getScheduleForInductiveRelationConstructor
       let bundle ← Scoring.getActiveScorerBundle
       let key : SpecKey := { inductiveName := inductiveName, outputIndices := (Prod.snd recCall), deriveSort := deriveSort }
       let limit := Lean.Option.get (← getOptions) specimen.searchLimit
+
+      -- Probe for delegated producers: not-yet-bound variables that, although
+      -- they sit under a function application in an equality premise, can be
+      -- produced via an `ArbitrarySizedSuchThat`/`EnumSizedSuchThat` instance for
+      -- that equality. Candidates are the constructor's universally-quantified
+      -- variables that are not inputs (`fixedVars`). Empty (hence
+      -- behavior-preserving) when no such instance exists.
+      let delegationCandidates : List Name :=
+        (updatedForAllVars.map (fun (v : TypedVar) => v.var)).filter (· ∉ fixedVars)
+      let delegableVars ← monadLift <|
+        computeDelegableVars updatedHypotheses delegationCandidates
+          (convertDeriveSortToProducerSort deriveSort)
+      unless delegableVars.isEmpty do
+        trace[plausible.deriving.arbitrary] m!"Delegable output vars (via constrained-producer instance): {delegableVars}"
+
       let searchStart ← IO.monoNanosNow
 
       let (bestSchedule, bestScore, countProcessed) ←
@@ -541,6 +597,7 @@ def getScheduleForInductiveRelationConstructor
             (recCall := recCall) (fixedVars := fixedVars) (recFnName := recFnName)
             (multiOutput := multiOutput) (bundle := bundle) (memo := ref)
             (key := key) (limit := limit) (deriveDep := deriveDep)
+            (delegableVars := delegableVars)
           match result with
           | some (steps, score, count) => pure (steps, score, count)
           | none => throwError m!"Unable to compute any possible schedules (monadic path)"
@@ -549,7 +606,7 @@ def getScheduleForInductiveRelationConstructor
           let possibleSchedules := possibleSchedules
             (vars := updatedForAllVars)
             (hypotheses := hypothesisExprs.toList)
-            ctorName deriveSort recCall fixedVars recFnName multiOutput
+            ctorName deriveSort recCall fixedVars recFnName multiOutput delegableVars
           match possibleSchedules with
           | .lnil => throwError m!"Unable to compute any possible schedules"
           | .lcons fstSchdM rest =>

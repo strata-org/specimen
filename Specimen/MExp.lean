@@ -188,6 +188,7 @@ partial def mexpToConstructorExpr (m : MExp) : Option ConstructorExpr :=
     return .FuncApp f convertedArgs
   | .MLit l => return .Lit l
   | .MSort lvl => return .CSort lvl
+  | .MHole => return .Hole
   | _ => none
 
 /-- `MExp` representation of a recursive function call,
