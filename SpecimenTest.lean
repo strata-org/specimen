@@ -93,6 +93,9 @@ import SpecimenTest.CedarExample.Cedar
 import SpecimenTest.CedarExample.CedarCheckerGenerators
 import SpecimenTest.CedarExample.CedarWellTypedTermGenerator
 
+-- Strata Lambda Example: well-typed `LExpr` generator via `HasTypeA`
+import SpecimenTest.StrataLexprGen
+
 -- Arithmetic Compiler Example
 -- Note: ArithCompilerTest and FancyCompilerBuggyTest can't be imported together
 -- because they define conflicting `Instr` types.
