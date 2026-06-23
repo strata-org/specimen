@@ -163,6 +163,46 @@ inductive HasTypeAU : List LMonoTy → LExprU → LMonoTy → Prop where
 #guard_msgs(drop info, drop warning) in
 derive_mutual (fun Δ τ => ∃ e : LExprU, HasTypeAU Δ e τ)
 
+/-! ## Pretty-printing -/
+
+/-- Pretty-prints a monomorphic type. -/
+def ppMonoTy : LMonoTy → String
+  | .int => "int"
+  | .bool => "bool"
+  | .string => "string"
+  | .real => "real"
+  | .bitvec n => s!"bv<{n}>"
+  | .arrow t1 t2 => s!"({ppMonoTy t1} → {ppMonoTy t2})"
+  | .ftvar name => name
+  | .tcons name _ => name
+
+/-- Pretty-print an `LExprU` with minimal parenthesization. -/
+def ppLExprU (e : LExprU) (prec : Nat := 0) : String :=
+  let wrap (p : Nat) (s : String) := if prec ≥ p then s!"({s})" else s
+  match e with
+  | .const _ (.boolConst b) => s!"#{b}"
+  | .const _ (.intConst i) => s!"#{i}"
+  | .const _ (.strConst s) => s!"\"{s}\""
+  | .const _ (.realConst r) => s!"#{r}"
+  | .const _ (.bitvecConst _ b) => s!"#{b.toNat}"
+  | .op _ o _ => s!"{o.name}"
+  | .bvar _ i => s!"%{i}"
+  | .fvar _ x ty => match ty with
+    | some t => s!"{x.name} : {ppMonoTy t}"
+    | none => s!"{x.name}"
+  | .abs _ _ ty body => wrap 1 <| match ty with
+    | some t => s!"λ{ppMonoTy t}. {ppLExprU body 0}"
+    | none => s!"λ_. {ppLExprU body 0}"
+  | .quant _ .all _ ty _ body => wrap 1 <| match ty with
+    | some t => s!"∀{ppMonoTy t}. {ppLExprU body 0}"
+    | none => s!"∀_. {ppLExprU body 0}"
+  | .quant _ .exist _ ty _ body => wrap 1 <| match ty with
+    | some t => s!"∃{ppMonoTy t}. {ppLExprU body 0}"
+    | none => s!"∃_. {ppLExprU body 0}"
+  | .app _ fn arg => wrap 3 <| s!"{ppLExprU fn 2} {ppLExprU arg 3}"
+  | .ite _ c t e => wrap 1 <| s!"if {ppLExprU c 0} then {ppLExprU t 0} else {ppLExprU e 0}"
+  | .eq _ e₁ e₂ => wrap 2 <| s!"{ppLExprU e₁ 2} == {ppLExprU e₂ 2}"
+
 /-! ## Soundness check: sampled terms really are well-typed
 
 A computable type-checker for `LExprU` (mirroring Strata's `LExpr.typeCheck`),
@@ -205,9 +245,12 @@ def typeCheckU (ctx : List LMonoTy) : LExprU → Option LMonoTy
     [([.int, .bool], .bool), ([.int], .int), ([],  .bool),
      ([.bool, .int, .string], .string), ([.arrow .int .bool, .int], .bool)]
   for (ctx, τ) in trials do
+    let ctxStr := String.intercalate ", " (ctx.map ppMonoTy)
+    IO.println s!"--- [{ctxStr}] ⊢ _ : {ppMonoTy τ} ---"
     for s in List.range 12 do
       let e ← Gen.run (ArbitrarySizedSuchThat.arbitrarySizedST
         (fun e => HasTypeAU ctx e τ) 4) (s * 7 + 1)
+      IO.println s!"  {ppLExprU e}"
       unless typeCheckU ctx e == some τ do
         throw (IO.userError
-          s!"ill-typed sample for {repr ctx} ⊢ _ : {repr τ}: {repr e} : {repr (typeCheckU ctx e)}")
+          s!"ill-typed sample for {repr ctx} ⊢ _ : {ppMonoTy τ}: {ppLExprU e} : {repr (typeCheckU ctx e)}")
