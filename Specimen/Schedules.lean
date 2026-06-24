@@ -94,6 +94,7 @@ inductive ScheduleStep
 /-- Pretty-print a ConstructorExpr in readable form -/
 partial def ppConstructorExpr : ConstructorExpr → String
   | .Unknown name => name.toString
+  | .Hole => "_"
   | .Lit (.natVal n) => toString n
   | .Lit (.strVal s) => s!"\"{s}\""
   | .CSort _ => "Sort"
@@ -218,22 +219,11 @@ def hypothesisExprToTSyntaxTerm (hypExpr : HypothesisExpr) : MetaM (TSyntax `ter
   let ctorArgTerms ← ctorArgs.toArray.mapM constructorExprToTSyntaxTerm
   `($(mkIdent ctorName) $ctorArgTerms:term*)
 
-/-- A `ConstructorExpr` placeholder that emits as a hole (`_`), to be filled in
-    by elaboration. Used for implicit and instance-implicit arguments that
-    cannot otherwise be represented (e.g. the `GetElem?` validity lambda in
-    `getElem?`); these are always inferable from the surrounding explicit
-    arguments, so a hole is sufficient.
-
-    Represented as a *nullary* `FuncApp` whose name is the reserved
-    `holeConstructorExprName`: the emission paths special-case it and render it
-    as the term-level hole `_`, and — crucially — it is treated as a constant by
-    the variable-collection and unification machinery (unlike `.Unknown`, which
-    would be picked up as a fresh unknown variable to generate). -/
-def holeConstructorExpr : ConstructorExpr := .FuncApp holeConstructorExprName []
-
 mutual
 
-/-- Converts an `Expr` to a `ConstructorExpr` -/
+/-- Converts an `Expr` to a `ConstructorExpr` ("classifying" the `Expr`: deciding
+    which `ConstructorExpr` variant — variable, constructor, type constructor,
+    function application, literal, etc. — corresponds to it). -/
 partial def exprToConstructorExpr (e : Expr) : MetaM ConstructorExpr := do
   match e with
   | .fvar id =>
@@ -268,6 +258,11 @@ partial def exprToConstructorExpr (e : Expr) : MetaM ConstructorExpr := do
       throwError m!"exprToConstructorExpr: String and Nat Literals cannot be applied as functions, see: {e.getAppFn} in {e}"
     | .CSort _lvl =>
       throwError m!"exprToConstructorExpr: String and Nat Literals cannot be applied as functions, see: {e.getAppFn} in {e}"
+    | .Hole =>
+      -- Unreachable: `exprToConstructorExpr` never yields a hole for an
+      -- application head (holes only arise for implicit/instance *arguments*
+      -- in `classifyAppArgs`). A hole applied as a function is nonsensical.
+      throwError m!"exprToConstructorExpr: a hole cannot be applied as a function, see: {e.getAppFn} in {e}"
   | .lit l => return .Lit l
   | .sort lvl => return .CSort lvl
   | .lam .. =>
@@ -288,10 +283,9 @@ partial def exprToConstructorExpr (e : Expr) : MetaM ConstructorExpr := do
 /-- Classifies the arguments of an application `e`, one per argument position.
 
     An argument in an implicit or instance-implicit position that fails to
-    classify is replaced by a hole (`holeConstructorExpr`) instead of raising —
-    such arguments are always re-inferable from the explicit ones. Arguments in
-    explicit positions are classified normally and a failure there is a genuine
-    error (propagated). -/
+    classify is replaced by a `.Hole` instead of raising — such arguments are
+    always re-inferable from the explicit ones. Arguments in explicit positions
+    are classified normally and a failure there is a genuine error (propagated). -/
 partial def classifyAppArgs (e : Expr) : MetaM (List ConstructorExpr) := do
   let fn := e.getAppFn
   let args := e.getAppArgs
@@ -308,9 +302,8 @@ partial def classifyAppArgs (e : Expr) : MetaM (List ConstructorExpr) := do
         result := result.push (← exprToConstructorExpr args[i]!)
       else
         -- Implicit/instance position: try to classify, fall back to a hole.
-        match ← (try some <$> exprToConstructorExpr args[i]! catch _ => pure none) with
-        | some ce => result := result.push ce
-        | none => result := result.push holeConstructorExpr
+        let ce ← try exprToConstructorExpr args[i]! catch _ => pure .Hole
+        result := result.push ce
     return result.toList
 
 end
@@ -403,7 +396,7 @@ def addConclusionPatternsAndEqualitiesToSchedule (patterns : List (Unknown × Pa
 partial def varsInConstructorExpr : ConstructorExpr → List Name
   | .Unknown u => [u]
   | .Ctor _ args | .FuncApp _ args | .TyCtor _ args => args.flatMap varsInConstructorExpr
-  | .Lit _ | .CSort _ => []
+  | .Lit _ | .CSort _ | .Hole => []
 
 /-- Computes output indices: position i is an output if any output variable appears in it -/
 def computeOutputIndicesForRewrite (hypArgs : List ConstructorExpr) (outputVarNames : List Name) : List Nat :=

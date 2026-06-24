@@ -67,21 +67,26 @@ inductive ConstructorExpr
   /- A TyCtor is an inductive family applied to arguments. Used for instance in Prod.mk which requires two types as arguments. -/
   | Lit : Literal → ConstructorExpr
   | CSort : Level → ConstructorExpr
+  /-- A placeholder emitted as an anonymous hole (`_`) and re-inferred during
+      elaboration. Used for implicit/instance-implicit arguments that cannot
+      otherwise be represented (e.g. the `GetElem?` validity lambda in
+      `getElem?`), which are always inferable from the explicit arguments.
+      Unlike `Unknown`, a `Hole` is treated as a constant by the
+      variable-collection and unification machinery — never a fresh unknown to
+      generate. -/
+  | Hole : ConstructorExpr
   deriving Repr, BEq, Inhabited
-
-/-- Reserved name marking a `ConstructorExpr` placeholder that should be emitted
-    as an anonymous hole (`_`) and re-inferred during elaboration. Represented as
-    a nullary `FuncApp` with this name (see `Schedules.holeConstructorExpr`); the
-    emission functions special-case it. -/
-def holeConstructorExprName : Name := `_specimenHole
 
 /-- Converts a `ConstructorExpr` to a Lean `Expr` -/
 partial def constructorExprToExpr (ctorExpr : ConstructorExpr) : Expr :=
   match ctorExpr with
   | .Unknown name => mkConst name
-  | .FuncApp name [] =>
-    -- A hole placeholder reconstructs as a fresh metavariable.
-    if name == holeConstructorExprName then mkMVar ⟨name⟩ else mkConst name
+  | .FuncApp name [] => mkConst name
+  | .Hole =>
+    -- A *dangling* metavariable (not registered in any `MetavarContext`). Fine
+    -- here since this conversion is only used for delaboration/pretty-printing;
+    -- generator emission renders holes as `_` (see `constructorExprToTSyntaxTerm`).
+    .mvar ⟨`_specimenHole⟩
   | .Ctor ctorName ctorArgs | .TyCtor ctorName ctorArgs | .FuncApp ctorName ctorArgs =>
     mkAppN (mkConst ctorName) (constructorExprToExpr <$> ctorArgs.toArray)
   | .Lit l => .lit l
@@ -97,8 +102,7 @@ instance : ToExpr ConstructorExpr where
 partial def constructorExprToTSyntaxTerm (ctorExpr : ConstructorExpr) : MetaM (TSyntax `term) :=
   match ctorExpr with
   | .Unknown name => `($(mkIdent name))
-  | .FuncApp name [] =>
-    if name == holeConstructorExprName then `(_) else `($(mkIdent name))
+  | .Hole => `(_)
   | .Ctor ctorName ctorArgs
   | .TyCtor ctorName ctorArgs
   | .FuncApp ctorName ctorArgs => do
@@ -123,6 +127,7 @@ partial def patternOfConstructorExpr (ctorExpr : ConstructorExpr) : Option Patte
   | .FuncApp _ _ => none
   | .Lit l => some $ .LitPattern l
   | .CSort _lvl => none
+  | .Hole => none
 
 
 /-- An `UnknownMap` maps `Unknown`s to `Range`s -/
@@ -219,6 +224,7 @@ partial def toMessageDataConstructorExpr (ctorExpr : ConstructorExpr) : MessageD
     let renderedArgs := toMessageDataConstructorExpr <$> args
     m!"TyCtor ({c} {renderedArgs})"
   | .CSort lvl => m!"CSort {lvl}"
+  | .Hole => m!"Hole"
 
 instance : ToMessageData ConstructorExpr where
   toMessageData := toMessageDataConstructorExpr
@@ -439,6 +445,7 @@ partial def updateConstructorArg (k : UnknownMap) (ctorArg : ConstructorExpr) : 
   | .FuncApp ctorName args => return .FuncApp ctorName (← args.mapM $ updateConstructorArg k)
   | .Lit l => return .Lit l
   | .CSort lvl => return .CSort lvl
+  | .Hole => return .Hole
 
 /-- `updatePattern k p` uses the `UnknownMap` `k` to rewrite any unknowns that appear in the
     `Pattern` `p`, substituting each `Unknown` with its canonical representation
@@ -476,6 +483,7 @@ def collectUnknownsInConstructorExpr (ctorExpr : ConstructorExpr) : List Unknown
     c :: List.flatMap collectUnknownsInConstructorExpr args
   | .Lit _ => []
   | .CSort _ => []
+  | .Hole => []
 
 mutual
   /-- Evaluates a `Range`, returning a `ConstructorExpr`. Note that if the

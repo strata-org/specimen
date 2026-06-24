@@ -65,6 +65,7 @@ def variablesInConstructorExpr (ctorExpr : ConstructorExpr) : List Name :=
   | .Ctor _ args | .FuncApp _ args | .TyCtor _ args => args.flatMap variablesInConstructorExpr
   | .Lit _ => []
   | .CSort _ => []
+  | .Hole => []
 
 /-- Given a hypothesis `hyp`, along with `binding` (a list of variables that we are binding with a call to a generator), plus `recCall` (a pair contianing the name of the inductive and a list of output argument indices),
     this function checks whether the generator we're using is recursive.
@@ -222,6 +223,7 @@ partial def outputsNotConstrainedByFunctionApplication (hyp : HypothesisExpr) (o
         | .FuncApp _ args => args.anyM (check true)
         | .Lit _ => return false
         | .CSort _ => return false
+        | .Hole => return false
 
 private inductive OptionallyTypedVar where
 | TVar : TypedVar -> OptionallyTypedVar
@@ -291,6 +293,8 @@ def handleConstrainedOutputs (hyp : HypothesisExpr) (outputVars : List TypedVar)
       pure (none, arg, none)
     | .CSort _ =>
       pure (none, arg, none)
+    | .Hole =>
+      pure (none, arg, none)
 
       )
 
@@ -356,6 +360,7 @@ private partial def containsFunctionCall (ctrExpr : ConstructorExpr) : Bool :=
   | .FuncApp _ _ => true
   | .Lit _ => false
   | .CSort _ => false
+  | .Hole => false
 
 private partial def tyCtorConstrainsVariable (ctrExpr : ConstructorExpr) : Bool :=
   match ctrExpr with
@@ -364,6 +369,7 @@ private partial def tyCtorConstrainsVariable (ctrExpr : ConstructorExpr) : Bool 
   | .TyCtor _ _ => !(variablesInConstructorExpr ctrExpr).isEmpty
   | .Lit _ => false
   | .CSort _ => false
+  | .Hole => false
 
 private def constructHypothesis (typeVars : List Name) (hyp : HypothesisExpr × List (List Name)) : HypothesisExpr × List (List Name) × List Name :=
   let repeatedNames := collectRepeatedNames hyp.snd
