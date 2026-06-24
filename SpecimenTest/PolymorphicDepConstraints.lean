@@ -97,6 +97,9 @@ inductive ValidHash {α : Type} [MyHashable α] : α → Prop where
 -- it just needs to find the existing DecOpt instance.
 set_option specimen.autoDeriveDeps true in
 set_option specimen.multiOutput true in
+-- TODO: instance-typed params (like [MyHashable α]) are not yet tracked
+-- by constraint propagation — only Sort-typed params are. This test
+-- documents the limitation; the derive_mutual correctly errors.
 #guard_msgs(error) in
 derive_mutual
   generator (fun a b x => ∃ h, @HashesTo a b x h)

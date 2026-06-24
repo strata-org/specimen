@@ -942,7 +942,6 @@ private partial def synthExternalConstraints (indName : Name) (args : List Const
         match ← Meta.synthInstance? instTy with
         | some inst =>
           -- Get the actual constant name of the instance to inspect its global type
-          Lean.logWarning m!"synthAndReadConstraints: synth result expr head = {inst.getAppFn}"
           let instConst := inst.getAppFn
           let mut cs : Array Name := #[]
           if let some constName := instConst.constName? then
@@ -955,7 +954,6 @@ private partial def synthExternalConstraints (indName : Name) (args : List Const
                     if !cs.contains cn then
                       cs := cs.push cn
                 ty := ty.bindingBody!
-              Lean.logWarning m!"synthAndReadConstraints: instance {constName} has constraints: {cs}"
           let mut ty := instTy
           while ty.isForall do
             if ty.bindingInfo! == .instImplicit then
@@ -966,7 +964,6 @@ private partial def synthExternalConstraints (indName : Name) (args : List Const
             ty := ty.bindingBody!
           return cs
         | none =>
-          Lean.logWarning m!"synthAndReadConstraints: synthesis FAILED for {instTy}"
           return #[]
       else do
         let argTy := (← inferType t).bindingDomain!
@@ -1954,6 +1951,19 @@ def elabDeriveMutual : CommandElab := fun stx => do
           | _ => pure ()
         -- Propagate constraints and compile all specs (before HTML so generated code can be shown)
         let constraintMap ← liftTermElabM <| propagateConstraints components finalMemo
+        -- Warn about required constraints that Specimen cannot provide
+        let providedConstraints : Std.HashSet Name := Std.HashSet.ofList
+          [``Plausible.Arbitrary, ``Enum, ``DecidableEq]
+        for (key, cs) in constraintMap.toList do
+          if cs.isEmpty then continue
+          let numArgs ← liftTermElabM do
+            try pure ((← getComponentsOfArrowType (← getConstInfoInduct key.inductiveName).type).size - 1)
+            catch _ => pure key.outputIndices.length
+          let missing := cs.filter (fun c => !providedConstraints.contains c)
+          if !missing.isEmpty then
+            let missingStrs : Array String := missing.map Name.getString!
+            let providedStrs : Array String := cs.filter providedConstraints.contains |>.map Name.getString!
+            logWarning m!"derive_mutual: {key.prettyPrint numArgs} requires [{String.intercalate ", " (cs.map Name.getString!).toList}] but Specimen can only provide [{String.intercalate ", " providedStrs.toList}]. Missing: [{String.intercalate ", " missingStrs.toList}]"
         let mut generatedCode : Std.HashMap SpecKey String := {}
         for comp in components do
           let mut compMeta : Array (SpecKey × Name) := #[]
