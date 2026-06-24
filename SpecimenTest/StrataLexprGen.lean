@@ -42,7 +42,10 @@ set_option specimen.multiOutput true
 
 /-- `Rat` is carried by `LConst.realConst`; Plausible ships no `Arbitrary Rat`. -/
 instance : Arbitrary Rat where
-  arbitrary := do return (Rat.ofInt (← Arbitrary.arbitrary))
+  arbitrary := do
+    let numerator ← Arbitrary.arbitrary
+    let denominator ← Arbitrary.arbitrary
+    return mkRat numerator denominator
 
 /-- A *shallow*, terminating `Arbitrary LMonoTy`. The auto-derived generator for
     `LMonoTy` is unbounded (its `tcons` carries `List LMonoTy`, so it can recurse

@@ -82,6 +82,11 @@ partial def expandStructInstBinders (className : Name) (ty : Expr) (syn : TSynta
     -- The field's declared type, read as the codomain of the projection's
     -- signature `∀ (_ : sName ..), fieldType`. Structure fields here are the
     -- metadata-configuration types, whose field types do not depend on the value.
+    -- Limitation: `mkConst projName` is built without universe-level arguments, so
+    -- for a *universe-polymorphic* structure parameter `projType` would be computed
+    -- at the wrong universe. We don't support such parameters (they are rare in
+    -- practice; all current Strata params are `Type 0`); supporting them would mean
+    -- extracting `ty`'s universe levels and passing them to `mkConst` here.
     let projType ← forallTelescopeReducing (← inferType (mkConst projName))
       (fun _ body => pure body)
     let projSyn ← `($(mkIdent projName) $syn)

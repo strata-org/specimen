@@ -263,7 +263,7 @@ def allFVarsFixed (fixed : Std.HashSet FVarId) (e : Expr) : Bool :=
     ordinary fixed value-level subterm like `n * n : Nat` is *not* skipped (since
     `Arbitrary Nat` exists), so checker/derivation behavior for those is
     unchanged. -/
-def isFixedUngeneratable (fixed : Std.HashSet FVarId) (e : Expr) : MetaM Bool := do
+def isFixedUngenerable (fixed : Std.HashSet FVarId) (e : Expr) : MetaM Bool := do
   if !allFVarsFixed fixed e then return false
   let ty ← inferType e
   -- Be conservative if the type isn't fully determined: only the original
@@ -271,13 +271,10 @@ def isFixedUngeneratable (fixed : Std.HashSet FVarId) (e : Expr) : MetaM Bool :=
   if ty.hasExprMVar || ty.hasLevelMVar then return false
   -- The subterm is a candidate for an `Arbitrary` instance; if none can be
   -- synthesized, keep the subterm fixed rather than lifting it to a generator.
-  let arbClass ← (try some <$> Meta.mkAppM ``Plausible.Arbitrary #[ty] catch _ => pure none)
-  match arbClass with
-  | none => return false
-  | some cls =>
-    match ← (try Meta.synthInstance? cls catch _ => pure none) with
-    | some _ => return false
-    | none => return true
+  let some cls ← (try some <$> Meta.mkAppM ``Plausible.Arbitrary #[ty] catch _ => pure none)
+    | return false
+  let inst ← (try Meta.synthInstance? cls catch _ => pure none)
+  return inst.isNone
 
 /-`collectUnmatchableSubterms` traverses an expression from top down until it finds anything except a constructor application
 or a variable or an inductive. It collects all such subterms. These subterms we cannot match on during unifications so we
@@ -292,7 +289,7 @@ partial def collectUnmatchableSubterms (fixed : Std.HashSet FVarId) (e : Expr) :
   if eType.isSort then return []
   -- A fixed subterm whose type has no `Arbitrary` instance (e.g. an output
   -- type's structure parameter `T.mono`) cannot be generated; keep it in place.
-  if ← isFixedUngeneratable fixed e then return []
+  if ← isFixedUngenerable fixed e then return []
   match e with
   | .app .. | .const .. => do
     let (f, args) := e.getAppFnArgs
