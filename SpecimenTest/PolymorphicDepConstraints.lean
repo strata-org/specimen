@@ -108,7 +108,7 @@ inductive HasColor : MyColor → Nat → Prop where
   | mk : ∀ c n, HasColor c n
 
 /--
-warning: derive_mutual: [generator] fun b => ∃ a, HasColor a b needs [Arbitrary MyColor] but no such instance exists
+warning: derive_mutual: [generator] fun b => ∃ a, HasColor a b needs [Arbitrary (MyColor)] but no such instance exists
 -/
 #guard_msgs(warning, drop error, drop info) in
 set_option specimen.autoDeriveDeps true in

@@ -2011,11 +2011,12 @@ def elabDeriveMutual : CommandElab := fun stx => do
             for step in allSteps do
               match step with
               | .Unconstrained _ (.NonRec (indName, args)) ps =>
-                -- Skip if involves type params
+                -- Skip if involves type params or is being derived in this call
                 let hasTP := args.any fun a => match a with
                   | .Unknown n => tpArgNames.contains n
                   | _ => false
-                if !hasTP && indName != ``Eq && indName != ``Ne then
+                let isInternal := usedKeys.toList.any (·.inductiveName == indName)
+                if !hasTP && !isInternal then
                   let tcName := match ps with
                     | .Generator => ``Plausible.Arbitrary
                     | .Enumerator => ``Enum
@@ -2024,7 +2025,13 @@ def elabDeriveMutual : CommandElab := fun stx => do
                       let depInfo ← getConstInfoInduct indName
                       let indLevels ← depInfo.levelParams.mapM (fun _ => do
                         let lv ← Meta.mkFreshLevelMVar; pure (.succ lv))
-                      let ty := Lean.mkConst indName indLevels
+                      let depArgTypes ← getComponentsOfArrowType depInfo.type
+                      let depArgTypes := depArgTypes.pop
+                      let mut ty := Lean.mkConst indName indLevels
+                      for _ in [:depArgTypes.size] do
+                        let argTy := (← inferType ty).bindingDomain!
+                        let mvar ← Meta.mkFreshExprMVar argTy
+                        ty := .app ty mvar
                       let instTy ← mkAppM tcName #[ty]
                       return (← Meta.synthInstance? instTy).isSome
                     catch _ => pure true
@@ -2032,12 +2039,15 @@ def elabDeriveMutual : CommandElab := fun stx => do
                     let numArgs ← liftTermElabM do
                       try pure ((← getComponentsOfArrowType (← getConstInfoInduct key.inductiveName).type).size - 1)
                       catch _ => pure key.outputIndices.length
-                    logWarning m!"derive_mutual: {key.prettyPrint numArgs} needs [{tcName.getString!} {indName}] but no such instance exists"
+                    let argsStr := String.intercalate " " (args.map ppConstructorExpr)
+                    let typeStr := if args.isEmpty then s!"{indName}" else s!"{indName} {argsStr}"
+                    logWarning m!"derive_mutual: {key.prettyPrint numArgs} needs [{tcName.getString!} ({typeStr})] but no such instance exists"
               | .Check (.NonRec (indName, args)) _ =>
                 let hasTP := args.any fun a => match a with
                   | .Unknown n => tpArgNames.contains n
                   | _ => false
-                if !hasTP && indName != ``Eq && indName != ``Ne then
+                let isInternal := usedKeys.toList.any (·.inductiveName == indName)
+                if !hasTP && !isInternal then
                   -- Check if DecOpt instance exists for this concrete relation
                   let instExists ← liftTermElabM <| Meta.withNewMCtxDepth do
                     try
@@ -2057,7 +2067,41 @@ def elabDeriveMutual : CommandElab := fun stx => do
                     let numArgs ← liftTermElabM do
                       try pure ((← getComponentsOfArrowType (← getConstInfoInduct key.inductiveName).type).size - 1)
                       catch _ => pure key.outputIndices.length
-                    logWarning m!"derive_mutual: {key.prettyPrint numArgs} needs [DecOpt ({indName} ...)] but no such instance exists"
+                    let argsStr := String.intercalate " " (args.map ppConstructorExpr)
+                    let typeStr := if args.isEmpty then s!"{indName}" else s!"{indName} {argsStr}"
+                    logWarning m!"derive_mutual: {key.prettyPrint numArgs} needs [DecOpt ({typeStr})] but no such instance exists"
+              | .SuchThat _ (.NonRec (indName, args)) ps =>
+                let hasTP := args.any fun a => match a with
+                  | .Unknown n => tpArgNames.contains n
+                  | _ => false
+                let isInternal := usedKeys.toList.any (·.inductiveName == indName)
+                if !hasTP && !isInternal then
+                  let tcName := match ps with
+                    | .Generator => ``ArbitrarySizedSuchThat
+                    | .Enumerator => ``EnumSizedSuchThat
+                  let instExists ← liftTermElabM <| Meta.withNewMCtxDepth do
+                    try
+                      let depInfo ← getConstInfoInduct indName
+                      let indLevels ← depInfo.levelParams.mapM (fun _ => do
+                        let lv ← Meta.mkFreshLevelMVar; pure (.succ lv))
+                      let numArgs := (← getComponentsOfArrowType depInfo.type).size - 1
+                      let mut ty := Lean.mkConst indName indLevels
+                      for _ in [:numArgs] do
+                        let argTy := (← inferType ty).bindingDomain!
+                        let mvar ← Meta.mkFreshExprMVar argTy
+                        ty := .app ty mvar
+                      -- Try synthesizing as a simple application (for concrete types)
+                      let instTy ← mkAppM tcName #[ty, ← Meta.mkFreshExprMVar none]
+                      return (← Meta.synthInstance? instTy).isSome
+                    catch _ => pure true
+                  if !instExists then
+                    let sortStr := match ps with | .Generator => "ArbitrarySizedSuchThat" | .Enumerator => "EnumSizedSuchThat"
+                    let numArgs ← liftTermElabM do
+                      try pure ((← getComponentsOfArrowType (← getConstInfoInduct key.inductiveName).type).size - 1)
+                      catch _ => pure key.outputIndices.length
+                    let argsStr := String.intercalate " " (args.map ppConstructorExpr)
+                    let typeStr := if args.isEmpty then s!"{indName}" else s!"{indName} {argsStr}"
+                    logWarning m!"derive_mutual: {key.prettyPrint numArgs} needs [{sortStr} ({typeStr})] but no such instance exists"
               | _ => pure ()
           | _ => pure ()
         let mut generatedCode : Std.HashMap SpecKey String := {}
