@@ -2321,6 +2321,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
         -- Propagate constraints bottom-up through the dependency graph
         let constraintMap ← liftTermElabM <| propagateConstraints components finalMemo
         -- For each component: assign names, compile, emit
+        let mut codeHtmlItems : Array Html := #[]
         for comp in components do
           -- Assign global names for this component
           let mut compMeta : Array (SpecKey × Name) := #[]
@@ -2368,6 +2369,35 @@ def elabDeriveMutual : CommandElab := fun stx => do
             elabCommand defCmds[0]!
           for instCmd in instCmds do
             elabCommand instCmd
+          -- Collect generated code for HTML display
+          if richOutput then
+            let label := if defCmds.size > 1 then s!"◆ mutual ({defCmds.size})"
+              else if defCmds.size == 1 then s!"● {specDescs.head!}" else "∅ (pre-existing)"
+            let mut codeLines : Array String := #[]
+            for cmd in defCmds do codeLines := codeLines.push (toString cmd.raw)
+            for cmd in instCmds do codeLines := codeLines.push (toString cmd.raw)
+            let codeText := String.intercalate "\n\n" codeLines.toList
+            codeHtmlItems := codeHtmlItems.push (Html.element "details" #[] #[
+              .element "summary" #[("style", json% {"cursor": "pointer", "marginBottom": "2px", "color": "#b5cea8"})] #[
+                .text label
+              ],
+              .element "pre" #[("style", json% {"marginLeft": "12px", "padding": "8px", "background": "#1e1e1e", "borderRadius": "4px", "border": "1px solid #3c3c3c", "overflow": "auto", "fontSize": "0.85em", "lineHeight": "1.4"})] #[
+                .text codeText
+              ]
+            ])
+        -- Emit generated code HTML widget
+        if richOutput && !codeHtmlItems.isEmpty then
+          let codeHtml := Html.element "div" #[("style", json% {"fontFamily": "var(--vscode-editor-font-family, monospace)", "fontSize": "13px", "lineHeight": "1.6", "padding": "8px"})] #[
+            Html.element "details" #[("open", json% true)] #[
+              .element "summary" #[("style", json% {"cursor": "pointer", "fontWeight": "bold", "color": "#569cd6", "marginBottom": "6px"})] #[
+                .text "🔧 Generated Code"
+              ],
+              .element "div" #[("style", json% {"marginLeft": "8px"})] codeHtmlItems
+            ]
+          ]
+          let codeMsg ← liftCoreM <| Lean.MessageData.ofHtml codeHtml
+            s!"Generated code for {codeHtmlItems.size} components"
+          logInfo codeMsg
       else
         -- Fallback: no auto-derive, use old per-entry compilation
         let siblings := specMeta.toList
