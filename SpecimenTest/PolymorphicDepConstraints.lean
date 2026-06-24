@@ -97,3 +97,22 @@ set_option specimen.multiOutput true in
 #guard_msgs(drop info) in
 derive_mutual
   generator (fun a b x => ∃ h, @HashesTo a b x h)
+
+-- ============================================================
+-- Test 5: Warning for missing concrete instances
+-- ============================================================
+
+inductive MyColor | Red | Green | Blue
+
+inductive HasColor : MyColor → Nat → Prop where
+  | mk : ∀ c n, HasColor c n
+
+/--
+warning: derive_mutual: [generator] fun b => ∃ a, HasColor a b needs [Arbitrary MyColor] but no such instance exists
+-/
+#guard_msgs(warning, drop error, drop info) in
+set_option specimen.autoDeriveDeps true in
+set_option specimen.multiOutput true in
+derive_mutual
+  checker (fun c n => HasColor c n),
+  generator (fun n => ∃ c, HasColor c n)

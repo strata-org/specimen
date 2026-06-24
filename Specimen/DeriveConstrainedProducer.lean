@@ -1994,6 +1994,72 @@ def elabDeriveMutual : CommandElab := fun stx => do
             let missingStrs : Array String := missing.map Name.getString!
             let providedStrs : Array String := cs.filter providedConstraints.contains |>.map Name.getString!
             logWarning m!"derive_mutual: {key.prettyPrint numArgs} requires [{String.intercalate ", " (cs.map Name.getString!).toList}] but Specimen can only provide [{String.intercalate ", " providedStrs.toList}]. Missing: [{String.intercalate ", " missingStrs.toList}]"
+        -- Check for missing concrete instances (e.g. Enum Nat, DecOpt (Foo 1 2))
+        for key in usedKeys.toList do
+          match finalMemo[key]? with
+          | some (.done indSched) =>
+            if indSched.alreadyExists then continue
+            let allScheds := indSched.baseSchedules ++ indSched.recSchedules
+            let allSteps := allScheds.flatMap (fun (_, (steps, _)) => steps)
+            -- Get type param names for this spec
+            let tpNames : Std.HashSet Name := Std.HashSet.ofArray (typeParamIdxMap[key]?.getD #[] |>.map fun i =>
+              let varPool := #[`a, `b, `c, `d, `e, `f, `g, `h, `i, `j, `k, `l]
+              varPool.getD i (Name.mkSimple s!"v{i}"))
+            let indArgNames := indSched.argNames
+            let tpArgNames : Std.HashSet Name := Std.HashSet.ofArray (typeParamIdxMap[key]?.getD #[] |>.filterMap fun i =>
+              indArgNames[i]?)
+            for step in allSteps do
+              match step with
+              | .Unconstrained _ (.NonRec (indName, args)) ps =>
+                -- Skip if involves type params
+                let hasTP := args.any fun a => match a with
+                  | .Unknown n => tpArgNames.contains n
+                  | _ => false
+                if !hasTP && indName != ``Eq && indName != ``Ne then
+                  let tcName := match ps with
+                    | .Generator => ``Plausible.Arbitrary
+                    | .Enumerator => ``Enum
+                  let instExists ← liftTermElabM <| Meta.withNewMCtxDepth do
+                    try
+                      let depInfo ← getConstInfoInduct indName
+                      let indLevels ← depInfo.levelParams.mapM (fun _ => do
+                        let lv ← Meta.mkFreshLevelMVar; pure (.succ lv))
+                      let ty := Lean.mkConst indName indLevels
+                      let instTy ← mkAppM tcName #[ty]
+                      return (← Meta.synthInstance? instTy).isSome
+                    catch _ => pure true
+                  if !instExists then
+                    let numArgs ← liftTermElabM do
+                      try pure ((← getComponentsOfArrowType (← getConstInfoInduct key.inductiveName).type).size - 1)
+                      catch _ => pure key.outputIndices.length
+                    logWarning m!"derive_mutual: {key.prettyPrint numArgs} needs [{tcName.getString!} {indName}] but no such instance exists"
+              | .Check (.NonRec (indName, args)) _ =>
+                let hasTP := args.any fun a => match a with
+                  | .Unknown n => tpArgNames.contains n
+                  | _ => false
+                if !hasTP && indName != ``Eq && indName != ``Ne then
+                  -- Check if DecOpt instance exists for this concrete relation
+                  let instExists ← liftTermElabM <| Meta.withNewMCtxDepth do
+                    try
+                      let depInfo ← getConstInfoInduct indName
+                      let indLevels ← depInfo.levelParams.mapM (fun _ => do
+                        let lv ← Meta.mkFreshLevelMVar; pure (.succ lv))
+                      let numArgs := (← getComponentsOfArrowType depInfo.type).size - 1
+                      let mut ty := Lean.mkConst indName indLevels
+                      for _ in [:numArgs] do
+                        let argTy := (← inferType ty).bindingDomain!
+                        let mvar ← Meta.mkFreshExprMVar argTy
+                        ty := .app ty mvar
+                      let instTy ← mkAppM ``DecOpt #[ty]
+                      return (← Meta.synthInstance? instTy).isSome
+                    catch _ => pure true
+                  if !instExists then
+                    let numArgs ← liftTermElabM do
+                      try pure ((← getComponentsOfArrowType (← getConstInfoInduct key.inductiveName).type).size - 1)
+                      catch _ => pure key.outputIndices.length
+                    logWarning m!"derive_mutual: {key.prettyPrint numArgs} needs [DecOpt ({indName} ...)] but no such instance exists"
+              | _ => pure ()
+          | _ => pure ()
         let mut generatedCode : Std.HashMap SpecKey String := {}
         for comp in components do
           let mut compMeta : Array (SpecKey × Name) := #[]
