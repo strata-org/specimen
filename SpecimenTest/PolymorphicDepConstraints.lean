@@ -3,6 +3,9 @@ import Specimen.DeriveChecker
 
 /-!
 # Regression test for issue #38: missing typeclass constraints for polymorphic dependencies
+
+When a generator depends on a checker sharing a type parameter, the generator must
+propagate the checker's constraints. Previously hardcoded; now computed bottom-up.
 -/
 
 open Plausible
@@ -14,13 +17,15 @@ inductive MyContains {α : Type} : α → List α → Prop where
 inductive NotIn {α : Type} : α → List α → Prop where
   | mk : ∀ x xs, ¬ MyContains x xs → NotIn x xs
 
+-- The fully polymorphic case: the generated instance must carry constraints from the checker dep
 set_option specimen.autoDeriveDeps true in
 set_option specimen.multiOutput true in
-set_option specimen.textOutput 3 in
+#guard_msgs(drop info) in
 derive_mutual
   checker (fun α x xs => @MyContains α x xs),
   generator (fun α xs => ∃ x, @NotIn α x xs)
 
--- Verify: the generator instance has [Enum α] propagated from the checker dep
-example : ∀ [Enum α] [DecidableEq α] [Plausible.Arbitrary α],
+-- Verify: generator only needs [Arbitrary α, DecidableEq α] (from the Eq check in MyContains)
+-- NOT [Enum α] — the checker doesn't enumerate, it only checks equality
+example : ∀ [Plausible.Arbitrary α] [DecidableEq α],
     ArbitrarySizedSuchThat α (fun x => @NotIn α x xs) := inferInstance

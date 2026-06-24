@@ -1019,33 +1019,42 @@ def computeSpecConstraints (indSched : InductiveSchedule)
         -- Compound type containing type params: synthesis to discover requirements
         let found ← synthExternalConstraints indName args typeParamNames tcName
         for c in found do constraints := constraints.insert c
-    | .Unconstrained _ (.Rec ..) _ | .Unconstrained _ (.MutRec ..) _ =>
-      match ownDeriveSort with
-      | .Generator => constraints := constraints.insert ``Plausible.Arbitrary
-      | .Enumerator => constraints := constraints.insert ``Enum
-      | _ => pure ()
+    | .Unconstrained _ (.Rec ..) _ => pure ()
+    | .Unconstrained _ (.MutRec sibName _) _ =>
+      if let some sibs := siblingConstraints then
+        let sibKey : SpecKey := { inductiveName := sibName, outputIndices := [], deriveSort := ownDeriveSort }
+        if let some sibCs := sibs[sibKey]? then
+          for c in sibCs do constraints := constraints.insert c
     | .Check (.NonRec (indName, args)) _ =>
       let refs := args.foldl (fun acc a => acc.union (extractTypeParamRefs typeParamSet a)) ({} : Std.HashSet Name)
       if !refs.isEmpty then
-        -- Look up dep constraints from our map first (internal dep)
-        let depKey : SpecKey := { inductiveName := indName, outputIndices := [], deriveSort := .Checker }
-        match depConstraintMap[depKey]? with
-        | some depCs => for c in depCs do constraints := constraints.insert c
-        | none =>
-          -- Check sibling constraints (mutual block)
-          let fromSibling := siblingConstraints.bind (·[depKey]?)
-          match fromSibling with
+        -- Eq/Ne checks require DecidableEq on the type param
+        if indName == ``Eq || indName == ``Ne then
+          constraints := constraints.insert ``DecidableEq
+        else
+          -- Look up dep constraints from our map first (internal dep)
+          let depKey : SpecKey := { inductiveName := indName, outputIndices := [], deriveSort := .Checker }
+          match depConstraintMap[depKey]? with
           | some depCs => for c in depCs do constraints := constraints.insert c
           | none =>
-            -- External dep: use synthesis
-            let found ← synthExternalConstraints indName args typeParamNames ``DecOpt
-            if found.isEmpty then
-              -- Synthesis failed (likely just-compiled); fall back to checker defaults
-              constraints := constraints.insert ``Enum |>.insert ``DecidableEq
-            else
-              for c in found do constraints := constraints.insert c
-    | .Check (.Rec ..) _ | .Check (.MutRec ..) _ =>
-      constraints := constraints.insert ``Enum |>.insert ``DecidableEq
+            -- Check sibling constraints (mutual block)
+            let fromSibling := siblingConstraints.bind (·[depKey]?)
+            match fromSibling with
+            | some depCs => for c in depCs do constraints := constraints.insert c
+            | none =>
+              -- External dep: use synthesis
+              let found ← synthExternalConstraints indName args typeParamNames ``DecOpt
+              if found.isEmpty then
+                -- Synthesis failed; fall back to checker defaults
+                constraints := constraints.insert ``Enum |>.insert ``DecidableEq
+              else
+                for c in found do constraints := constraints.insert c
+    | .Check (.Rec ..) _ => pure ()
+    | .Check (.MutRec sibName _) _ =>
+      if let some sibs := siblingConstraints then
+        let sibKey : SpecKey := { inductiveName := sibName, outputIndices := [], deriveSort := .Checker }
+        if let some sibCs := sibs[sibKey]? then
+          for c in sibCs do constraints := constraints.insert c
     | .SuchThat _ (.NonRec (indName, args)) ps =>
       let refs := args.foldl (fun acc a => acc.union (extractTypeParamRefs typeParamSet a)) ({} : Std.HashSet Name)
       if !refs.isEmpty then
@@ -1066,11 +1075,12 @@ def computeSpecConstraints (indSched : InductiveSchedule)
             let outNames := match step with | .SuchThat vs _ _ => vs.map Prod.fst | _ => []
             let found ← synthExternalConstraints indName args typeParamNames tcName outNames
             for c in found do constraints := constraints.insert c
-    | .SuchThat _ (.Rec ..) _ | .SuchThat _ (.MutRec ..) _ =>
-      match ownDeriveSort with
-      | .Generator => constraints := constraints.insert ``Plausible.Arbitrary |>.insert ``DecidableEq
-      | .Enumerator => constraints := constraints.insert ``Enum |>.insert ``DecidableEq
-      | _ => constraints := constraints.insert ``Enum |>.insert ``DecidableEq
+    | .SuchThat _ (.Rec ..) _ => pure ()
+    | .SuchThat _ (.MutRec sibName _) _ =>
+      if let some sibs := siblingConstraints then
+        let sibKey : SpecKey := { inductiveName := sibName, outputIndices := [], deriveSort := ownDeriveSort }
+        if let some sibCs := sibs[sibKey]? then
+          for c in sibCs do constraints := constraints.insert c
     | _ => pure ()
   if !constraints.isEmpty then
     constraints := constraints.insert ``DecidableEq
@@ -1942,6 +1952,64 @@ def elabDeriveMutual : CommandElab := fun stx => do
               |>.filter (usedKeys.contains ·) |>.eraseDups
             totalEdges := totalEdges + depKeys.length
           | _ => pure ()
+        -- Propagate constraints and compile all specs (before HTML so generated code can be shown)
+        let constraintMap ← liftTermElabM <| propagateConstraints components finalMemo
+        let mut generatedCode : Std.HashMap SpecKey String := {}
+        for comp in components do
+          let mut compMeta : Array (SpecKey × Name) := #[]
+          for key in comp do
+            let uid ← liftTermElabM (Lean.Core.mkFreshUserName `specimen_mutual)
+            let globalName := Name.mkSimple s!"{uid}_{key.inductiveName.toString.replace "." "_"}"
+            compMeta := compMeta.push (key, globalName)
+          let compSiblings : List (Name × List Nat × Name × DeriveSort) :=
+            compMeta.toList.map (fun (k, gn) => (k.inductiveName, k.outputIndices, gn, k.deriveSort))
+          let mut defCmds : Array (TSyntax `command) := #[]
+          let mut instCmds : Array (TSyntax `command) := #[]
+          for (key, globalName) in compMeta do
+            match finalMemo[key]? with
+            | some (.done indSched) =>
+              if indSched.alreadyExists then continue
+              try
+                let specConstraints := constraintMap[key]?
+                let (defCmd, instCmd) ← liftTermElabM <|
+                  compileInductiveSchedule indSched globalName compSiblings specConstraints
+                defCmds := defCmds.push defCmd
+                instCmds := instCmds.push instCmd
+              catch e =>
+                logWarning m!"Failed to compile {key.inductiveName}{key.outputIndices}{repr key.deriveSort}: {e.toMessageData}"
+            | _ => logWarning m!"No schedule found for {key.inductiveName}{key.outputIndices}"
+          -- Pretty-print and store generated code per component
+          let mut codeLines : Array String := #[]
+          for cmd in defCmds do
+            let pp ← liftTermElabM <| PrettyPrinter.ppCommand cmd
+            codeLines := codeLines.push (Format.pretty pp 100)
+          for cmd in instCmds do
+            let pp ← liftTermElabM <| PrettyPrinter.ppCommand cmd
+            codeLines := codeLines.push (Format.pretty pp 100)
+          let codeText := String.intercalate "\n\n" codeLines.toList
+          for (key, _) in compMeta do
+            generatedCode := generatedCode.insert key codeText
+          -- Emit definitions and instances
+          let specDescs ← compMeta.toList.mapM fun (k, _) => do
+            let numArgs ← liftTermElabM do
+              try pure ((← getComponentsOfArrowType (← getConstInfoInduct k.inductiveName).type).size - 1)
+              catch _ => pure k.outputIndices.length
+            let scoreStr := match finalMemo[k]? with
+              | some (.done indSched) =>
+                if indSched.alreadyExists then "(pre-existing)"
+                else s!"({indSched.baseSchedules.length} base, {indSched.recSchedules.length} rec)"
+              | _ => ""
+            pure s!"{k.prettyPrint numArgs} {scoreStr}"
+          let richOutput := Lean.Option.get (← getOptions) specimen.richOutput
+          if defCmds.size > 1 then
+            if !richOutput then logInfo m!"  ◆ mutual ({defCmds.size}):\n    {String.intercalate "\n    " specDescs}"
+            let mutualCmd ← `(command| mutual $defCmds* end)
+            elabCommand mutualCmd
+          else if defCmds.size == 1 then
+            if !richOutput then logInfo m!"  ● {specDescs.head!}"
+            elabCommand defCmds[0]!
+          for instCmd in instCmds do
+            elabCommand instCmd
         -- Build HTML output using ProofWidgets (controlled by specimen.richOutput)
         let richOutput := Lean.Option.get (← getOptions) specimen.richOutput
         let mkSpan (style : Json) (text : String) : Html :=
@@ -2048,12 +2116,22 @@ def elabDeriveMutual : CommandElab := fun stx => do
                 let ctorItems := mkCtorItems indSched
                 let specNameStyle := json% {"color": $(specColor indSched), "fontWeight": "bold"}
                 let indScoreStr := bundle.reprScore indSched.score
+                let codeItem : Array Html := match generatedCode[k]? with
+                  | some code => #[Html.element "details" #[] #[
+                      .element "summary" #[("style", json% {"cursor": "pointer", "color": "#808080", "marginTop": "4px"})] #[
+                        .text "generated code"
+                      ],
+                      .element "pre" #[("style", json% {"margin": "4px 0", "padding": "6px 8px", "background": "#1e1e1e", "borderRadius": "4px", "border": "1px solid #3c3c3c", "overflow": "auto", "fontSize": "0.85em", "lineHeight": "1.4", "whiteSpace": "pre-wrap"})] #[
+                        .text code
+                      ]
+                    ]]
+                  | none => #[]
                 mutualItems := mutualItems.push (Html.element "details" #[] #[
                   .element "summary" #[("style", json% {"cursor": "pointer", "marginBottom": "2px"})] #[
                     mkSpan specNameStyle (k.prettyPrint numArgs),
                     mkSpan scoreStyle s!" ({nCtors} ctors{timeStr}) score: {indScoreStr}"
                   ],
-                  .element "div" #[("style", json% {"marginLeft": "12px"})] ctorItems
+                  .element "div" #[("style", json% {"marginLeft": "12px"})] (ctorItems ++ codeItem)
                 ])
               | _ => pure ()
             orderItems := orderItems.push (.element "div" #[("style", json% {"marginBottom": "6px", "paddingLeft": "4px", "borderLeft": "3px solid #ce9178"})] (#[
@@ -2077,13 +2155,23 @@ def elabDeriveMutual : CommandElab := fun stx => do
                 let ctorItems := mkCtorItems indSched
                 let specNameStyle := json% {"color": $(specColor indSched), "fontWeight": "bold"}
                 let indScoreStr := bundle.reprScore indSched.score
+                let codeItem : Array Html := match generatedCode[k]? with
+                  | some code => #[Html.element "details" #[] #[
+                      .element "summary" #[("style", json% {"cursor": "pointer", "color": "#808080", "marginTop": "4px"})] #[
+                        .text "generated code"
+                      ],
+                      .element "pre" #[("style", json% {"margin": "4px 0", "padding": "6px 8px", "background": "#1e1e1e", "borderRadius": "4px", "border": "1px solid #3c3c3c", "overflow": "auto", "fontSize": "0.85em", "lineHeight": "1.4", "whiteSpace": "pre-wrap"})] #[
+                        .text code
+                      ]
+                    ]]
+                  | none => #[]
                 orderItems := orderItems.push (Html.element "details" #[] #[
                   .element "summary" #[("style", json% {"cursor": "pointer", "marginBottom": "2px"})] #[
                     .text "● ",
                     mkSpan specNameStyle (k.prettyPrint numArgs),
                     mkSpan scoreStyle s!" ({nCtors} ctors{timeStr}) score: {indScoreStr}"
                   ],
-                  .element "div" #[("style", json% {"marginLeft": "12px"})] ctorItems
+                  .element "div" #[("style", json% {"marginLeft": "12px"})] (ctorItems ++ codeItem)
                 ])
             | _ => pure ()
         htmlChildren := htmlChildren.push (Html.element "details" #[("open", json% true)] #[
@@ -2228,13 +2316,13 @@ def elabDeriveMutual : CommandElab := fun stx => do
             ],
             .element "div" #[("style", json% {"marginLeft": "8px", "borderLeft": "2px solid #3c3c3c", "paddingLeft": "12px"})] trieItems
           ])
-        -- Emit the full HTML (if richOutput enabled)
+        -- Emit the full HTML widget (at top of infoview)
         if richOutput then
           let fullHtml := Html.element "div" #[("style", json% {"fontFamily": "var(--vscode-editor-font-family, monospace)", "fontSize": "13px", "lineHeight": "1.6", "padding": "8px"})] htmlChildren
           let graphMsg ← liftCoreM <| Lean.MessageData.ofHtml fullHtml
             s!"derive_mutual: {usedKeys.size} specs in {components.length} components"
           logInfo graphMsg
-        -- Plain-text output (accessible to LLMs and non-IDE tooling)
+        -- Plain-text fallback output (accessible to LLMs and non-IDE tooling)
         -- Levels: 0=off, 1=names+quality, 2=full schedules for poor-quality, 3=everything
         let textLevel := Lean.Option.get (← getOptions) specimen.textOutput
         if textLevel > 0 then
@@ -2318,86 +2406,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
                     lines := lines.push s!"    requires {dk.prettyPrint dkArgs}  via {String.intercalate ", " ctorStrs}"
               | _ => pure ()
           logInfo m!"{String.intercalate "\n" lines.toList}"
-        -- Propagate constraints bottom-up through the dependency graph
-        let constraintMap ← liftTermElabM <| propagateConstraints components finalMemo
-        -- For each component: assign names, compile, emit
-        let mut codeHtmlItems : Array Html := #[]
-        for comp in components do
-          -- Assign global names for this component
-          let mut compMeta : Array (SpecKey × Name) := #[]
-          for key in comp do
-            let uid ← liftTermElabM (Lean.Core.mkFreshUserName `specimen_mutual)
-            let globalName := Name.mkSimple s!"{uid}_{key.inductiveName.toString.replace "." "_"}"
-            compMeta := compMeta.push (key, globalName)
-          -- Build siblings list for this component (for MutRec rewriting)
-          let compSiblings : List (Name × List Nat × Name × DeriveSort) :=
-            compMeta.toList.map (fun (k, gn) => (k.inductiveName, k.outputIndices, gn, k.deriveSort))
-          -- Compile each spec in the component
-          let mut defCmds : Array (TSyntax `command) := #[]
-          let mut instCmds : Array (TSyntax `command) := #[]
-          for (key, globalName) in compMeta do
-            match finalMemo[key]? with
-            | some (.done indSched) =>
-              if indSched.alreadyExists then continue
-              try
-                let specConstraints := constraintMap[key]?
-                let (defCmd, instCmd) ← liftTermElabM <|
-                  compileInductiveSchedule indSched globalName compSiblings specConstraints
-                defCmds := defCmds.push defCmd
-                instCmds := instCmds.push instCmd
-              catch e =>
-                logWarning m!"Failed to compile {key.inductiveName}{key.outputIndices}{repr key.deriveSort}: {e.toMessageData}"
-            | _ => logWarning m!"No schedule found for {key.inductiveName}{key.outputIndices}"
-          let getNumArgs (k : SpecKey) : CommandElabM Nat := liftTermElabM do
-            try pure ((← getComponentsOfArrowType (← getConstInfoInduct k.inductiveName).type).size - 1)
-            catch _ => pure k.outputIndices.length
-          -- Emit: mutual block for multi-element, standalone for singletons
-          let specDescs ← compMeta.toList.mapM fun (k, _) => do
-            let numArgs ← getNumArgs k
-            let scoreStr := match finalMemo[k]? with
-              | some (.done indSched) =>
-                if indSched.alreadyExists then "(pre-existing)"
-                else s!"({indSched.baseSchedules.length} base, {indSched.recSchedules.length} rec)"
-              | _ => ""
-            pure s!"{k.prettyPrint numArgs} {scoreStr}"
-          if defCmds.size > 1 then
-            logInfo m!"  ◆ mutual ({defCmds.size}):\n    {String.intercalate "\n    " specDescs}"
-            let mutualCmd ← `(command| mutual $defCmds* end)
-            elabCommand mutualCmd
-          else if defCmds.size == 1 then
-            logInfo m!"  ● {specDescs.head!}"
-            elabCommand defCmds[0]!
-          for instCmd in instCmds do
-            elabCommand instCmd
-          -- Collect generated code for HTML display
-          if richOutput then
-            let label := if defCmds.size > 1 then s!"◆ mutual ({defCmds.size})"
-              else if defCmds.size == 1 then s!"● {specDescs.head!}" else "∅ (pre-existing)"
-            let mut codeLines : Array String := #[]
-            for cmd in defCmds do codeLines := codeLines.push (toString cmd.raw)
-            for cmd in instCmds do codeLines := codeLines.push (toString cmd.raw)
-            let codeText := String.intercalate "\n\n" codeLines.toList
-            codeHtmlItems := codeHtmlItems.push (Html.element "details" #[] #[
-              .element "summary" #[("style", json% {"cursor": "pointer", "marginBottom": "2px", "color": "#b5cea8"})] #[
-                .text label
-              ],
-              .element "pre" #[("style", json% {"marginLeft": "12px", "padding": "8px", "background": "#1e1e1e", "borderRadius": "4px", "border": "1px solid #3c3c3c", "overflow": "auto", "fontSize": "0.85em", "lineHeight": "1.4"})] #[
-                .text codeText
-              ]
-            ])
-        -- Emit generated code HTML widget
-        if richOutput && !codeHtmlItems.isEmpty then
-          let codeHtml := Html.element "div" #[("style", json% {"fontFamily": "var(--vscode-editor-font-family, monospace)", "fontSize": "13px", "lineHeight": "1.6", "padding": "8px"})] #[
-            Html.element "details" #[("open", json% true)] #[
-              .element "summary" #[("style", json% {"cursor": "pointer", "fontWeight": "bold", "color": "#569cd6", "marginBottom": "6px"})] #[
-                .text "🔧 Generated Code"
-              ],
-              .element "div" #[("style", json% {"marginLeft": "8px"})] codeHtmlItems
-            ]
-          ]
-          let codeMsg ← liftCoreM <| Lean.MessageData.ofHtml codeHtml
-            s!"Generated code for {codeHtmlItems.size} components"
-          logInfo codeMsg
+        -- (compilation already done above)
       else
         -- Fallback: no auto-derive, use old per-entry compilation
         let siblings := specMeta.toList
