@@ -5,6 +5,36 @@ open Plausible
 namespace Gen
 /-- Error thrown when a derived generator runs out of fuel (should not happen in practice) -/
 def outOfFuelError : GenError := .genError "Specimen: out of fuel (termination limit reached)"
+
+/-- Whether a `GenError` indicates an inconclusive result (ran out of fuel/attempts)
+    vs a definitive failure (the constraint is unsatisfiable for this input). -/
+def GenError.isInconclusive : GenError → Bool
+  | .genError "Specimen: out of fuel (termination limit reached)" => true
+  | .genError "out of fuel" => true
+  | .genError "Gen.runUntil: Out of attempts" => true
+  | _ => false
+
+/-- Result of running a generator with error classification. -/
+inductive GenResult (α : Type) where
+  | ok : α → GenResult α
+  | insufficientFuel : String → GenResult α
+  | impossible : String → GenResult α
+  deriving Repr
+
+/-- Run a generator, classifying failure into `insufficientFuel` (might succeed with more fuel)
+    or `impossible` (the constraint is unsatisfiable for this input). -/
+def runChecked (x : Gen α) (size : Nat) : IO (GenResult α) := do
+  let result ← (Gen.run x size).toBaseIO
+  match result with
+  | .ok a => return .ok a
+  | .error (.userError msg) =>
+    let stripped := msg.stripPrefix "Generation failure:"
+    if GenError.isInconclusive (.genError stripped) then
+      return .insufficientFuel stripped
+    else
+      return .impossible stripped
+  | .error e => throw e
+
 end Gen
 
 namespace GeneratorCombinators
@@ -60,18 +90,25 @@ def frequency (default : Gen α) (gs : List (Nat × Gen α)) : Gen α := do
 def sized (f : Nat → Gen α) : Gen α :=
   Gen.getSize >>= f
 
-/-- Helper function for `backtrack` which picks one out of `total` generators with some initial amount of `fuel` -/
-def backtrackFuel (fuel : Nat) (total : Nat) (gs : List (Nat × Gen α)) : Gen α :=
+/-- Helper function for `backtrack` which picks one out of `total` generators with some initial amount of `fuel`.
+    Tracks whether any branch was inconclusive (fuel exhaustion) vs all branches definitively impossible. -/
+def backtrackFuel (fuel : Nat) (total : Nat) (gs : List (Nat × Gen α)) (anyInconclusive : Bool := false) : Gen α :=
   match fuel with
-  | .zero => throw (.genError "out of fuel")
+  | .zero =>
+    if anyInconclusive then throw Gen.outOfFuelError
+    else throw (.genError "Specimen.GeneratorCombinators.backtrack: all branches failed")
   | .succ fuel' => do
     let n ← Gen.choose Nat 0 (total - 1) (by omega)
     let (k, g, gs') := pickDrop gs n
-    tryCatch g (fun _ => backtrackFuel fuel' (total - k) gs')
+    tryCatch g (fun e =>
+      let inconclusive := anyInconclusive || Gen.GenError.isInconclusive e
+      backtrackFuel fuel' (total - k) gs' inconclusive)
 
 /-- Tries all generators until one returns a `Some` value or all the generators failed once with `None`.
    The generators are picked at random according to their weights (like `frequency` in Haskell QuickCheck),
-   and each generator is run at most once. -/
+   and each generator is run at most once.
+   If all branches fail: returns "out of fuel" if any branch was inconclusive, or
+   "all branches failed" if all were definitively impossible. -/
 def backtrack (gs : List (Nat × Gen α)) : Gen α :=
   backtrackFuel (gs.length) (sumFst gs) gs
 
