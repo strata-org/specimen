@@ -862,11 +862,282 @@ def deriveConstrainedProducer
     constrainingInductive inductiveLevels freshArgIdents freshenedOutputNames.toList
     outputTypes.toList producerSort localCtx
 
+/-- Walk a ConstructorExpr tree and collect which type params it references. -/
+def extractTypeParamRefs (typeParams : Std.HashSet Name) : ConstructorExpr → Std.HashSet Name
+  | .Unknown n => if typeParams.contains n then Std.HashSet.ofList [n] else {}
+  | .Ctor _ args | .TyCtor _ args | .FuncApp _ args =>
+    args.foldl (fun acc a => acc.union (extractTypeParamRefs typeParams a)) {}
+  | .Lit _ | .CSort _ => {}
+
+/-- Synthesize `[tcName type]` for a compound type and extract what constraints the
+    instance requires on Sort-typed params. Used for external deps (already in env). -/
+private partial def synthExternalConstraints (indName : Name) (args : List ConstructorExpr)
+    (typeParamNames : Array Name) (tcName : Name)
+    (outputVarNames : List Name := []) : TermElabM (Array Name) := do
+  let depIndInfo ← try getConstInfoInduct indName
+    catch _ =>
+      if typeParamNames.contains indName then
+        match tcName with
+        | ``Plausible.Arbitrary => return #[``Plausible.Arbitrary]
+        | ``Enum => return #[``Enum]
+        | _ => return #[]
+      return #[]
+  let depArgTypes ← getComponentsOfArrowType depIndInfo.type
+  let depArgTypes := depArgTypes.pop
+  let mut touches := false
+  for i in [:args.length] do
+    match args[i]! with
+    | .Unknown varName =>
+      if typeParamNames.contains varName then
+        if let some argTy := depArgTypes[i]? then
+          if argTy.isSort then touches := true
+    | _ => pure ()
+  if !touches then return #[]
+  Meta.withNewMCtxDepth do
+    let indLevels ← depIndInfo.levelParams.mapM (fun _ => do
+      let lv ← Meta.mkFreshLevelMVar; pure (.succ lv))
+    let numArgs := depArgTypes.size
+    let outputIndices := computeOutputIndices args outputVarNames
+    let rec buildSynth (idx : Nat) (t : Expr) (fvars : Array Expr) (instIdx : Nat)
+        : TermElabM (Array Name) :=
+      if idx >= numArgs then do
+        let body := mkAppN (.const indName indLevels) fvars
+        let instTy ←
+          if tcName == ``DecOpt then
+            mkAppM tcName #[body]
+          else if tcName == ``Plausible.Arbitrary || tcName == ``Enum then
+            -- For base-type generation: just synthesize the class on the full applied type
+            mkAppM tcName #[body]
+          else
+            -- ArbitrarySizedSuchThat / EnumSizedSuchThat: need predicate form
+            let outputFVars := outputIndices.filterMap (fun i => fvars[i]?)
+            if outputFVars.isEmpty then mkAppM tcName #[body]
+            else
+              let outputTypes ← outputFVars.mapM (fun e => inferType e)
+              let outType ← tupleOfListM (throwError "empty")
+                (fun t' rest => do
+                  let u ← Meta.mkFreshLevelMVar
+                  let v ← Meta.mkFreshLevelMVar
+                  pure (Lean.mkApp2 (Lean.mkConst ``Prod [u, v]) t' rest)) outputTypes
+              withLocalDecl `x .default outType fun xFvar => do
+                let mut projections : Array Expr := #[]
+                let mut currentExpr := xFvar
+                for i in [:outputFVars.length] do
+                  if outputFVars.length == 1 then projections := projections.push currentExpr
+                  else if i < outputFVars.length - 1 then
+                    projections := projections.push (.proj ``Prod 0 currentExpr)
+                    currentExpr := .proj ``Prod 1 currentExpr
+                  else projections := projections.push currentExpr
+                let mut finalArgs : Array Expr := #[]
+                let mut oi := 0
+                for i in [:numArgs] do
+                  if i ∈ outputIndices then
+                    finalArgs := finalArgs.push projections[oi]!
+                    oi := oi + 1
+                  else
+                    finalArgs := finalArgs.push fvars[i]!
+                let predBody := mkAppN (.const indName indLevels) finalArgs
+                let pred ← mkLambdaFVars #[xFvar] predBody
+                mkAppM tcName #[outType, pred]
+        match ← Meta.synthInstance? instTy with
+        | some inst =>
+          -- Get the actual constant name of the instance to inspect its global type
+          Lean.logWarning m!"synthAndReadConstraints: synth result expr head = {inst.getAppFn}"
+          let instConst := inst.getAppFn
+          let mut cs : Array Name := #[]
+          if let some constName := instConst.constName? then
+            if let some cinfo := (← getEnv).find? constName then
+              let mut ty := cinfo.type
+              while ty.isForall do
+                if ty.bindingInfo! == .instImplicit then
+                  let domain := ty.bindingDomain!
+                  if let some cn := domain.getAppFn.constName? then
+                    if !cs.contains cn then
+                      cs := cs.push cn
+                ty := ty.bindingBody!
+              Lean.logWarning m!"synthAndReadConstraints: instance {constName} has constraints: {cs}"
+          let mut ty := instTy
+          while ty.isForall do
+            if ty.bindingInfo! == .instImplicit then
+              let domain := ty.bindingDomain!
+              if let some cn := domain.getAppFn.constName? then
+                if !cs.contains cn then
+                  cs := cs.push cn
+            ty := ty.bindingBody!
+          return cs
+        | none =>
+          Lean.logWarning m!"synthAndReadConstraints: synthesis FAILED for {instTy}"
+          return #[]
+      else do
+        let argTy := (← inferType t).bindingDomain!
+        let name := Name.mkSimple s!"arg_{idx}"
+        let bi := if argTy.isSort then BinderInfo.implicit else .default
+        withLocalDecl name bi argTy fun fv => do
+          if argTy.isSort then
+            let enumTy ← mkAppM ``Enum #[fv]
+            let arbTy ← mkAppM ``Plausible.Arbitrary #[fv]
+            let decEqTy ← mkAppM ``DecidableEq #[fv]
+            withLocalDecl (Name.mkSimple s!"inst_enum_{instIdx}") .instImplicit enumTy fun _ =>
+            withLocalDecl (Name.mkSimple s!"inst_arb_{instIdx}") .instImplicit arbTy fun _ =>
+            withLocalDecl (Name.mkSimple s!"inst_deceq_{instIdx}") .instImplicit decEqTy fun _ =>
+              buildSynth (idx + 1) (.app t fv) (fvars.push fv) (instIdx + 1)
+          else
+            buildSynth (idx + 1) (.app t fv) (fvars.push fv) instIdx
+    try buildSynth 0 (.const indName indLevels) #[] 0
+    catch _ => pure #[]
+
+/-- Compute constraints for a single spec given a map of already-computed dep constraints.
+    `depConstraintMap` contains constraints for internal deps (specs in the same derive_mutual).
+    For external deps (not in the map), uses synthesis to discover constraints.
+
+    `siblingConstraints` is used for mutual-block fixed-point: the current iteration's
+    constraints for sibling specs in the same SCC. Pass `none` for non-mutual specs. -/
+def computeSpecConstraints (indSched : InductiveSchedule)
+    (typeParamNames : Array Name) (ownDeriveSort : DeriveSort)
+    (depConstraintMap : Std.HashMap SpecKey (Array Name))
+    (siblingConstraints : Option (Std.HashMap SpecKey (Array Name)) := none)
+    : TermElabM (Array Name) := do
+  if typeParamNames.isEmpty then return #[]
+  let typeParamSet := Std.HashSet.ofArray typeParamNames
+  let mut constraints : Std.HashSet Name := {}
+  let allScheds := indSched.baseSchedules ++ indSched.recSchedules
+  let allSteps := allScheds.flatMap (fun (_, (steps, _)) => steps)
+  for step in allSteps do
+    match step with
+    | .Unconstrained _ (.NonRec (indName, args)) ps =>
+      let tcName := match ps with
+        | .Generator => ``Plausible.Arbitrary
+        | .Enumerator => ``Enum
+      -- Check if any type param is referenced (directly or nested)
+      let refs := args.foldl (fun acc a => acc.union (extractTypeParamRefs typeParamSet a)) ({} : Std.HashSet Name)
+      if indName == tcName then
+        pure ()  -- shouldn't happen, but guard
+      else if typeParamNames.contains indName then
+        -- Bare type param: add own-sort class directly
+        constraints := constraints.insert tcName
+      else if !refs.isEmpty then
+        -- Compound type containing type params: synthesis to discover requirements
+        let found ← synthExternalConstraints indName args typeParamNames tcName
+        for c in found do constraints := constraints.insert c
+    | .Unconstrained _ (.Rec ..) _ | .Unconstrained _ (.MutRec ..) _ =>
+      match ownDeriveSort with
+      | .Generator => constraints := constraints.insert ``Plausible.Arbitrary
+      | .Enumerator => constraints := constraints.insert ``Enum
+      | _ => pure ()
+    | .Check (.NonRec (indName, args)) _ =>
+      let refs := args.foldl (fun acc a => acc.union (extractTypeParamRefs typeParamSet a)) ({} : Std.HashSet Name)
+      if !refs.isEmpty then
+        -- Look up dep constraints from our map first (internal dep)
+        let depKey : SpecKey := { inductiveName := indName, outputIndices := [], deriveSort := .Checker }
+        match depConstraintMap[depKey]? with
+        | some depCs => for c in depCs do constraints := constraints.insert c
+        | none =>
+          -- Check sibling constraints (mutual block)
+          let fromSibling := siblingConstraints.bind (·[depKey]?)
+          match fromSibling with
+          | some depCs => for c in depCs do constraints := constraints.insert c
+          | none =>
+            -- External dep: use synthesis
+            let found ← synthExternalConstraints indName args typeParamNames ``DecOpt
+            if found.isEmpty then
+              -- Synthesis failed (likely just-compiled); fall back to checker defaults
+              constraints := constraints.insert ``Enum |>.insert ``DecidableEq
+            else
+              for c in found do constraints := constraints.insert c
+    | .Check (.Rec ..) _ | .Check (.MutRec ..) _ =>
+      constraints := constraints.insert ``Enum |>.insert ``DecidableEq
+    | .SuchThat _ (.NonRec (indName, args)) ps =>
+      let refs := args.foldl (fun acc a => acc.union (extractTypeParamRefs typeParamSet a)) ({} : Std.HashSet Name)
+      if !refs.isEmpty then
+        let ds := match ps with | .Generator => DeriveSort.Generator | .Enumerator => .Enumerator
+        let outputIndices := computeOutputIndices args
+          ((match step with | .SuchThat vs _ _ => vs.map Prod.fst | _ => []))
+        let depKey : SpecKey := { inductiveName := indName, outputIndices := outputIndices, deriveSort := ds }
+        match depConstraintMap[depKey]? with
+        | some depCs => for c in depCs do constraints := constraints.insert c
+        | none =>
+          let fromSibling := siblingConstraints.bind (·[depKey]?)
+          match fromSibling with
+          | some depCs => for c in depCs do constraints := constraints.insert c
+          | none =>
+            let tcName := match ps with
+              | .Generator => ``ArbitrarySizedSuchThat
+              | .Enumerator => ``EnumSizedSuchThat
+            let outNames := match step with | .SuchThat vs _ _ => vs.map Prod.fst | _ => []
+            let found ← synthExternalConstraints indName args typeParamNames tcName outNames
+            for c in found do constraints := constraints.insert c
+    | .SuchThat _ (.Rec ..) _ | .SuchThat _ (.MutRec ..) _ =>
+      match ownDeriveSort with
+      | .Generator => constraints := constraints.insert ``Plausible.Arbitrary |>.insert ``DecidableEq
+      | .Enumerator => constraints := constraints.insert ``Enum |>.insert ``DecidableEq
+      | _ => constraints := constraints.insert ``Enum |>.insert ``DecidableEq
+    | _ => pure ()
+  if !constraints.isEmpty then
+    constraints := constraints.insert ``DecidableEq
+  return constraints.toArray
+
+/-- Bottom-up constraint propagation across all specs in a derive_mutual call.
+    Components are in topological order (leaves first), so when we process a spec,
+    all its non-mutual deps already have their constraints computed.
+    For mutual blocks, uses fixed-point iteration until stable. -/
+def propagateConstraints (components : List (List SpecKey))
+    (memo : Std.HashMap SpecKey MemoEntry) : TermElabM (Std.HashMap SpecKey (Array Name)) := do
+  let mut result : Std.HashMap SpecKey (Array Name) := {}
+  for comp in components do
+    if comp.length == 1 then
+      -- Single-spec component: compute directly using already-computed dep constraints
+      let key := comp.head!
+      match memo[key]? with
+      | some (.done indSched) =>
+        if indSched.alreadyExists then
+          result := result.insert key #[]
+        else
+          let indInfo ← getConstInfoInduct key.inductiveName
+          let argTypes ← getComponentsOfArrowType indInfo.type
+          let argTypes := argTypes.pop
+          let argNames := indSched.argNames
+          let typeParamNames := (List.range argTypes.size).filterMap fun i =>
+            if let some ty := argTypes[i]? then
+              if ty.isSort then argNames[i]? else none
+            else none
+          let cs ← computeSpecConstraints indSched typeParamNames.toArray key.deriveSort result
+          result := result.insert key cs
+      | _ => result := result.insert key #[]
+    else
+      -- Mutual block: fixed-point iteration
+      let mut sibMap : Std.HashMap SpecKey (Array Name) := {}
+      for key in comp do sibMap := sibMap.insert key #[]
+      let mut changed := true
+      while changed do
+        changed := false
+        for key in comp do
+          match memo[key]? with
+          | some (.done indSched) =>
+            if indSched.alreadyExists then continue
+            let indInfo ← getConstInfoInduct key.inductiveName
+            let argTypes ← getComponentsOfArrowType indInfo.type
+            let argTypes := argTypes.pop
+            let argNames := indSched.argNames
+            let typeParamNames := (List.range argTypes.size).filterMap fun i =>
+              if let some ty := argTypes[i]? then
+                if ty.isSort then argNames[i]? else none
+              else none
+            let cs ← computeSpecConstraints indSched typeParamNames.toArray key.deriveSort result (some sibMap)
+            if cs != (sibMap[key]?.getD #[]) then
+              changed := true
+              sibMap := sibMap.insert key cs
+          | _ => pure ()
+      -- Copy converged sibling constraints into result
+      for (key, cs) in sibMap.toList do
+        result := result.insert key cs
+  return result
+
 /-- Compiles an InductiveSchedule from the memo into (def, instance) commands.
     Uses the pre-derived schedules directly (no re-derivation).
     `siblings` is the list of specs in the same mutual block (for rewriting to Source.MutRec). -/
 def compileInductiveSchedule (indSched : InductiveSchedule)
     (globalName : Name) (siblings : List (Name × List Nat × Name × DeriveSort))
+    (requiredConstraints : Option (Array Name) := none)
     : TermElabM (TSyntax `command × TSyntax `command) := do
   let key := indSched.key
   let indInfo ← getConstInfoInduct key.inductiveName
@@ -971,9 +1242,10 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
     let mut paramInfo : Array (Name × Expr × TSyntax `term) := #[]
     for i in [:liveTypes.size] do
       paramInfo := paramInfo.push (argNames.getD i `x, liveTypes[i]!, liveTypesSyntax[i]!)
-    mkConstrainedProducerMutualPieces baseProducers inductiveProducers
+    mkConstrainedProducerMutualPieces
+      baseProducers inductiveProducers
       key.inductiveName indLevels freshArgIdents freshenedOutputNames
-      outputTypes producerSort (← getLCtx) globalName key.deriveSort paramInfo
+      outputTypes producerSort (← getLCtx) globalName key.deriveSort (some paramInfo) requiredConstraints
 
 /-- Recursively derives the best schedule for a SpecKey, populating the memo with
     all transitive dependencies. Returns the score for this spec.
@@ -2046,6 +2318,8 @@ def elabDeriveMutual : CommandElab := fun stx => do
                     lines := lines.push s!"    requires {dk.prettyPrint dkArgs}  via {String.intercalate ", " ctorStrs}"
               | _ => pure ()
           logInfo m!"{String.intercalate "\n" lines.toList}"
+        -- Propagate constraints bottom-up through the dependency graph
+        let constraintMap ← liftTermElabM <| propagateConstraints components finalMemo
         -- For each component: assign names, compile, emit
         for comp in components do
           -- Assign global names for this component
@@ -2065,8 +2339,9 @@ def elabDeriveMutual : CommandElab := fun stx => do
             | some (.done indSched) =>
               if indSched.alreadyExists then continue
               try
+                let specConstraints := constraintMap[key]?
                 let (defCmd, instCmd) ← liftTermElabM <|
-                  compileInductiveSchedule indSched globalName compSiblings
+                  compileInductiveSchedule indSched globalName compSiblings specConstraints
                 defCmds := defCmds.push defCmd
                 instCmds := instCmds.push instCmd
               catch e =>
