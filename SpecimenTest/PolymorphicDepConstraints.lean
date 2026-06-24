@@ -69,7 +69,7 @@ set_option specimen.multiOutput true in
 #guard_msgs(drop info) in
 derive_mutual
   checker (fun α x xs => @ListHead α x xs),
-  generator (fun α xs => ∃ ys, @HasHead α ys)
+  generator (fun α => ∃ ys, @HasHead α ys)
 
 -- The generator must discover [Arbitrary α] from generating List α unconstrainedly
 example : ∀ [Plausible.Arbitrary α] [DecidableEq α],
@@ -92,14 +92,8 @@ instance [MyHashable α] [DecidableEq UInt64] : DecOpt (@HashesTo α _ x h) wher
 inductive ValidHash {α : Type} [MyHashable α] : α → Prop where
   | mk : ∀ (x : α) (h : UInt64), HashesTo x h → ValidHash x
 
--- This derives a generator that should inherit [MyHashable Nat] from the checker dep.
--- Since Nat is concrete (not polymorphic), no constraint propagation is needed here —
--- it just needs to find the existing DecOpt instance.
 set_option specimen.autoDeriveDeps true in
 set_option specimen.multiOutput true in
--- TODO: instance-typed params (like [MyHashable α]) are not yet tracked
--- by constraint propagation — only Sort-typed params are. This test
--- documents the limitation; the derive_mutual correctly errors.
-#guard_msgs(error) in
+#guard_msgs(drop info) in
 derive_mutual
   generator (fun a b x => ∃ h, @HashesTo a b x h)
