@@ -55,7 +55,28 @@ example : ∀ [Plausible.Arbitrary α] [DecidableEq α],
     ArbitrarySizedSuchThat (List α) (fun xs => @HasAllEq α xs) := inferInstance
 
 -- ============================================================
--- Test 3: Custom class — manual DecOpt instance with [Hashable α] propagates up
+-- Test 3: Generating List α unconstrainedly requires [Arbitrary α] transitively
+-- ============================================================
+
+inductive ListHead {α : Type} : α → List α → Prop where
+  | mk : ∀ x xs, ListHead x (x :: xs)
+
+inductive HasHead {α : Type} : List α → Prop where
+  | mk : ∀ (xs : List α) (x : α), ListHead x xs → HasHead xs
+
+set_option specimen.autoDeriveDeps true in
+set_option specimen.multiOutput true in
+#guard_msgs(drop info) in
+derive_mutual
+  checker (fun α x xs => @ListHead α x xs),
+  generator (fun α xs => ∃ ys, @HasHead α ys)
+
+-- The generator must discover [Arbitrary α] from generating List α unconstrainedly
+example : ∀ [Plausible.Arbitrary α] [DecidableEq α],
+    ArbitrarySizedSuchThat (List α) (fun ys => @HasHead α ys) := inferInstance
+
+-- ============================================================
+-- Test 4: Custom class — manual DecOpt instance with [MyHashable α] propagates up
 -- ============================================================
 
 class MyHashable (α : Type) where
@@ -71,14 +92,11 @@ instance [MyHashable α] [DecidableEq UInt64] : DecOpt (@HashesTo α _ x h) wher
 inductive ValidHash {α : Type} [MyHashable α] : α → Prop where
   | mk : ∀ (x : α) (h : UInt64), HashesTo x h → ValidHash x
 
-instance : MyHashable Nat where
-  myHash n := n.toUInt64
-
 -- This derives a generator that should inherit [MyHashable Nat] from the checker dep.
 -- Since Nat is concrete (not polymorphic), no constraint propagation is needed here —
 -- it just needs to find the existing DecOpt instance.
 set_option specimen.autoDeriveDeps true in
 set_option specimen.multiOutput true in
-#guard_msgs(drop info) in
+#guard_msgs(error) in
 derive_mutual
-  generator (fun (x : Nat) => ∃ h, @HashesTo Nat inferInstance x h)
+  generator (fun a b x => ∃ h, @HashesTo a b x h)
