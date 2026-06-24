@@ -162,6 +162,24 @@ inductive BST_Density : Nat → Nat → BinaryTree → Prop
       Between lo x hi → BST_Density lo x l → BST_Density x hi r →
       BST_Density lo hi (.Node x l r)
 
+inductive BST_Graded : Nat → Nat → BinaryTree → Prop
+  | bstLeaf : BST_Graded lo hi .Leaf
+  | bstNode : ∀ x l r lo hi,
+      Between lo x hi → BST_Graded lo x l → BST_Graded x hi r →
+      BST_Graded lo hi (.Node x l r)
+
+inductive BST_Bounded : Nat → Nat → BinaryTree → Prop
+  | bstLeaf : BST_Bounded lo hi .Leaf
+  | bstNode : ∀ x l r lo hi,
+      Between lo x hi → BST_Bounded lo x l → BST_Bounded x hi r →
+      BST_Bounded lo hi (.Node x l r)
+
+inductive BST_InputAware : Nat → Nat → BinaryTree → Prop
+  | bstLeaf : BST_InputAware lo hi .Leaf
+  | bstNode : ∀ x l r lo hi,
+      Between lo x hi → BST_InputAware lo x l → BST_InputAware x hi r →
+      BST_InputAware lo hi (.Node x l r)
+
 set_option specimen.autoDeriveDeps true
 set_option specimen.multiOutput true
 
@@ -176,6 +194,18 @@ derive_mutual (fun lo hi => ∃ t, BST_WorstLeaf lo hi t)
 set_option specimen.scoreType "Scoring.DensityScore" in
 #guard_msgs(drop info) in
 derive_mutual (fun lo hi => ∃ t, BST_Density lo hi t)
+
+set_option specimen.scoreType "Scoring.GradedUniformDensityScore" in
+#guard_msgs(drop info) in
+derive_mutual (fun lo hi => ∃ t, BST_Graded lo hi t)
+
+set_option specimen.scoreType "Scoring.BoundedGradedScore" in
+#guard_msgs(drop info) in
+derive_mutual (fun lo hi => ∃ t, BST_Bounded lo hi t)
+
+set_option specimen.scoreType "Scoring.InputAwareGradedScore" in
+#guard_msgs(drop info) in
+derive_mutual (fun lo hi => ∃ t, BST_InputAware lo hi t)
 
 #guard_msgs(drop info) in
 #eval do
@@ -192,5 +222,11 @@ derive_mutual (fun lo hi => ∃ t, BST_Density lo hi t)
   sample instW.arbitrarySizedST "  WorstLeafScore"
   let instDn : ArbitrarySizedSuchThat BinaryTree (fun t => BST_Density 0 10 t) := inferInstance
   sample instDn.arbitrarySizedST "  DensityScore  "
+  let instG : ArbitrarySizedSuchThat BinaryTree (fun t => BST_Graded 0 10 t) := inferInstance
+  sample instG.arbitrarySizedST "  GradedScore   "
+  let instB : ArbitrarySizedSuchThat BinaryTree (fun t => BST_Bounded 0 10 t) := inferInstance
+  sample instB.arbitrarySizedST "  BoundedScore  "
+  let instIA : ArbitrarySizedSuchThat BinaryTree (fun t => BST_InputAware 0 10 t) := inferInstance
+  sample instIA.arbitrarySizedST "  InputAware    "
 
 end StrategyComparison

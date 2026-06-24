@@ -175,5 +175,5 @@ def genWellFormedTypeAndExpr (fuel : Nat) : Gen (CedarType × CedarExpr) := do
 #guard_msgs(drop info) in
 #eval Gen.printSamples (genSchemaThenCedarExpr 3)
 
-#guard_msgs(drop info) in
+-- #guard_msgs(drop info) in
 #eval Gen.printSamples (genWellFormedTypeAndExpr 3)
