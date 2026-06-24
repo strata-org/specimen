@@ -1951,6 +1951,36 @@ def elabDeriveMutual : CommandElab := fun stx => do
           | _ => pure ()
         -- Propagate constraints and compile all specs (before HTML so generated code can be shown)
         let constraintMap ← liftTermElabM <| propagateConstraints components finalMemo
+        -- Compute type param indices per spec and detect instance-param constraints (for display)
+        let mut typeParamIdxMap : Std.HashMap SpecKey (Array Nat) := {}
+        let mut displayConstraintMap := constraintMap
+        for (key, _) in constraintMap.toList do
+          let (idxs, extraCs) ← liftTermElabM do
+            try
+              let indInfo ← getConstInfoInduct key.inductiveName
+              let argTypes ← getComponentsOfArrowType indInfo.type
+              let argTypes := argTypes.pop
+              let mut sortIdxs : Array Nat := #[]
+              let mut instConstraints : Array Name := #[]
+              for i in [:argTypes.size] do
+                let ty := argTypes[i]!
+                if ty.isSort then
+                  sortIdxs := sortIdxs.push i
+                else
+                  -- Check if this param's type is a typeclass applied to a type param
+                  let fn := ty.getAppFn
+                  if fn.isConst then
+                    if let some tcName := fn.constName? then
+                      if (← Meta.isClass? ty).isSome then
+                        if !instConstraints.contains tcName then
+                          instConstraints := instConstraints.push tcName
+              pure (sortIdxs, instConstraints)
+            catch _ => pure (#[], #[])
+          typeParamIdxMap := typeParamIdxMap.insert key idxs
+          if !extraCs.isEmpty then
+            let existing := displayConstraintMap[key]?.getD #[]
+            let merged := existing ++ extraCs.filter (!existing.contains ·)
+            displayConstraintMap := displayConstraintMap.insert key merged
         -- Warn about required constraints that Specimen cannot provide
         let providedConstraints : Std.HashSet Name := Std.HashSet.ofList
           [``Plausible.Arbitrary, ``Enum, ``DecidableEq]
@@ -2009,14 +2039,9 @@ def elabDeriveMutual : CommandElab := fun stx => do
                 if indSched.alreadyExists then "(pre-existing)"
                 else s!"({indSched.baseSchedules.length} base, {indSched.recSchedules.length} rec)"
               | _ => ""
-            let constraintStr : String := match constraintMap[k]? with
-              | some cs =>
-                if cs.isEmpty then ""
-                else
-                  let names : Array String := cs.map Name.getString!
-                  " {" ++ String.intercalate ", " names.toList ++ "}"
-              | none => ""
-            pure s!"{k.prettyPrint numArgs}{constraintStr} {scoreStr}"
+            let cs := displayConstraintMap[k]?.getD #[]
+            let tpIdxs := typeParamIdxMap[k]?.getD #[]
+            pure s!"{k.prettyPrint numArgs cs tpIdxs} {scoreStr}"
           let richOutput := Lean.Option.get (← getOptions) specimen.richOutput
           if defCmds.size > 1 then
             if !richOutput then logInfo m!"  ◆ mutual ({defCmds.size}):\n    {String.intercalate "\n    " specDescs}"
@@ -2143,15 +2168,11 @@ def elabDeriveMutual : CommandElab := fun stx => do
                       ]
                     ]]
                   | none => #[]
-                let csStr : String := match constraintMap[k]? with
-                  | some cs => if cs.isEmpty then ""
-                    else let ns : Array String := cs.map Name.getString!
-                         " {" ++ String.intercalate ", " ns.toList ++ "}"
-                  | none => ""
+                let cs := displayConstraintMap[k]?.getD #[]
+                let tpIdxs := typeParamIdxMap[k]?.getD #[]
                 mutualItems := mutualItems.push (Html.element "details" #[] #[
                   .element "summary" #[("style", json% {"cursor": "pointer", "marginBottom": "2px"})] #[
-                    mkSpan specNameStyle (k.prettyPrint numArgs),
-                    mkSpan (json% {"color": "#4ec9b0", "fontSize": "0.85em"}) csStr,
+                    mkSpan specNameStyle (k.prettyPrint numArgs cs tpIdxs),
                     mkSpan scoreStyle s!" ({nCtors} ctors{timeStr}) score: {indScoreStr}"
                   ],
                   .element "div" #[("style", json% {"marginLeft": "12px"})] (ctorItems ++ codeItem)
@@ -2188,16 +2209,12 @@ def elabDeriveMutual : CommandElab := fun stx => do
                       ]
                     ]]
                   | none => #[]
-                let csStr : String := match constraintMap[k]? with
-                  | some cs => if cs.isEmpty then ""
-                    else let ns : Array String := cs.map Name.getString!
-                         " {" ++ String.intercalate ", " ns.toList ++ "}"
-                  | none => ""
+                let cs := displayConstraintMap[k]?.getD #[]
+                let tpIdxs := typeParamIdxMap[k]?.getD #[]
                 orderItems := orderItems.push (Html.element "details" #[] #[
                   .element "summary" #[("style", json% {"cursor": "pointer", "marginBottom": "2px"})] #[
                     .text "● ",
-                    mkSpan specNameStyle (k.prettyPrint numArgs),
-                    mkSpan (json% {"color": "#4ec9b0", "fontSize": "0.85em"}) csStr,
+                    mkSpan specNameStyle (k.prettyPrint numArgs cs tpIdxs),
                     mkSpan scoreStyle s!" ({nCtors} ctors{timeStr}) score: {indScoreStr}"
                   ],
                   .element "div" #[("style", json% {"marginLeft": "12px"})] (ctorItems ++ codeItem)
@@ -2375,12 +2392,9 @@ def elabDeriveMutual : CommandElab := fun stx => do
                 match finalMemo[k]? with
                 | some (.done indSched) =>
                   let nCtors := indSched.baseSchedules.length + indSched.recSchedules.length
-                  let csStr : String := match constraintMap[k]? with
-                    | some cs => if cs.isEmpty then ""
-                      else let ns : Array String := cs.map Name.getString!
-                           " {" ++ String.intercalate ", " ns.toList ++ "}"
-                    | none => ""
-                  lines := lines.push s!"    {specQuality indSched} {k.prettyPrint numArgs}{csStr} ({nCtors} ctors) [{bundle.reprScore indSched.score}]"
+                  let cs := displayConstraintMap[k]?.getD #[]
+                  let tpIdxs := typeParamIdxMap[k]?.getD #[]
+                  lines := lines.push s!"    {specQuality indSched} {k.prettyPrint numArgs cs tpIdxs} ({nCtors} ctors) [{bundle.reprScore indSched.score}]"
                   if showSchedules indSched then
                     let allScheds := indSched.baseSchedules ++ indSched.recSchedules
                     for (ctorName, schedule) in allScheds do
@@ -2401,12 +2415,9 @@ def elabDeriveMutual : CommandElab := fun stx => do
                   lines := lines.push s!"  ● {k.prettyPrint numArgs} (pre-existing)"
                 else
                   let nCtors := indSched.baseSchedules.length + indSched.recSchedules.length
-                  let csStr : String := match constraintMap[k]? with
-                    | some cs => if cs.isEmpty then ""
-                      else let ns : Array String := cs.map Name.getString!
-                           " {" ++ String.intercalate ", " ns.toList ++ "}"
-                    | none => ""
-                  lines := lines.push s!"  ● {specQuality indSched} {k.prettyPrint numArgs}{csStr} ({nCtors} ctors) [{bundle.reprScore indSched.score}]"
+                  let cs := displayConstraintMap[k]?.getD #[]
+                  let tpIdxs := typeParamIdxMap[k]?.getD #[]
+                  lines := lines.push s!"  ● {specQuality indSched} {k.prettyPrint numArgs cs tpIdxs} ({nCtors} ctors) [{bundle.reprScore indSched.score}]"
                   if showSchedules indSched then
                     let allScheds := indSched.baseSchedules ++ indSched.recSchedules
                     for (ctorName, schedule) in allScheds do
