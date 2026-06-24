@@ -409,13 +409,13 @@ def computeDelegableVars (hypExprs : Array Expr) (outputNames : List Name)
     for (name, fvar) in outputFVars do
       if name ∈ delegable then continue
       -- Only relevant if `v` actually occurs in the premise.
-      unless (lhs.containsFVar fvar.fvarId! || rhs.containsFVar fvar.fvarId!) do continue
+      unless (lhs.containsFVar fvar.fvarId! || rhs.containsFVar fvar.fvarId!) do
+        continue
       let ty ← inferType fvar
       let prop ← mkLambdaFVars #[fvar] hyp
       let instTy ← mkAppM className #[ty, prop]
-      match ← (try trySynthInstance instTy catch _ => pure .none) with
-      | .some _ => delegable := name :: delegable
-      | _ => pure ()
+      if let .some _ ← trySynthInstance instTy then
+        delegable := name :: delegable
   return delegable
 
 def getScheduleForInductiveRelationConstructor

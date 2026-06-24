@@ -426,13 +426,22 @@ private def constructHypothesis (typeVars : List Name) (delegableVars : List Nam
   -- argument's remaining variables are inputs to the delegated producer, so we
   -- restrict that argument's produced-variable list to the delegable ones.
   -- (For non-delegable arguments the variable list is unchanged.)
-  let safeVarLists := allSafe.map (fun (ctrExpr, vars) =>
-    if argIsDelegable vars && containsFunctionCall ctrExpr then
+  let isDelegatedArg := fun (ctrExpr, vars) => argIsDelegable vars && containsFunctionCall ctrExpr
+  let safeVarLists := allSafe.map (fun arg@(_, vars) =>
+    if isDelegatedArg arg then
       vars.filter (· ∈ delegableVars)
     else vars)
+  -- A delegated argument's *non-delegable* variables (e.g. `Δ` in `getElem? Δ i`)
+  -- are inputs to the delegated producer, so — like `mustBind` variables — they
+  -- must be bound before this hypothesis is scheduled. Since they are no longer
+  -- in `safeVarLists`, record them here so the dependency is not lost (this also
+  -- covers the case where such a variable is itself function-constrained or a
+  -- repeated name that would otherwise have forced the whole argument to bind).
+  let delegatedInputVars := allSafe.flatMap (fun arg@(_, vars) =>
+    if isDelegatedArg arg then vars.filter (· ∉ delegableVars) else [])
   -- Any variables that appear multiple times in a hypothesis will end up in mustBind the same number of times, so we must deduplicate
   -- to avoid instantiating it multiple times.
-  (hyp.fst, safeVarLists, (List.eraseDups mustBind).flatMap (fun x => x.snd))
+  (hyp.fst, safeVarLists, List.eraseDups ((List.eraseDups mustBind).flatMap (fun x => x.snd) ++ delegatedInputVars))
 
 private def needs_checking {α v} [BEq v] (env : List v) (a_vars : α × List (List v) × List v) : Bool :=
   let (_, potentialIndices, alwaysBound) := a_vars
