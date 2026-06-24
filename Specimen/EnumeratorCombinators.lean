@@ -56,7 +56,21 @@ def lazyListBacktrack (l : LazyList α) (f : α → Except GenError Bool) (anyNo
     | .ok false => lazyListBacktrack xs.get f anyNone
     | .error _ => lazyListBacktrack xs.get f true
 
-/-- Variant of `lazyListBacktrack` where the input `LazyList` contains `Except ε α` values instead of `α` -/
+/-- An enumerator error is "inconclusive" (ran out of fuel / couldn't decide) vs
+    "disproved" (this constructor path definitively doesn't apply).
+    Only the specific out-of-fuel error from Specimen's derived code is inconclusive. -/
+private def isInconclusiveError : GenError → Bool
+  | .genError "Specimen: out of fuel (termination limit reached)" => true
+  | .genError "out of fuel" => true
+  | _ => false
+
+/-- Variant of `lazyListBacktrack` where the input `LazyList` contains `Except ε α` values instead of `α`.
+
+    Error handling distinguishes two failure modes:
+    - **Disproved** (enumerator `.error` that is NOT inconclusive): this constructor path
+      definitively doesn't apply. Treated like `.ok false` — skip to next, don't poison.
+    - **Inconclusive** (enumerator `.error` from fuel exhaustion, or continuation `.error`):
+      couldn't determine truth. Sets `anyNone := true` so the final result is `error`. -/
 def lazyListBacktrackOpt (l : LazyList (Except GenError α)) (f : α → Except ε Bool) (anyNone : Bool) : Except GenError Bool :=
   let err := GenError.genError "EnumeratorCombinators.lazyListBackTrackOpt: failure"
   match l with
@@ -68,7 +82,9 @@ def lazyListBacktrackOpt (l : LazyList (Except GenError α)) (f : α → Except 
       | .ok true => .ok true
       | .ok false => lazyListBacktrackOpt xs.get f anyNone
       | .error _ => lazyListBacktrackOpt xs.get f true
-    | .error _ => lazyListBacktrackOpt xs.get f true
+    | .error e =>
+      let poisoned := if isInconclusiveError e then true else anyNone
+      lazyListBacktrackOpt xs.get f poisoned
 
 /-- Iterates through all the results of the enumerator `e`, applies the checker `f` to them,
     and returns the resultant `Except GenError Bool`. -/
