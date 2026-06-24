@@ -867,7 +867,7 @@ def extractTypeParamRefs (typeParams : Std.HashSet Name) : ConstructorExpr → S
   | .Unknown n => if typeParams.contains n then Std.HashSet.ofList [n] else {}
   | .Ctor _ args | .TyCtor _ args | .FuncApp _ args =>
     args.foldl (fun acc a => acc.union (extractTypeParamRefs typeParams a)) {}
-  | .Lit _ | .CSort _ => {}
+  | .Lit _ | .CSort _ | .Hole => {}
 
 /-- Synthesize `[tcName type]` for a compound type and extract what constraints the
     instance requires on Sort-typed params. Used for external deps (already in env). -/
