@@ -61,3 +61,42 @@ derive_generator (fun Γ τ => ∃ e : DTm, DHasTy Γ e τ)
       (fun e => DHasTy [7, 7, 7] e 7) 5) (s + 1))
   unless results.all (· == DTm.var 2) do
     throw (IO.userError s!"expected all `DTm.var 2` (delegation), got {repr results}")
+
+/-! ### Per-premise delegability
+
+    Delegability is recorded *per premise*, not as one flat set of names. The
+    same variable can be delegable through one equality yet be a plain *input*
+    to another. Here the context `Γ` is **not** a fixed input: it is produced by
+    a first premise `Γ = buildCtx x` (delegable via the library's generic
+    `fun x => x = val` instance), and is then an input to the second premise
+    `Γ[i]? = some τ` (whose instance produces `i`).
+
+    A flat delegable set would contain both `Γ` and `i`, so when scheduling the
+    `Γ[i]? = some τ` premise the deriver would treat `Γ` as *produced* by it too
+    — emitting `Γ ← (Γ[i]? = some τ)` and never binding `i`, which fails to
+    elaborate (`Unknown identifier i`). Keying delegability by premise keeps
+    `Γ`'s producer (premise 1) distinct from `i`'s (premise 2), so the schedule
+    is `Γ ← (Γ = buildCtx x)` then `i ← (Γ[i]? = some τ)`. -/
+
+/-- Deterministically builds the context `[7, …, 7]` of length `x`. -/
+def buildCtx (x : Nat) : List Nat := List.replicate x 7
+
+inductive DHasTyCtx : Nat → DTm → Nat → Prop where
+  | var : Γ = buildCtx x → Γ[i]? = some τ → DHasTyCtx x (.var i) τ
+
+-- Derivation succeeds: `Γ` is produced by the first premise, `i` delegated by
+-- the second. (Before the per-premise fix this failed with `Unknown identifier
+-- i`, because `Γ` was wrongly treated as delegable via the indexing premise.)
+#guard_msgs(drop info) in
+derive_generator (fun x τ => ∃ e : DTm, DHasTyCtx x e τ)
+
+-- `x = 3` ⇒ `Γ = [7, 7, 7]`; with target `7` the delegated producer returns the
+-- last matching index, `2`, for every seed — witnessing that `i` (not `Γ`) was
+-- the delegated output.
+#guard_msgs(drop info) in
+#eval show IO Unit from do
+  let results ← (List.range 25).mapM (fun s =>
+    Gen.run (ArbitrarySizedSuchThat.arbitrarySizedST
+      (fun e => DHasTyCtx 3 e 7) 5) (s + 1))
+  unless results.all (· == DTm.var 2) do
+    throw (IO.userError s!"expected all `DTm.var 2` (per-premise delegation), got {repr results}")

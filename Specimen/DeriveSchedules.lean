@@ -67,13 +67,32 @@ def variablesInConstructorExpr (ctorExpr : ConstructorExpr) : List Name :=
   | .CSort _ => []
   | .Hole => []
 
+/-- Output variables that may be *produced* from an equality premise via a
+    delegated `ArbitrarySizedSuchThat`/`EnumSizedSuchThat` instance, recorded
+    *per premise* (keyed by the `HypothesisExpr` they were found delegable in).
+
+    Delegability is premise-specific: a variable may be delegable via one
+    equality yet be a plain input to another (e.g. a context `Γ` produced by
+    `Γ = f x` is an *input* to `Γ[i]? = some τ`). Keying by premise keeps these
+    apart, so the scheduler only treats a variable as produced by the premise
+    whose instance can actually produce it. See `computeDelegableVars`. -/
+abbrev DelegableMap := List (HypothesisExpr × List Name)
+
+/-- The output variables delegable via the *specific* premise `hyp`. Returns `[]`
+    for a premise with no delegated producer (the default everywhere when no such
+    instance is in scope), so scheduling is then unchanged. Structurally-equal
+    premises have equal delegability, so keying by content is sound. -/
+def DelegableMap.varsFor (m : DelegableMap) (hyp : HypothesisExpr) : List Name :=
+  (m.find? (·.fst == hyp)).elim [] (·.snd)
+
 /-- Given a hypothesis `hyp`, along with `binding` (a list of variables that we are binding with a call to a generator), plus `recCall` (a pair contianing the name of the inductive and a list of output argument indices),
     this function checks whether the generator we're using is recursive.
 
     For example, if we're trying to produce a call to the generator [(e, tau) ← typing gamma _ _], then
     we would have `binding = [e,tau]` and `hyp = typing gamma e tau`. -/
 def isRecCall (binding : List Name) (typeVars : List Name) (hyp : HypothesisExpr) (recCall : Name × List Nat)
-    (delegableVars : List Name := []) : MetaM Bool := do
+    (delegableMap : DelegableMap := []) : MetaM Bool := do
+  let delegableVars := delegableMap.varsFor hyp
   let (ctorName, args) := hyp
   -- An output position is a position where all vars contained are unbound
   -- if they are unbound, we include them in the list of output indices (`outputPositions`)
@@ -148,13 +167,15 @@ structure ScheduleEnv where
   /-- When true, each hypothesis produces all available outputs at once -/
   multiOutput : Bool := false
 
-  /-- Variables that may be *produced* from an equality premise via a delegated
-      `ArbitrarySizedSuchThat`/`EnumSizedSuchThat` instance, even though they
-      appear underneath a function application. Populated (in `MetaM`) by probing
-      for such an instance per equality premise; see `computeDelegableVars`. When
-      empty (the default, and the case whenever no instance is in scope), the
-      scheduler behaves exactly as before. -/
-  delegableVars : List Name := []
+  /-- Per-premise map of variables that may be *produced* from an equality
+      premise via a delegated `ArbitrarySizedSuchThat`/`EnumSizedSuchThat`
+      instance, even though they appear underneath a function application.
+      Populated (in `MetaM`) by probing for such an instance per equality
+      premise; see `computeDelegableVars`. Keyed per premise because the same
+      variable can be delegable via one equality yet a plain input to another.
+      When every entry is empty (the default, and the case whenever no instance
+      is in scope), the scheduler behaves exactly as before. -/
+  delegableMap : DelegableMap := []
 
   /-- Sibling specs in a mutual derivation block.
       Each entry is (inductiveName, outputIndices, auxFnName, siblingDeriveSort).
@@ -403,7 +424,10 @@ private partial def tyCtorConstrainsVariable (ctrExpr : ConstructorExpr) : Bool 
   | .CSort _ => false
   | .Hole => false
 
-private def constructHypothesis (typeVars : List Name) (delegableVars : List Name) (hyp : HypothesisExpr × List (List Name)) : HypothesisExpr × List (List Name) × List Name :=
+private def constructHypothesis (typeVars : List Name) (delegableMap : DelegableMap) (hyp : HypothesisExpr × List (List Name)) : HypothesisExpr × List (List Name) × List Name :=
+  -- Only the variables delegable *via this premise* may be produced from it; a
+  -- variable delegable via a different equality is a plain input here.
+  let delegableVars := delegableMap.varsFor hyp.fst
   let repeatedNames := collectRepeatedNames hyp.snd
   let hypIndices := List.zip hyp.fst.snd hyp.snd
   -- An argument that contains a function application normally forces its
@@ -1072,7 +1096,7 @@ private def preScheduleStepToScheduleStep (ctorName : Name) (preStep : PreSchedu
       Source.NonRec innerHyp;
     ScheduleStep.Check src polarity))
   | .Produce outs hyp =>
-    let (newMatches, hyp', newOutputs) ← handleConstrainedOutputs hyp outs env.delegableVars
+    let (newMatches, hyp', newOutputs) ← handleConstrainedOutputs hyp outs (env.delegableMap.varsFor hyp)
     let typedOutputs ← newOutputs.mapM
       (fun v =>
         match v with
@@ -1085,7 +1109,7 @@ private def preScheduleStepToScheduleStep (ctorName : Name) (preStep : PreSchedu
     let typedVars := env.vars.filterMap fun ⟨v, t⟩ => if t.isSort then some v else none
     let (_, hypArgs) := hyp'
     let constrainingRelation ←
-      if ← isRecCall (outs.map (fun x => x.var)) typedVars hyp env.recCall env.delegableVars then
+      if ← isRecCall (outs.map (fun x => x.var)) typedVars hyp env.recCall env.delegableMap then
         let inputArgs := filterWithIndex (fun i _ => i ∉ (Prod.snd env.recCall)) hypArgs
         pure (Source.Rec env.recFnName inputArgs)
       else
@@ -1154,7 +1178,7 @@ private def hypothesisToVarExpr (hyp : HypothesisExpr) : List (SearchTree.VarExp
       | _ => SearchTree.VarExpr.Ctor vars
 
 private def possiblePreSchedulesWithAdvancedPruning (vars : List TypedVar) (hypotheses : List HypothesisExpr) (deriveSort : DeriveSort)
-  (recCall : Name × List Nat) (fixedVars : List Name) (recFnName : Name := defaultRecFnName deriveSort) (multiOutput : Bool := false) (delegableVars : List Name := []) : LazyList ((List (PreScheduleStep HypothesisExpr TypedVar))) × ScheduleEnv :=
+  (recCall : Name × List Nat) (fixedVars : List Name) (recFnName : Name := defaultRecFnName deriveSort) (multiOutput : Bool := false) (delegableMap : DelegableMap := []) : LazyList ((List (PreScheduleStep HypothesisExpr TypedVar))) × ScheduleEnv :=
   let typeVars := vars.filterMap fun ⟨v,t⟩ => if t.isSort then some v else none
   let sortedHypotheses := mkSortedHypothesesVariablesMap hypotheses
   let varNames := vars.map (fun x => x.var)
@@ -1162,7 +1186,7 @@ private def possiblePreSchedulesWithAdvancedPruning (vars : List TypedVar) (hypo
   let scheduleEnv : ScheduleEnv := {
     vars := vars, sortedHypotheses := sortedHypotheses, deriveSort := deriveSort,
     prodSort := prodSort, recCall := recCall, fixed := fixedVars, recFnName := recFnName,
-    multiOutput := multiOutput, delegableVars := delegableVars, depMemo := none }
+    multiOutput := multiOutput, delegableMap := delegableMap, depMemo := none }
   let remainingVars := List.filter (fun v => not <| fixedVars.contains v) varNames
   let (newCheckedIdxs, newCheckedHyps) := List.unzip <| (collectCheckedHypotheses scheduleEnv fixedVars [])
   let remainingSortedHypotheses := filterWithIndex (fun i _ => i ∉ newCheckedIdxs) sortedHypotheses
@@ -1172,7 +1196,7 @@ private def possiblePreSchedulesWithAdvancedPruning (vars : List TypedVar) (hypo
                              |>.map (fun scc =>
                                 let hypVarMap := scc
                                 SearchTree.enumDependencySatisfyingOrderingsWithAdvancedPruning hypVarMap (fun (h,_) => hypothesisToVarExpr h)
-                                  |>.mapLazyList (List.map <| constructHypothesis typeVars delegableVars))
+                                  |>.mapLazyList (List.map <| constructHypothesis typeVars delegableMap))
   let firstChecks := PreScheduleStep.Checks newCheckedHyps.reverse
   let lazyPreSchedules : LazyList (List (PreScheduleStep HypothesisExpr Name)) := enumSchedulesChunkedWithPruning remainingVars typeVars connectedHypotheses fixedVars sortedHypotheses.length multiOutput
   let nameTypeMap := List.foldl (fun m ⟨name,ty⟩ => NameMap.insert m name ty) ∅ vars
@@ -1190,8 +1214,8 @@ private def possiblePreSchedulesWithAdvancedPruning (vars : List TypedVar) (hypo
     - `recCall`: A pair contianing the name of the inductive relation and a list of indices for output arguments
     - `fixedVars`: A list of fixed variables (i.e. inputs to the inductive relation) -/
 def possibleSchedules (ctorName : Name) (vars : List TypedVar) (hypotheses : List HypothesisExpr) (deriveSort : DeriveSort)
-  (recCall : Name × List Nat) (fixedVars : List Name) (recFnName : Name := defaultRecFnName deriveSort) (multiOutput : Bool := false) (delegableVars : List Name := []) : LazyList (MetaM (List ScheduleStep × Nat)) := do
-  let (typedPreSchedules, scheduleEnv) := possiblePreSchedulesWithAdvancedPruning vars hypotheses deriveSort recCall fixedVars recFnName multiOutput delegableVars
+  (recCall : Name × List Nat) (fixedVars : List Name) (recFnName : Name := defaultRecFnName deriveSort) (multiOutput : Bool := false) (delegableMap : DelegableMap := []) : LazyList (MetaM (List ScheduleStep × Nat)) := do
+  let (typedPreSchedules, scheduleEnv) := possiblePreSchedulesWithAdvancedPruning vars hypotheses deriveSort recCall fixedVars recFnName multiOutput delegableMap
   let prunedImprovingTypedPreSchedules := filterWorse typedPreSchedules preScheduleStepsScore
   let lazySchedules := prunedImprovingTypedPreSchedules.mapLazyList
     ((ReaderT.run . scheduleEnv) ∘ (fun (s,c) => return (← s.flatMapM <| preScheduleStepToScheduleStep ctorName, c)))
@@ -1233,7 +1257,7 @@ partial def searchBestScheduleM (ctorName : Name) (vars : List TypedVar)
     (bundle : Scoring.ScorerBundle) (memo : IO.Ref (Std.HashMap SpecKey MemoEntry))
     (key : SpecKey) (limit : Nat := 200000)
     (deriveDep : SpecKey → MetaM Unit := fun _ => pure ())
-    (delegableVars : List Name := []) : MetaM (Option (List ScheduleStep × Score × Nat)) := do
+    (delegableMap : DelegableMap := []) : MetaM (Option (List ScheduleStep × Score × Nat)) := do
   -- 1. Build the ScheduleEnv — a reader-context carrying all the static parameters
   --    that schedule-step construction needs (variable types, hypothesis ordering,
   --    fixed/output classification, recursion info).
@@ -1244,7 +1268,7 @@ partial def searchBestScheduleM (ctorName : Name) (vars : List TypedVar)
   let scheduleEnv : ScheduleEnv := {
     vars := vars, sortedHypotheses := sortedHypotheses, deriveSort := deriveSort,
     prodSort := prodSort, recCall := recCall, fixed := fixedVars, recFnName := recFnName,
-    multiOutput := multiOutput, delegableVars := delegableVars, depMemo := some memo }
+    multiOutput := multiOutput, delegableMap := delegableMap, depMemo := some memo }
 
   -- 2. Collect initially-checked hypotheses (same as existing)
   let (newCheckedIdxs, newCheckedHyps) := List.unzip <| (collectCheckedHypotheses scheduleEnv fixedVars [])
@@ -1319,7 +1343,7 @@ partial def searchBestScheduleM (ctorName : Name) (vars : List TypedVar)
   -- mode choices and return the resulting pre-schedule steps + final env
   let processOrdering := fun (ordering : List (HypothesisExpr × List (List Name)))
       (env : List Name) (envSet : Std.HashSet Name) => do
-    let constructedHyps := ordering.map (constructHypothesis typeVars delegableVars)
+    let constructedHyps := ordering.map (constructHypothesis typeVars delegableMap)
     let mut currentEnv := env
     let mut currentEnvSet := envSet
     let mut sched : List (PreScheduleStep HypothesisExpr Name) := []
