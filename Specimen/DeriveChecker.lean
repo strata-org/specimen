@@ -171,7 +171,7 @@ def deriveScheduledChecker' (_args : Array Expr)
           -- (where each term represents a typeclass instance)
           let (subChecker, instances) ← StateT.run (s := #[]) (do
             let recType := unifyState.outputTypes.headD (mkConst ``Bool)
-            let mexp ← MExp.scheduleToMExp schedule (.MId `size) (.MId `initSize) recType (fuelPrimeName := freshFuelPrimeName) (sizePrimeName := freshSizePrimeName)
+            let mexp ← MExp.scheduleToMExp schedule (.MId `size) (.MId `initSize) recType (fuelPrimeName := freshFuelPrimeName) (sizePrimeName := freshSizePrimeName) (targetInductive := inductiveName)
             MExp.mexpToTSyntax mexp (deriveSort := .Checker))
 
           requiredInstances := requiredInstances ++ instances

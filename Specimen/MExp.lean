@@ -193,10 +193,10 @@ partial def mexpToConstructorExpr (m : MExp) : Option ConstructorExpr :=
 
 /-- `MExp` representation of a recursive function call,
     where `f` is the function name, `fuelPrimeName` is the name for `fuel'`,
-    `sizePrimeName` is for `size'`, and `args` are the input arguments -/
-def recCall (f : Name) (fuelPrimeName : Name) (sizePrimeName : Name) (args : List ConstructorExpr) : MExp :=
+    `sizeExpr` is the size budget passed to the recursive call, and `args` are the input arguments -/
+def recCall (f : Name) (fuelPrimeName : Name) (sizeExpr : MExp) (args : List ConstructorExpr) : MExp :=
   .MApp .allowImplicit (.MId f) $
-    [.MId fuelPrimeName, .MId `initSize, .MId sizePrimeName] ++ (constructorExprToMExp .allExplicit <$> args)
+    [.MId fuelPrimeName, .MId `initSize, sizeExpr] ++ (constructorExprToMExp .allExplicit <$> args)
 
 /-- Converts a `HypothesisExpr` to an `MExp` -/
 def hypothesisExprToMExp (hypExpr : HypothesisExpr) : MExp :=
@@ -416,7 +416,7 @@ private def nameAndConstructorExprToTypedVar (v : Name × Option ConstructorExpr
       supplied to the generator/enumerator/checker we're deriving
 -/
 
-def scheduleStepToMExp (step : ScheduleStep) (defFuel : MExp) (k : MExp) (outputType : Expr) (fuelPrimeName : Name) (sizePrimeName : Name) : CompileScheduleM MExp :=
+def scheduleStepToMExp (step : ScheduleStep) (defFuel : MExp) (k : MExp) (outputType : Expr) (fuelPrimeName : Name) (sizeExpr : MExp) (targetInductive : Name) : CompileScheduleM MExp :=
   match step with
   | .Unconstrained v src prodSort => do
     let monadSort := prodSortToMonadSort prodSort
@@ -427,25 +427,29 @@ def scheduleStepToMExp (step : ScheduleStep) (defFuel : MExp) (k : MExp) (output
       let producer ← unconstrainedProducer prodSort ty
       pure $ .MBind monadSort producer [⟨v,tyExpr⟩] k
     | Source.Rec f args | Source.MutRec f args =>
-      pure $ .MBind monadSort (recCall f fuelPrimeName sizePrimeName args) [⟨v, outputType⟩] k
+      pure $ .MBind monadSort (recCall f fuelPrimeName sizeExpr args) [⟨v, outputType⟩] k
 
   | .SuchThat varsTys prod ps => do
     let monadSort := prodSortToOptionTMonadSort ps
     let typedVars := List.map (nameAndConstructorExprToTypedVar) varsTys
     match prod with
     | Source.NonRec hypExpr => do
-      let producer ← constrainedProducer ps varsTys (hypothesisExprToMExp hypExpr) defFuel
+      -- If the dep targets the same inductive, use split size; otherwise full budget
+      let fuel := if hypExpr.1 == targetInductive then sizeExpr else defFuel
+      let producer ← constrainedProducer ps varsTys (hypothesisExprToMExp hypExpr) fuel
       pure $ .MBind monadSort producer typedVars k
     | Source.Rec f args | Source.MutRec f args =>
-      pure $ .MBind monadSort (recCall f fuelPrimeName sizePrimeName args) typedVars k
+      pure $ .MBind monadSort (recCall f fuelPrimeName sizeExpr args) typedVars k
   | .Check src polarity =>
 
     let checker :=
       match src with
       | Source.NonRec hypExpr =>
-        decOptChecker (hypothesisExprToMExp hypExpr) defFuel
+        -- If the dep targets the same inductive, use split size; otherwise full budget
+        let fuel := if hypExpr.1 == targetInductive then sizeExpr else defFuel
+        decOptChecker (hypothesisExprToMExp hypExpr) fuel
       | Source.Rec f args | Source.MutRec f args =>
-        recCall f fuelPrimeName sizePrimeName args
+        recCall f fuelPrimeName sizeExpr args
 
     let checker :=
       if polarity then checker
@@ -459,9 +463,16 @@ def scheduleStepToMExp (step : ScheduleStep) (defFuel : MExp) (k : MExp) (output
     which acts as the conclusion of the schedule) to an `MExp`.
     - `mfuel` and `defFuel` are auxiliary `MExp`s representing the fuel
       for the function we are deriving (these correspond to `size` and `initSize`
-      in the QuickChick code for the derived functions) -/
-def scheduleToMExp (schedule : Schedule) (mfuel : MExp) (defFuel : MExp) (recType : Expr) (fuelPrimeName : Name := `fuel') (sizePrimeName : Name := `size') : CompileScheduleM MExp :=
+      in the QuickChick code for the derived functions)
+    - `targetInductive` is the inductive we're generating for (used to detect same-type deps) -/
+def scheduleToMExp (schedule : Schedule) (mfuel : MExp) (defFuel : MExp) (recType : Expr) (fuelPrimeName : Name := `fuel') (sizePrimeName : Name := `size') (targetInductive : Name := `_unknown) : CompileScheduleM MExp :=
   let (scheduleSteps, scheduleSort) := schedule
+  -- Compute the size expression: split budget across all size-consuming calls
+  -- (self-recursive, mutual, and non-recursive calls to the same inductive)
+  let numSizeCalls := Schedules.countSizeConsumingCalls targetInductive scheduleSteps
+  let sizeExpr : MExp :=
+    if numSizeCalls ≤ 1 then .MId sizePrimeName
+    else .MApp .allExplicit (.MConst ``Nat.div) [.MId sizePrimeName, .MLit (.natVal numSizeCalls)]
   -- Determine the *epilogue* of the schedule (i.e. what happens after we
   -- have finished executing all the `scheduleStep`s)
   let epilogue :=
@@ -486,5 +497,5 @@ def scheduleToMExp (schedule : Schedule) (mfuel : MExp) (defFuel : MExp) (recTyp
   -- Fold over the `scheduleSteps` and convert each of them to a functional `MExp`
   -- Note that the fold composes the `MExp`, and we use `foldr` since
   -- we want the `epilogue` to be the base-case of the fold
-  List.foldrM (fun step acc => scheduleStepToMExp step defFuel acc recType fuelPrimeName sizePrimeName)
+  List.foldrM (fun step acc => scheduleStepToMExp step defFuel acc recType fuelPrimeName sizeExpr targetInductive)
     epilogue scheduleSteps

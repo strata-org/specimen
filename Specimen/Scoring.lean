@@ -41,6 +41,103 @@ namespace Scoring
 open Lean Meta Schedules
 
 ----------------------------------------------
+-- Weight function type and registry
+----------------------------------------------
+
+/-- A weight function computes the runtime frequency weight for a constructor.
+    Arguments: (scoreBadness, isRec, size, numBase, numRec).
+    - scoreBadness: per-constructor quality from the active scorer (0.0 = best, 1.0 = worst)
+    - isRec: whether this constructor is recursive
+    - size: current generation size parameter
+    - numBase/numRec: counts of base vs recursive constructors for this inductive -/
+abbrev CtorWeightFn := Float → Bool → Nat → Nat → Nat → Nat
+
+/-- Ignores score; base=1, recursive=numBase*size/numRec. -/
+def defaultCtorWeight (_scoreBadness : Float) (isRec : Bool) (size : Nat) (numBase numRec : Nat) : Nat :=
+  if isRec then
+    if size == 0 then 1
+    else max 1 (numBase * size / max 1 numRec)
+  else 1
+
+/-- QuickChick-style weight: base=1, recursive=size+1. Ignores score. -/
+def quickchickCtorWeight (_scoreBadness : Float) (isRec : Bool) (size : Nat) (_numBase _numRec : Nat) : Nat :=
+  if isRec then size + 1 else 1
+
+/-- Flat weight: every constructor gets weight 1. Ignores everything. -/
+def flatCtorWeight (_scoreBadness : Float) (_isRec : Bool) (_size : Nat) (_numBase _numRec : Nat) : Nat := 1
+
+/-- Score-aware weight: boosts good constructors (low badness) and deprioritizes
+    recursive ones. Quality maps to 1–4, recursive ctors get an additional size-based
+    penalty so base cases are preferred at small sizes. -/
+def scoreAwareCtorWeight (scoreBadness : Float) (isRec : Bool) (size : Nat) (numBase numRec : Nat) : Nat :=
+  let quality := if scoreBadness < 0.25 then 4
+    else if scoreBadness < 0.5 then 3
+    else if scoreBadness < 0.75 then 2
+    else 1
+  if isRec then
+    if size == 0 then 1
+    else max 1 (numBase * size / max 1 numRec) * quality
+  else quality
+
+/-- Balanced weight for inductives with many recursive constructors.
+    Controls aggregate P(recursive) ≈ size / (size + 4*numBase) by distributing
+    size across all recursive ctors (so total rec weight ≈ size * quality).
+    Base ctors get a 4x boost so they stay relevant even with many rec branches. -/
+def balancedCtorWeight (scoreBadness : Float) (isRec : Bool) (size : Nat) (_numBase numRec : Nat) : Nat :=
+  let quality := if scoreBadness < 0.25 then 4
+    else if scoreBadness < 0.5 then 3
+    else if scoreBadness < 0.75 then 2
+    else 1
+  if isRec then
+    if size == 0 then 0
+    else max 1 (size / max 1 numRec) * quality
+  else quality * 4
+
+/-- Quality-only weight: no structural bias, budget splitting handles termination. -/
+def qualityCtorWeight (scoreBadness : Float) (_isRec : Bool) (_size : Nat) (_numBase _numRec : Nat) : Nat :=
+  if scoreBadness < 0.25 then 4
+  else if scoreBadness < 0.5 then 3
+  else if scoreBadness < 0.75 then 2
+  else 1
+
+structure WeightFnEntry where
+  name : Name
+  fn : CtorWeightFn
+  leanName : Name
+
+initialize weightFnRegistry : IO.Ref (Array WeightFnEntry) ← IO.mkRef #[]
+
+def registerWeightFn (name : Name) (fn : CtorWeightFn) (leanName : Name) : IO Unit :=
+  weightFnRegistry.modify (·.push { name, fn, leanName })
+
+initialize registerWeightFn `Scoring.defaultCtorWeight defaultCtorWeight ``defaultCtorWeight
+initialize registerWeightFn `Scoring.quickchickCtorWeight quickchickCtorWeight ``quickchickCtorWeight
+initialize registerWeightFn `Scoring.flatCtorWeight flatCtorWeight ``flatCtorWeight
+initialize registerWeightFn `Scoring.scoreAwareCtorWeight scoreAwareCtorWeight ``scoreAwareCtorWeight
+initialize registerWeightFn `Scoring.balancedCtorWeight balancedCtorWeight ``balancedCtorWeight
+initialize registerWeightFn `Scoring.qualityCtorWeight qualityCtorWeight ``qualityCtorWeight
+
+register_option specimen.weightFn : String := {
+  defValue := "Scoring.balancedCtorWeight"
+  descr := "The weight function used for constructor frequency in derived generators."
+}
+
+/-- Get the active weight function name from options. -/
+def getActiveWeightFnName [Monad m] [MonadOptions m] : m Name := do
+  let s : String := Lean.Option.get (← getOptions) specimen.weightFn
+  return s.toName
+
+/-- Resolve the active weight function entry. -/
+def getActiveWeightFn : CoreM WeightFnEntry := do
+  let name ← getActiveWeightFnName
+  let entries ← weightFnRegistry.get
+  match entries.find? (·.name == name) with
+  | some entry => return entry
+  | none => match entries[0]? with
+    | some entry => return entry
+    | none => return { name := `Scoring.balancedCtorWeight, fn := balancedCtorWeight, leanName := ``balancedCtorWeight }
+
+----------------------------------------------
 -- Core typeclass
 ----------------------------------------------
 
@@ -72,7 +169,7 @@ class Scorable (S : Type) where
     - The dependency memo (for looking up sub-relation scores)
     - The set of input variables (fixed at schedule start, NOT generated)
     - The step itself -/
-abbrev StepScorer (S : Type) := SpecKey → Std.HashMap SpecKey MemoEntry → Std.HashSet Name → ScheduleStep → S
+abbrev StepScorer (S : Type) := SpecKey → Std.HashMap SpecKey MemoEntry → Std.HashSet Name → ScheduleStep → MetaM S
 
 /-- Combines a list of step scores into a schedule-level score. -/
 abbrev ScheduleScorer (S : Type) := List S → S
@@ -94,7 +191,7 @@ abbrev InductiveAggregator (S : Type) := List S → S
 ----------------------------------------------
 
 /-- A resolved step scorer that produces type-erased scores. -/
-abbrev ResolvedStepScorer := SpecKey → Std.HashMap SpecKey MemoEntry → Std.HashSet Name → ScheduleStep → Score
+abbrev ResolvedStepScorer := SpecKey → Std.HashMap SpecKey MemoEntry → Std.HashSet Name → ScheduleStep → MetaM Score
 
 /-- A resolved schedule scorer. -/
 abbrev ResolvedScheduleScorer := List Score → Score
@@ -104,6 +201,9 @@ abbrev ResolvedLeafAggregator := List (Name × Score) → Score
 
 /-- A resolved inductive aggregator. -/
 abbrev ResolvedInductiveAggregator := List Score → Score
+
+/-- A resolved whole-schedule scorer that scores an entire schedule at once (for state-tracking scorers). -/
+abbrev ResolvedWholeScheduleScorer := SpecKey → Std.HashMap SpecKey MemoEntry → Std.HashSet Name → List ScheduleStep → MetaM Score
 
 ----------------------------------------------
 -- Default score type
@@ -162,7 +262,7 @@ instance : Inhabited Score where default := Score.wrap ({} : DefaultScore)
 
 /-- Wrap a typed scorer into a ResolvedStepScorer. -/
 def wrapStepScorer [Inhabited S] [TypeName S] [Repr S] (f : StepScorer S) : ResolvedStepScorer :=
-  fun key memo inputVars step => Score.wrap (f key memo inputVars step)
+  fun key memo inputVars step => return Score.wrap (← f key memo inputVars step)
 
 /-- Wrap a typed schedule scorer into a ResolvedScheduleScorer. -/
 def wrapScheduleScorer [Inhabited S] [TypeName S] [Repr S] (f : ScheduleScorer S) : ResolvedScheduleScorer :=
@@ -217,6 +317,10 @@ structure ScorerBundle where
   /-- Map score to [0,1] for HSL color display (0 = best, 1 = worst). -/
   scoreBadness : Score → Float
   pruneStrategy : PruneStrategy := .usePrimary
+  /-- Optional whole-schedule scorer. When present, `searchBestScheduleM` uses
+      this instead of `stepScorer` + `scheduleScorer`. Allows tracking state across
+      steps (e.g., variable source quality). -/
+  wholeScheduleScorer : Option ResolvedWholeScheduleScorer := none
 
 /-- Build a complete ScorerBundle from typed scorers. -/
 def mkScorerBundle [Inhabited S] [TypeName S] [Repr S] [Scorable S]
@@ -242,7 +346,7 @@ def mkScorerBundle [Inhabited S] [TypeName S] [Repr S] [Scorable S]
 instance : Inhabited ScorerBundle where
   default := {
     scoreTypeName := `Scoring.DefaultScore
-    stepScorer := fun _ _ _ => default
+    stepScorer := fun _ _ _ _ => return default
     scheduleScorer := fun _ => default
     leafAggregator := fun _ => default
     inductiveAggregator := fun _ => default
@@ -302,7 +406,7 @@ def getActiveScorerBundle : MetaM ScorerBundle := do
 -- Built-in: default strategy (sum of best)
 ----------------------------------------------
 
-def defaultStepScorer : StepScorer DefaultScore := fun _key memo _inputVars step =>
+def defaultStepScorer : StepScorer DefaultScore := fun _key memo _inputVars step => do
   let baseScore : DefaultScore := match step with
     | .Check .. => { checks := 1, length := 1 }
     | .Unconstrained .. => { length := 1, unconstrained := 1 }
@@ -321,7 +425,7 @@ def defaultStepScorer : StepScorer DefaultScore := fun _key memo _inputVars step
             unconstrained := acc.unconstrained + ds.unconstrained }
         | _ => acc
       else acc) {}
-  Scorable.combine baseScore depCost
+  return Scorable.combine baseScore depCost
 
 def defaultScheduleScorer : ScheduleScorer DefaultScore := fun stepScores =>
   stepScores.foldl Scorable.combine Scorable.empty
@@ -373,8 +477,8 @@ instance : Scorable WorstLeafScore where
       let uncRatio := Float.ofNat s.unconstrained / Float.ofNat s.length
       min 1.0 (checkRatio * 2.0 + uncRatio * 0.5)
 
-def worstLeafStepScorer : StepScorer WorstLeafScore := fun _key _memo _inputVars step =>
-  match step with
+def worstLeafStepScorer : StepScorer WorstLeafScore := fun _key _memo _inputVars step => do
+  return match step with
   | .Check .. => { checks := 1, length := 1 }
   | .Unconstrained .. => { length := 1, unconstrained := 1 }
   | _ => { length := 1 }
@@ -473,9 +577,9 @@ private def countGeneratedVarDeps (inputVars : Std.HashSet Name) (src : Source) 
     - Match → Backtracking, 0 deps
     - SuchThat → dep's density from memo, #generated-var deps
     varDeps counts source args that were generated (not original inputs). -/
-def densityStepScorer : StepScorer DensityScore := fun key memo inputVars step =>
+def densityStepScorer : StepScorer DensityScore := fun key memo inputVars step => do
   let isChecker := key.deriveSort == .Checker || key.deriveSort == .Enumerator
-  match step with
+  return match step with
   | .Unconstrained .. => { density := .Total, varDeps := 0, forChecker := isChecker }
   | .Check src _ => { density := .Checking, varDeps := countGeneratedVarDeps inputVars src, forChecker := isChecker }
   | .Match .. => { density := .Backtracking, varDeps := 0, forChecker := isChecker }
@@ -543,8 +647,8 @@ instance : Scorable UniformDensityScore where
     let depPenalty := min 0.2 (s.varDeps.toFloat * 0.05)
     min 1.0 (level + depPenalty)
 
-def uniformDensityStepScorer : StepScorer UniformDensityScore := fun _key memo inputVars step =>
-  match step with
+def uniformDensityStepScorer : StepScorer UniformDensityScore := fun _key memo inputVars step => do
+  return match step with
   | .Unconstrained .. => { density := .Total, varDeps := 0 }
   | .Check src _ => { density := .Checking, varDeps := countGeneratedVarDeps inputVars src }
   | .Match .. => { density := .Backtracking, varDeps := 0 }
@@ -577,5 +681,487 @@ def uniformDensityInductiveAggregator : InductiveAggregator UniformDensityScore 
 
 initialize registerScoringBundle (mkScorerBundle `Scoring.UniformDensityScore
   uniformDensityStepScorer uniformDensityScheduleScorer uniformDensityLeafAggregator uniformDensityInductiveAggregator)
+
+----------------------------------------------
+-- Built-in: graded uniform density (two-axis check severity)
+----------------------------------------------
+
+inductive CheckSpeed
+  | NotACheck
+  | Decidable
+  | Moderate
+  | Expensive
+  | Recursive
+  deriving Repr, BEq, Inhabited
+
+namespace CheckSpeed
+
+def toNat : CheckSpeed → Nat
+  | .NotACheck => 0
+  | .Decidable => 1
+  | .Moderate => 2
+  | .Expensive => 3
+  | .Recursive => 4
+
+instance : Ord CheckSpeed where
+  compare a b := compare a.toNat b.toNat
+
+def max (a b : CheckSpeed) : CheckSpeed := if a.toNat ≥ b.toNat then a else b
+
+end CheckSpeed
+
+inductive PassLikelihood
+  | Certain
+  | Likely
+  | Moderate
+  | Unlikely
+  | Desperate
+  deriving Repr, BEq, Inhabited
+
+namespace PassLikelihood
+
+def toNat : PassLikelihood → Nat
+  | .Certain => 0
+  | .Likely => 1
+  | .Moderate => 2
+  | .Unlikely => 3
+  | .Desperate => 4
+
+instance : Ord PassLikelihood where
+  compare a b := compare a.toNat b.toNat
+
+def max (a b : PassLikelihood) : PassLikelihood := if a.toNat ≥ b.toNat then a else b
+
+end PassLikelihood
+
+structure GradedUniformDensityScore where
+  density        : Density := .Total
+  checkSpeed     : CheckSpeed := .NotACheck
+  passLikelihood : PassLikelihood := .Certain
+  varDeps        : Nat := 0
+  deriving Repr, BEq, Inhabited
+
+deriving instance TypeName for GradedUniformDensityScore
+
+instance : Ord GradedUniformDensityScore where
+  compare a b :=
+    match compare a.density.toNat b.density.toNat with
+    | .eq => match compare a.checkSpeed.toNat b.checkSpeed.toNat with
+      | .eq => match compare a.passLikelihood.toNat b.passLikelihood.toNat with
+        | .eq => compare a.varDeps b.varDeps
+        | r => r
+      | r => r
+    | r => r
+
+instance : LT GradedUniformDensityScore := ltOfOrd
+
+instance : Scorable GradedUniformDensityScore where
+  empty := {}
+  combine a b :=
+    { density := Density.max a.density b.density
+      checkSpeed := CheckSpeed.max a.checkSpeed b.checkSpeed
+      passLikelihood := PassLikelihood.max a.passLikelihood b.passLikelihood
+      varDeps := a.varDeps + b.varDeps }
+  isBetter a b := a < b
+  bestOf scores := scores.foldl (fun acc s => if s < acc then s else acc) (scores.headD {})
+  uncoveredPenalty := { density := .Partial, varDeps := 0 }
+  worst := { density := .Checking, checkSpeed := .Recursive, passLikelihood := .Desperate, varDeps := 1000 }
+  badness s :=
+    let varDepPenalty := min 0.05 (s.varDeps.toFloat * 0.01)
+    if s.density != .Checking then
+      let level := s.density.toNat.toFloat / 4.0
+      min 1.0 (level + varDepPenalty)
+    else
+      let speedVal := match s.checkSpeed with
+        | .NotACheck => 0.0 | .Decidable => 0.0 | .Moderate => 0.33
+        | .Expensive => 0.66 | .Recursive => 1.0
+      let likelVal := match s.passLikelihood with
+        | .Certain => 0.0 | .Likely => 0.0 | .Moderate => 0.33
+        | .Unlikely => 0.66 | .Desperate => 1.0
+      let severity := max speedVal likelVal * 0.7 + min speedVal likelVal * 0.3
+      min 1.0 (0.75 + severity * 0.25 + varDepPenalty)
+
+private def estimateTypeCtorCount (indName : Name) : MetaM (Option Nat) := do
+  let env ← getEnv
+  match env.find? indName with
+  | some (.inductInfo val) =>
+    let isRecursive ← val.ctors.anyM fun c => do
+      let cinfo ← getConstInfo c
+      return cinfo.type.find? (fun e => e == .const indName []) |>.isSome
+    if isRecursive then return none
+    else return some val.ctors.length
+  | _ => return none
+
+private def extractEqTypeName : List ConstructorExpr → Option Name
+  | [.Ctor n _, _, _] | [.TyCtor n _, _, _] => some n
+  | _ => none
+
+private def classifyCheckSpeed (memo : Std.HashMap SpecKey MemoEntry) (key : SpecKey)
+    (src : Source) (varDeps : Nat) : CheckSpeed :=
+  match src with
+  | .Rec .. | .MutRec .. => .Recursive
+  | .NonRec (indName, _args) =>
+    let depKey : SpecKey := { inductiveName := indName, outputIndices := [], deriveSort := .Checker }
+    let depDensity := if depKey == key then Density.Checking
+      else match memo[depKey]? with
+        | some (.done depSched) => (Score.unwrap GradedUniformDensityScore depSched.score).density
+        | _ => .Partial
+    let isChecker := key.deriveSort == .Checker || key.deriveSort == .Enumerator
+    if isChecker then
+      match varDeps with
+      | 0 => match depDensity with
+        | .Total | .Partial => .Decidable
+        | .Backtracking => .Moderate
+        | .Checking => .Expensive
+      | 1 => match depDensity with
+        | .Total | .Partial => .Moderate
+        | _ => .Expensive
+      | 2 | 3 => .Expensive
+      | _ => .Recursive
+    else
+      match depDensity with
+      | .Total | .Partial => .Decidable
+      | .Backtracking => .Moderate
+      | .Checking => .Expensive
+
+private def classifyPassLikelihood (inputVars : Std.HashSet Name) (key : SpecKey)
+    (src : Source) (polarity : Bool) (varDeps : Nat) : MetaM PassLikelihood := do
+  if varDeps == 0 then return .Certain
+  let isChecker := key.deriveSort == .Checker || key.deriveSort == .Enumerator
+  match src with
+  | .Rec .. | .MutRec .. =>
+    if isChecker then return .Moderate
+    else return .Desperate
+  | .NonRec (indName, args) =>
+    let arity := args.length
+    if indName == ``Eq then
+      let eqArgs := args.flatMap varsInConstructorExpr
+      let genVars := eqArgs.filter (!inputVars.contains ·)
+      if genVars.isEmpty then return .Certain
+      let ctorCount ← match extractEqTypeName args with
+        | some typeName => estimateTypeCtorCount typeName
+        | none => pure none
+      if polarity then
+        match ctorCount with
+        | some n => if n ≤ 2 then return .Unlikely else return .Desperate
+        | none => return .Desperate
+      else
+        match ctorCount with
+        | some n => if n ≤ 2 then return .Moderate else return .Likely
+        | none => return .Likely
+    if isChecker then
+      return .Certain
+    else
+      if !polarity && varDeps ≤ 1 then return .Likely
+      if varDeps == 1 && arity ≤ 3 then return .Likely
+      if varDeps ≤ 3 then return .Moderate
+      return .Unlikely
+
+def gradedStepScorer : StepScorer GradedUniformDensityScore := fun key memo inputVars step => do
+  match step with
+  | .Unconstrained .. => return { density := .Total }
+  | .Match .. => return { density := .Backtracking }
+  | .Check src polarity =>
+    let varDeps := countGeneratedVarDeps inputVars src
+    let speed := classifyCheckSpeed memo key src varDeps
+    let likelihood ← classifyPassLikelihood inputVars key src polarity varDeps
+    return { density := .Checking, checkSpeed := speed, passLikelihood := likelihood, varDeps := varDeps }
+  | .SuchThat outputs src prodSort =>
+    let outputNames := Std.HashSet.ofList (outputs.map (·.1))
+    let varDeps := countGeneratedVarDeps (inputVars.union outputNames) src
+    let depDensity : Density := match src with
+      | .Rec .. => .Partial
+      | .MutRec .. => .Partial
+      | .NonRec (indName, args) =>
+        let outputIdxs := outputs.filterMap fun (n, _) =>
+          args.findIdx? fun a => match a with | .Unknown v => v == n | _ => false
+        let depDeriveSort := match prodSort with
+          | .Enumerator => DeriveSort.Enumerator
+          | .Generator => DeriveSort.Generator
+        let depKey : SpecKey := { inductiveName := indName, outputIndices := outputIdxs, deriveSort := depDeriveSort }
+        if depKey == key then .Partial
+        else match memo[depKey]? with
+          | some (.done depSched) => (Score.unwrap GradedUniformDensityScore depSched.score).density
+          | _ => .Partial
+    return { density := depDensity, varDeps := varDeps }
+
+def gradedScheduleScorer : ScheduleScorer GradedUniformDensityScore := fun stepScores =>
+  stepScores.foldl Scorable.combine Scorable.empty
+
+def gradedLeafAggregator : LeafAggregator GradedUniformDensityScore := fun ctors =>
+  match ctors with
+  | [] => Scorable.uncoveredPenalty
+  | _ => Scorable.bestOf (ctors.map Prod.snd)
+
+def gradedInductiveAggregator : InductiveAggregator GradedUniformDensityScore := fun leafScores =>
+  leafScores.foldl Scorable.combine Scorable.empty
+
+initialize registerScoringBundle (mkScorerBundle `Scoring.GradedUniformDensityScore
+  gradedStepScorer gradedScheduleScorer gradedLeafAggregator gradedInductiveAggregator)
+
+----------------------------------------------
+-- BoundedGradedScore: refines GradedUniformDensityScore
+-- with a Boundedness field that distinguishes finite from
+-- potentially-infinite enumeration in SuchThat steps.
+----------------------------------------------
+
+inductive Boundedness
+  | Finite      -- dep has only base cases (deterministic / bounded enumeration)
+  | Bounded     -- dep has rec cases but is structurally decreasing on known input
+  | Unbounded   -- dep has rec cases on unknown/generated input (potentially infinite)
+  deriving Repr, BEq, Inhabited
+
+namespace Boundedness
+def toNat : Boundedness → Nat
+  | .Finite => 0
+  | .Bounded => 1
+  | .Unbounded => 2
+
+def max (a b : Boundedness) : Boundedness :=
+  if a.toNat ≥ b.toNat then a else b
+end Boundedness
+
+structure BoundedGradedScore where
+  density        : Density := .Total
+  boundedness    : Boundedness := .Finite
+  checkSpeed     : CheckSpeed := .NotACheck
+  passLikelihood : PassLikelihood := .Certain
+  varDeps        : Nat := 0
+  deriving Repr, BEq, Inhabited
+
+deriving instance TypeName for BoundedGradedScore
+
+instance : Ord BoundedGradedScore where
+  compare a b :=
+    match compare a.density.toNat b.density.toNat with
+    | .eq => match compare a.boundedness.toNat b.boundedness.toNat with
+      | .eq => match compare a.checkSpeed.toNat b.checkSpeed.toNat with
+        | .eq => match compare a.passLikelihood.toNat b.passLikelihood.toNat with
+          | .eq => compare a.varDeps b.varDeps
+          | r => r
+        | r => r
+      | r => r
+    | r => r
+
+instance : LT BoundedGradedScore := ltOfOrd
+
+instance : Scorable BoundedGradedScore where
+  empty := {}
+  combine a b :=
+    { density := Density.max a.density b.density
+      boundedness := Boundedness.max a.boundedness b.boundedness
+      checkSpeed := CheckSpeed.max a.checkSpeed b.checkSpeed
+      passLikelihood := PassLikelihood.max a.passLikelihood b.passLikelihood
+      varDeps := a.varDeps + b.varDeps }
+  isBetter a b := a < b
+  bestOf scores := scores.foldl (fun acc s => if s < acc then s else acc) (scores.headD {})
+  uncoveredPenalty := { density := .Checking, boundedness := .Unbounded,
+                        checkSpeed := .Recursive, passLikelihood := .Desperate, varDeps := 1000 }
+  worst := { density := .Checking, boundedness := .Unbounded,
+             checkSpeed := .Recursive, passLikelihood := .Desperate, varDeps := 1000 }
+  badness s :=
+    let d := s.density.toNat.toFloat / 3.0
+    let b := s.boundedness.toNat.toFloat / 2.0
+    let c := s.checkSpeed.toNat.toFloat / 4.0
+    let p := s.passLikelihood.toNat.toFloat / 3.0
+    (d * 0.4 + b * 0.2 + c * 0.2 + p * 0.2)
+
+/-- Extract the `Source.Rec` input args from a schedule's steps (the arguments
+    passed to the recursive call). Returns `none` if no rec call is found. -/
+private def findRecCallInputArgs (steps : List ScheduleStep) : Option (List ConstructorExpr) :=
+  steps.findSome? fun step => match step with
+    | .SuchThat _ (.Rec _ args) _ => some args
+    | .Check (.Rec _ args) _ => some args
+    | .Unconstrained _ (.Rec _ args) _ => some args
+    | _ => none
+
+/-- Classify whether a dep's recursion is structurally decreasing on an input.
+    Inspects the dep's `recSchedules`: if the recursive call passes a different
+    variable at an input position (introduced by a Match step = subterm), it's bounded.
+    If all inputs are unchanged, it's unbounded. -/
+private def classifyBoundednessFromSchedule (depSched : InductiveSchedule) : Boundedness :=
+  if depSched.recSchedules.isEmpty then .Finite
+  else
+    let outputIdxSet := Std.HashSet.ofList depSched.key.outputIndices
+    let inputNames := (List.range depSched.argNames.length).zip depSched.argNames |>.filterMap fun (i, name) =>
+      if outputIdxSet.contains i then none else some name
+    if inputNames.isEmpty then .Unbounded
+    else
+      let allRecDecrease := depSched.recSchedules.all fun (_, (steps, _)) =>
+        match findRecCallInputArgs steps with
+        | none => false
+        | some recArgs =>
+          inputNames.zip recArgs |>.any fun (origName, recArg) =>
+            match recArg with
+            | .Unknown name => name != origName
+            | _ => true
+      if allRecDecrease then .Bounded else .Unbounded
+
+def boundedStepScorer : StepScorer BoundedGradedScore := fun key memo inputVars step => do
+  match step with
+  | .Unconstrained .. => return { density := .Total }
+  | .Match .. => return { density := .Backtracking }
+  | .Check src polarity =>
+    let varDeps := countGeneratedVarDeps inputVars src
+    let speed := classifyCheckSpeed memo key src varDeps
+    let likelihood ← classifyPassLikelihood inputVars key src polarity varDeps
+    return { density := .Checking, checkSpeed := speed, passLikelihood := likelihood, varDeps := varDeps }
+  | .SuchThat outputs src prodSort =>
+    let outputNames := Std.HashSet.ofList (outputs.map (·.1))
+    let varDeps := countGeneratedVarDeps (inputVars.union outputNames) src
+    let depDensity : Density := match src with
+      | .Rec .. => .Partial
+      | .MutRec .. => .Partial
+      | .NonRec (indName, args) =>
+        let outputIdxs := outputs.filterMap fun (n, _) =>
+          args.findIdx? fun a => match a with | .Unknown v => v == n | _ => false
+        let depDeriveSort := match prodSort with
+          | .Enumerator => DeriveSort.Enumerator
+          | .Generator => DeriveSort.Generator
+        let depKey : SpecKey := { inductiveName := indName, outputIndices := outputIdxs, deriveSort := depDeriveSort }
+        if depKey == key then .Partial
+        else match memo[depKey]? with
+          | some (.done depSched) => (Score.unwrap BoundedGradedScore depSched.score).density
+          | _ => .Partial
+    let boundedness := match src with
+      | .Rec .. | .MutRec .. => Boundedness.Unbounded
+      | .NonRec (indName, args) =>
+        let outputIdxs := outputs.filterMap fun (n, _) =>
+          args.findIdx? fun a => match a with | .Unknown v => v == n | _ => false
+        let depDeriveSort := match prodSort with
+          | .Enumerator => DeriveSort.Enumerator
+          | .Generator => DeriveSort.Generator
+        let depKey : SpecKey := { inductiveName := indName, outputIndices := outputIdxs, deriveSort := depDeriveSort }
+        if depKey == key then .Unbounded
+        else match memo[depKey]? with
+          | some (.done depSched) => classifyBoundednessFromSchedule depSched
+          | _ => .Bounded
+    return { density := depDensity, boundedness := boundedness, varDeps := varDeps }
+
+def boundedScheduleScorer : ScheduleScorer BoundedGradedScore := fun stepScores =>
+  stepScores.foldl Scorable.combine Scorable.empty
+
+def boundedLeafAggregator : LeafAggregator BoundedGradedScore := fun ctors =>
+  match ctors with
+  | [] => Scorable.uncoveredPenalty
+  | _ => Scorable.bestOf (ctors.map Prod.snd)
+
+def boundedInductiveAggregator : InductiveAggregator BoundedGradedScore := fun leafScores =>
+  leafScores.foldl Scorable.combine Scorable.empty
+
+initialize registerScoringBundle (mkScorerBundle `Scoring.BoundedGradedScore
+  boundedStepScorer boundedScheduleScorer boundedLeafAggregator boundedInductiveAggregator)
+
+
+----------------------------------------------
+-- Built-in: InputAwareGradedScore
+-- Like GradedUniformDensityScore but with leaf/inductive aggregation
+-- that penalizes checks whose generated variables overlap with inputs
+-- (i.e. "generate then verify against input" patterns).
+----------------------------------------------
+
+structure InputAwareGradedScore where
+  density        : Density := .Total
+  checkSpeed     : CheckSpeed := .NotACheck
+  passLikelihood : PassLikelihood := .Certain
+  varDeps        : Nat := 0
+  inputCheckDeps : Nat := 0
+  deriving Repr, BEq, Inhabited
+
+deriving instance TypeName for InputAwareGradedScore
+
+instance : Ord InputAwareGradedScore where
+  compare a b :=
+    match compare a.density.toNat b.density.toNat with
+    | .eq => match compare a.inputCheckDeps b.inputCheckDeps with
+      | .eq => match compare a.checkSpeed.toNat b.checkSpeed.toNat with
+        | .eq => match compare a.passLikelihood.toNat b.passLikelihood.toNat with
+          | .eq => compare a.varDeps b.varDeps
+          | r => r
+        | r => r
+      | r => r
+    | r => r
+
+instance : LT InputAwareGradedScore := ltOfOrd
+
+instance : Scorable InputAwareGradedScore where
+  empty := {}
+  combine a b :=
+    { density := Density.max a.density b.density
+      checkSpeed := CheckSpeed.max a.checkSpeed b.checkSpeed
+      passLikelihood := PassLikelihood.max a.passLikelihood b.passLikelihood
+      varDeps := a.varDeps + b.varDeps
+      inputCheckDeps := a.inputCheckDeps + b.inputCheckDeps }
+  isBetter a b := a < b
+  bestOf scores := scores.foldl (fun acc s => if s < acc then s else acc) (scores.headD {})
+  uncoveredPenalty := { density := .Partial, varDeps := 0 }
+  worst := { density := .Checking, checkSpeed := .Recursive, passLikelihood := .Desperate, varDeps := 1000, inputCheckDeps := 100 }
+  badness s :=
+    let varDepPenalty := min 0.05 (s.varDeps.toFloat * 0.01)
+    let inputPenalty := min 0.3 (s.inputCheckDeps.toFloat * 0.1)
+    if s.density != .Checking then
+      let level := s.density.toNat.toFloat / 4.0
+      min 1.0 (level + varDepPenalty + inputPenalty)
+    else
+      let speedVal := match s.checkSpeed with
+        | .NotACheck => 0.0 | .Decidable => 0.0 | .Moderate => 0.33
+        | .Expensive => 0.66 | .Recursive => 1.0
+      let likelVal := match s.passLikelihood with
+        | .Certain => 0.0 | .Likely => 0.0 | .Moderate => 0.33
+        | .Unlikely => 0.66 | .Desperate => 1.0
+      let severity := max speedVal likelVal * 0.7 + min speedVal likelVal * 0.3
+      min 1.0 (0.75 + severity * 0.25 + varDepPenalty + inputPenalty)
+
+private def countInputCheckDeps (inputVars : Std.HashSet Name) (src : Source) : Nat :=
+  let allVars := match src with
+    | .NonRec (_, args) => args.flatMap varsInConstructorExpr
+    | .Rec _ args => args.flatMap varsInConstructorExpr
+    | .MutRec _ args => args.flatMap varsInConstructorExpr
+  let inputArgs := allVars.filter inputVars.contains
+  inputArgs.length
+
+def inputAwareStepScorer : StepScorer InputAwareGradedScore := fun key memo inputVars step => do
+  match step with
+  | .Unconstrained .. => return { density := .Total }
+  | .Match .. => return { density := .Backtracking }
+  | .Check src polarity =>
+    let varDeps := countGeneratedVarDeps inputVars src
+    let speed := classifyCheckSpeed memo key src varDeps
+    let likelihood ← classifyPassLikelihood inputVars key src polarity varDeps
+    let inputDeps := if varDeps > 0 then countInputCheckDeps inputVars src else 0
+    return { density := .Checking, checkSpeed := speed, passLikelihood := likelihood, varDeps := varDeps, inputCheckDeps := inputDeps }
+  | .SuchThat outputs src prodSort =>
+    let outputNames := Std.HashSet.ofList (outputs.map (·.1))
+    let varDeps := countGeneratedVarDeps (inputVars.union outputNames) src
+    let depDensity : Density := match src with
+      | .Rec .. => .Partial
+      | .MutRec .. => .Partial
+      | .NonRec (indName, args) =>
+        let outputIdxs := outputs.filterMap fun (n, _) =>
+          args.findIdx? fun a => match a with | .Unknown v => v == n | _ => false
+        let depDeriveSort := match prodSort with
+          | .Enumerator => DeriveSort.Enumerator
+          | .Generator => DeriveSort.Generator
+        let depKey : SpecKey := { inductiveName := indName, outputIndices := outputIdxs, deriveSort := depDeriveSort }
+        if depKey == key then .Partial
+        else match memo[depKey]? with
+          | some (.done depSched) => (Score.unwrap InputAwareGradedScore depSched.score).density
+          | _ => .Partial
+    return { density := depDensity, varDeps := varDeps }
+
+def inputAwareScheduleScorer : ScheduleScorer InputAwareGradedScore := fun stepScores =>
+  stepScores.foldl Scorable.combine Scorable.empty
+
+def inputAwareLeafAggregator : LeafAggregator InputAwareGradedScore := fun ctors =>
+  match ctors with
+  | [] => Scorable.uncoveredPenalty
+  | _ => Scorable.bestOf (ctors.map Prod.snd)
+
+def inputAwareInductiveAggregator : InductiveAggregator InputAwareGradedScore := fun leafScores =>
+  leafScores.foldl Scorable.combine Scorable.empty
+
+initialize registerScoringBundle (mkScorerBundle `Scoring.InputAwareGradedScore
+  inputAwareStepScorer inputAwareScheduleScorer inputAwareLeafAggregator inputAwareInductiveAggregator)
+
 
 end Scoring

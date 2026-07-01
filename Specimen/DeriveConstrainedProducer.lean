@@ -628,16 +628,16 @@ def getScheduleForInductiveRelationConstructor
           | .lcons fstSchdM rest =>
           let (fstSchd, countSeen) ← fstSchdM
           let inputVarSet := Std.HashSet.ofList fixedVars
-          let scoreSchedule := fun (steps : List ScheduleStep) =>
-            let stepScores := steps.map fun step => bundle.stepScorer key depMemo inputVarSet step
-            bundle.scheduleScorer stepScores
+          let scoreSchedule := fun (steps : List ScheduleStep) => do
+            let stepScores ← steps.mapM fun step => bundle.stepScorer key depMemo inputVarSet step
+            return bundle.scheduleScorer stepScores
           let mut countProcessed := 1
-          let mut bestScore := scoreSchedule fstSchd
+          let mut bestScore ← scoreSchedule fstSchd
           let mut bestSchedule := fstSchd
           trace[plausible.deriving.results] m!"First Schedule: {ppScheduleSteps bestSchedule} \nScore: {bundle.reprScore bestScore}\nSchedules Considered: {repr countSeen}\nSchedules Processed: {repr countProcessed}"
           for schdM in rest.get do
             let (schd, countSeen) ← schdM
-            let score := scoreSchedule schd
+            let score ← scoreSchedule schd
             countProcessed := countProcessed + 1
             if bundle.isBetter score bestScore then
               bestSchedule := schd
@@ -797,6 +797,21 @@ def deriveConstrainedProducer
         | .Enumerator => `aux_enum
         | _ => `aux_dec)
 
+      -- Resolve the active weight function for constructor frequency
+      let weightEntry ← Scoring.getActiveWeightFn
+      let weightFnIdent := mkIdent weightEntry.leanName
+
+      -- Pre-count base vs recursive constructors for the weight function
+      let mut numBaseCtors := 0
+      let mut numRecCtors := 0
+      for ctorName in inductiveVal.ctors do
+        if ← isConstructorRecursive inductiveName ctorName then
+          numRecCtors := numRecCtors + 1
+        else
+          numBaseCtors := numBaseCtors + 1
+      let numBaseLit := Syntax.mkNumLit (toString numBaseCtors)
+      let numRecLit := Syntax.mkNumLit (toString numRecCtors)
+
       let mut requiredInstances := #[]
       for ctorName in inductiveVal.ctors do
         let resultOption ← (UnifyM.runInMetaM
@@ -811,7 +826,7 @@ def deriveConstrainedProducer
           -- This is all done in a state monad: when we detect that a new instance is required, we append it to an array of `TSyntax term`s
           -- (where each term represents a typeclass instance)
           let (subProducer, instances) ← StateT.run (s := #[]) (do
-            let mexp ← MExp.scheduleToMExp schedule (.MId `size) (.MId `initSize) outputType (fuelPrimeName := freshFuelPrimeName) (sizePrimeName := freshSizePrimeName)
+            let mexp ← MExp.scheduleToMExp schedule (.MId `size) (.MId `initSize) outputType (fuelPrimeName := freshFuelPrimeName) (sizePrimeName := freshSizePrimeName) (targetInductive := inductiveName)
             MExp.mexpToTSyntax mexp deriveSort)
 
           requiredInstances := requiredInstances ++ instances
@@ -821,21 +836,21 @@ def deriveConstrainedProducer
           let isRecursive ← isConstructorRecursive inductiveName ctorName
 
           if isRecursive then
-            -- Following the QuickChick convention,
-            -- recursive sub-generators have a weight of `.succ size'`
-            -- and sub-enumerators don't have any weight associated with them
+            -- recursive sub-generators use the active weight function with size'
+            -- sub-enumerators don't have any weight associated with them
             let subProducerTerm ←
               match producerSort with
-              | .Generator => `( ($(mkIdent ``Nat.succ) $freshSize', $subProducer) )
+              | .Generator =>
+                `( ($weightFnIdent 0.0 true $freshSize' $numBaseLit $numRecLit, $subProducer) )
               | .Enumerator => pure subProducer
             recursiveProducers := recursiveProducers.push subProducerTerm
           else
-            -- Following the QuickChick convention,
-            -- non-recursive sub-generators have a weight of 1
+            -- non-recursive sub-generators use the active weight function with size=0
             -- (sub-enumerators don't have any weight associated with them)
             let subGeneratorTerm ←
               match producerSort with
-              | .Generator => `( (1, $subProducer) )
+              | .Generator =>
+                `( ($weightFnIdent 0.0 false 0 $numBaseLit $numRecLit, $subProducer) )
               | .Enumerator => pure subProducer
             nonRecursiveProducers := nonRecursiveProducers.push subGeneratorTerm
 
@@ -912,35 +927,53 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
         | .SuchThat vs (.Rec _ args) ps => .SuchThat vs (.Rec globalName args) ps
         | .Check (.Rec _ args) pol => .Check (.Rec globalName args) pol
         | other => other
-    for (_, schedule) in indSched.baseSchedules do
+    let weightEntry ← Scoring.getActiveWeightFn
+    let weightFnIdent := mkIdent weightEntry.leanName
+    let bundle ← Scoring.getActiveScorerBundle
+    let lookupCtorBadness (ctorName : Name) : Float :=
+      match indSched.ctorStats.find? (fun (n, _, _, _) => n == ctorName) with
+      | some (_, _, _, s) => bundle.scoreBadness s
+      | none => 0.0
+    let numBaseMutual := indSched.baseSchedules.filter (fun (_, (steps, _)) =>
+      scheduleUsesMutualCall (rewriteSchedule steps))
+    let numBase := indSched.baseSchedules.length - numBaseMutual.length
+    let numRec := indSched.recSchedules.length + numBaseMutual.length
+    let numBaseLit := Syntax.mkNumLit (toString numBase)
+    let numRecLit := Syntax.mkNumLit (toString numRec)
+    for (ctorName, schedule) in indSched.baseSchedules do
       let (steps, sort) := schedule
       let rewrittenSteps := rewriteSchedule steps
       let rewrittenSchedule := (rewrittenSteps, sort)
       let (subProducer, _) ← StateT.run (s := #[]) (do
         let mexp ← MExp.scheduleToMExp rewrittenSchedule (.MId `size) (.MId `initSize) outputType
-          (fuelPrimeName := freshFuelPrimeName) (sizePrimeName := freshSizePrimeName)
+          (fuelPrimeName := freshFuelPrimeName) (sizePrimeName := freshSizePrimeName) (targetInductive := key.inductiveName)
         MExp.mexpToTSyntax mexp key.deriveSort)
+      let badnessLit := Syntax.mkScientificLit (toString (lookupCtorBadness ctorName))
       if scheduleUsesMutualCall rewrittenSteps then
         let term ← match key.deriveSort with
-          | .Generator => `( ($(Lean.mkIdent ``Nat.succ) $freshSize', $subProducer) )
+          | .Generator =>
+            `( ($weightFnIdent $badnessLit true $freshSize' $numBaseLit $numRecLit, $subProducer) )
           | .Enumerator => pure subProducer
           | .Checker | .Theorem => `(fun (_ : Unit) => $subProducer)
         recursiveProducers := recursiveProducers.push term
       else
         let term ← match key.deriveSort with
-          | .Generator => `( (1, $subProducer) )
+          | .Generator =>
+            `( ($weightFnIdent $badnessLit false 0 $numBaseLit $numRecLit, $subProducer) )
           | .Enumerator => pure subProducer
           | .Checker | .Theorem => `(fun (_ : Unit) => $subProducer)
         nonRecursiveProducers := nonRecursiveProducers.push term
-    for (_, schedule) in indSched.recSchedules do
+    for (ctorName, schedule) in indSched.recSchedules do
       let (steps, sort) := schedule
       let rewrittenSchedule := (rewriteSchedule steps, sort)
       let (subProducer, _) ← StateT.run (s := #[]) (do
         let mexp ← MExp.scheduleToMExp rewrittenSchedule (.MId `size) (.MId `initSize) outputType
-          (fuelPrimeName := freshFuelPrimeName) (sizePrimeName := freshSizePrimeName)
+          (fuelPrimeName := freshFuelPrimeName) (sizePrimeName := freshSizePrimeName) (targetInductive := key.inductiveName)
         MExp.mexpToTSyntax mexp key.deriveSort)
+      let badnessLit := Syntax.mkScientificLit (toString (lookupCtorBadness ctorName))
       let term ← match key.deriveSort with
-        | .Generator => `( ($(Lean.mkIdent ``Nat.succ) $freshSize', $subProducer) )
+        | .Generator =>
+          `( ($weightFnIdent $badnessLit true $freshSize' $numBaseLit $numRecLit, $subProducer) )
         | .Enumerator => pure subProducer
         | .Checker | .Theorem => `(fun (_ : Unit) => $subProducer)
       recursiveProducers := recursiveProducers.push term
@@ -1349,6 +1382,18 @@ def deriveConstrainedProducerParts
       let freshSize' := mkIdent freshSizePrimeName
       let freshRecFnName := recFnNameOverride.getD (localCtx.getUnusedName (match deriveSort with
         | .Generator => `aux_arb | .Enumerator => `aux_enum | _ => `aux_dec))
+      -- Resolve the active weight function for constructor frequency
+      let weightEntry ← Scoring.getActiveWeightFn
+      let weightFnIdent := mkIdent weightEntry.leanName
+      -- Pre-count base vs recursive constructors for the weight function
+      let mut numBaseCtors := 0
+      let mut numRecCtors := 0
+      for ctorName in inductiveVal.ctors do
+        let isRec ← (isConstructorRecursive inductiveName ctorName)
+        if isRec then numRecCtors := numRecCtors + 1
+        else numBaseCtors := numBaseCtors + 1
+      let numBaseLit := Syntax.mkNumLit (toString numBaseCtors)
+      let numRecLit := Syntax.mkNumLit (toString numRecCtors)
       -- For each constructor: derive a schedule, compile to syntax
       for ctorName in inductiveVal.ctors do
         let resultOption ← (UnifyM.runInMetaM
@@ -1361,7 +1406,7 @@ def deriveConstrainedProducerParts
           let rewrittenSteps := scheduleRewriter scheduleSteps
           let schedule := (rewrittenSteps, scheduleSort)
           let (subProducer, requiredInsts) ← StateT.run (s := #[]) (do
-            let mexp ← MExp.scheduleToMExp schedule (.MId `size) (.MId `initSize) _outputType (fuelPrimeName := freshFuelPrimeName) (sizePrimeName := freshSizePrimeName)
+            let mexp ← MExp.scheduleToMExp schedule (.MId `size) (.MId `initSize) _outputType (fuelPrimeName := freshFuelPrimeName) (sizePrimeName := freshSizePrimeName) (targetInductive := inductiveName)
             MExp.mexpToTSyntax mexp deriveSort)
           if !requiredInsts.isEmpty then
             let outputIdxsStr := outputNamesTypesIndices.map (fun (n, _, i) => s!"{n}@{i}")
@@ -1369,12 +1414,14 @@ def deriveConstrainedProducerParts
           let isRecursive ← (isConstructorRecursive inductiveName ctorName) <||> pure (scheduleUsesMutualCall rewrittenSteps)
           if isRecursive then
             let subProducerTerm ← match producerSort with
-              | .Generator => `( ($(mkIdent ``Nat.succ) $freshSize', $subProducer) )
+              | .Generator =>
+                `( ($weightFnIdent 0.0 true $freshSize' $numBaseLit $numRecLit, $subProducer) )
               | .Enumerator => pure subProducer
             recursiveProducers := recursiveProducers.push subProducerTerm
           else
             let subGeneratorTerm ← match producerSort with
-              | .Generator => `( (1, $subProducer) )
+              | .Generator =>
+                `( ($weightFnIdent 0.0 false 0 $numBaseLit $numRecLit, $subProducer) )
               | .Enumerator => pure subProducer
             nonRecursiveProducers := nonRecursiveProducers.push subGeneratorTerm
         | none => throwError m!"Unable to derive producer schedule for constructor {ctorName}"
@@ -1670,6 +1717,41 @@ def elabDeriveMutual : CommandElab := fun stx => do
               |>.filter (usedKeys.contains ·) |>.eraseDups
             totalEdges := totalEdges + depKeys.length
           | _ => pure ()
+        -- Compile all components BEFORE building the widget so we can show generated code
+        let mut compiledComponents : Array (Array (SpecKey × Name) × Array (TSyntax `command) × Array (TSyntax `command)) := #[]
+        let mut compiledCodeMap : Std.HashMap SpecKey (String × String) := {}
+        for comp in components do
+          let mut compMeta : Array (SpecKey × Name) := #[]
+          for key in comp do
+            let uid ← liftTermElabM (Lean.Core.mkFreshUserName `specimen_mutual)
+            let globalName := Name.mkSimple s!"{uid}_{key.inductiveName.toString.replace "." "_"}"
+            compMeta := compMeta.push (key, globalName)
+          let compSiblings : List (Name × List Nat × Name × DeriveSort) :=
+            compMeta.toList.map (fun (k, gn) => (k.inductiveName, k.outputIndices, gn, k.deriveSort))
+          let mut defCmds : Array (TSyntax `command) := #[]
+          let mut instCmds : Array (TSyntax `command) := #[]
+          for (key, globalName) in compMeta do
+            match finalMemo[key]? with
+            | some (.done indSched) =>
+              if indSched.alreadyExists then continue
+              try
+                let (defCmd, instCmd) ← liftTermElabM <|
+                  compileInductiveSchedule indSched globalName compSiblings
+                defCmds := defCmds.push defCmd
+                instCmds := instCmds.push instCmd
+                let defStr ← liftTermElabM <| try
+                  let fmt ← Lean.PrettyPrinter.ppCommand defCmd
+                  pure fmt.pretty
+                catch _ => pure "(failed to pretty-print def)"
+                let instStr ← liftTermElabM <| try
+                  let fmt ← Lean.PrettyPrinter.ppCommand instCmd
+                  pure fmt.pretty
+                catch _ => pure "(failed to pretty-print instance)"
+                compiledCodeMap := compiledCodeMap.insert key (defStr, instStr)
+              catch e =>
+                logWarning m!"Failed to compile {key.inductiveName}{key.outputIndices}{repr key.deriveSort}: {e.toMessageData}"
+            | _ => logWarning m!"No schedule found for {key.inductiveName}{key.outputIndices}"
+          compiledComponents := compiledComponents.push (compMeta, defCmds, instCmds)
         -- Build HTML output using ProofWidgets (controlled by specimen.richOutput)
         let richOutput := Lean.Option.get (← getOptions) specimen.richOutput
         let mkSpan (style : Json) (text : String) : Html :=
@@ -1776,12 +1858,22 @@ def elabDeriveMutual : CommandElab := fun stx => do
                 let ctorItems := mkCtorItems indSched
                 let specNameStyle := json% {"color": $(specColor indSched), "fontWeight": "bold"}
                 let indScoreStr := bundle.reprScore indSched.score
+                let codeDropdown : Array Html := match compiledCodeMap[k]? with
+                  | some (defStr, instStr) =>
+                    let codeStyle := json% {"whiteSpace": "pre-wrap", "fontFamily": "var(--vscode-editor-font-family, monospace)", "fontSize": "0.85em", "lineHeight": "1.4", "padding": "8px", "background": "#0d1117", "borderRadius": "4px", "border": "1px solid #30363d", "overflow": "auto", "maxHeight": "400px"}
+                    #[Html.element "details" #[] #[
+                      .element "summary" #[("style", json% {"cursor": "pointer", "marginTop": "4px", "marginBottom": "2px"})] #[
+                        mkSpan (json% {"color": "#79c0ff", "fontSize": "0.9em"}) "📝 generated code"
+                      ],
+                      .element "div" #[("style", codeStyle)] #[.text (defStr ++ "\n\n" ++ instStr)]
+                    ]]
+                  | none => #[]
                 mutualItems := mutualItems.push (Html.element "details" #[] #[
                   .element "summary" #[("style", json% {"cursor": "pointer", "marginBottom": "2px"})] #[
                     mkSpan specNameStyle (k.prettyPrint numArgs),
                     mkSpan scoreStyle s!" ({nCtors} ctors{timeStr}) score: {indScoreStr}"
                   ],
-                  .element "div" #[("style", json% {"marginLeft": "12px"})] ctorItems
+                  .element "div" #[("style", json% {"marginLeft": "12px"})] (ctorItems ++ codeDropdown)
                 ])
               | _ => pure ()
             orderItems := orderItems.push (.element "div" #[("style", json% {"marginBottom": "6px", "paddingLeft": "4px", "borderLeft": "3px solid #ce9178"})] (#[
@@ -1805,13 +1897,23 @@ def elabDeriveMutual : CommandElab := fun stx => do
                 let ctorItems := mkCtorItems indSched
                 let specNameStyle := json% {"color": $(specColor indSched), "fontWeight": "bold"}
                 let indScoreStr := bundle.reprScore indSched.score
+                let codeDropdown : Array Html := match compiledCodeMap[k]? with
+                  | some (defStr, instStr) =>
+                    let codeStyle := json% {"whiteSpace": "pre-wrap", "fontFamily": "var(--vscode-editor-font-family, monospace)", "fontSize": "0.85em", "lineHeight": "1.4", "padding": "8px", "background": "#0d1117", "borderRadius": "4px", "border": "1px solid #30363d", "overflow": "auto", "maxHeight": "400px"}
+                    #[Html.element "details" #[] #[
+                      .element "summary" #[("style", json% {"cursor": "pointer", "marginTop": "4px", "marginBottom": "2px"})] #[
+                        mkSpan (json% {"color": "#79c0ff", "fontSize": "0.9em"}) "📝 generated code"
+                      ],
+                      .element "div" #[("style", codeStyle)] #[.text (defStr ++ "\n\n" ++ instStr)]
+                    ]]
+                  | none => #[]
                 orderItems := orderItems.push (Html.element "details" #[] #[
                   .element "summary" #[("style", json% {"cursor": "pointer", "marginBottom": "2px"})] #[
                     .text "● ",
                     mkSpan specNameStyle (k.prettyPrint numArgs),
                     mkSpan scoreStyle s!" ({nCtors} ctors{timeStr}) score: {indScoreStr}"
                   ],
-                  .element "div" #[("style", json% {"marginLeft": "12px"})] ctorItems
+                  .element "div" #[("style", json% {"marginLeft": "12px"})] (ctorItems ++ codeDropdown)
                 ])
             | _ => pure ()
         htmlChildren := htmlChildren.push (Html.element "details" #[("open", json% true)] #[
@@ -2045,37 +2147,30 @@ def elabDeriveMutual : CommandElab := fun stx => do
                     let ctorStrs := ctors.map (fun n => n.getString!)
                     lines := lines.push s!"    requires {dk.prettyPrint dkArgs}  via {String.intercalate ", " ctorStrs}"
               | _ => pure ()
+          if textLevel ≥ 3 then
+            lines := lines.push ""
+            lines := lines.push "── Generated Code ──"
+            for (_, defCmds, instCmds) in compiledComponents do
+              if defCmds.isEmpty then continue
+              let mutualCmd ← if defCmds.size > 1 then
+                `(command| mutual $defCmds* end)
+              else pure defCmds[0]!
+              let mutualStr ← liftTermElabM <| try
+                let fmt ← Lean.PrettyPrinter.ppCommand mutualCmd
+                pure fmt.pretty
+              catch _ => pure "(failed to pretty-print)"
+              lines := lines.push mutualStr
+              for instCmd in instCmds do
+                let instStr ← liftTermElabM <| try
+                  let fmt ← Lean.PrettyPrinter.ppCommand instCmd
+                  pure fmt.pretty
+                catch _ => pure "(failed to pretty-print)"
+                lines := lines.push instStr
+              lines := lines.push ""
           logInfo m!"{String.intercalate "\n" lines.toList}"
-        -- For each component: assign names, compile, emit
-        for comp in components do
-          -- Assign global names for this component
-          let mut compMeta : Array (SpecKey × Name) := #[]
-          for key in comp do
-            let uid ← liftTermElabM (Lean.Core.mkFreshUserName `specimen_mutual)
-            let globalName := Name.mkSimple s!"{uid}_{key.inductiveName.toString.replace "." "_"}"
-            compMeta := compMeta.push (key, globalName)
-          -- Build siblings list for this component (for MutRec rewriting)
-          let compSiblings : List (Name × List Nat × Name × DeriveSort) :=
-            compMeta.toList.map (fun (k, gn) => (k.inductiveName, k.outputIndices, gn, k.deriveSort))
-          -- Compile each spec in the component
-          let mut defCmds : Array (TSyntax `command) := #[]
-          let mut instCmds : Array (TSyntax `command) := #[]
-          for (key, globalName) in compMeta do
-            match finalMemo[key]? with
-            | some (.done indSched) =>
-              if indSched.alreadyExists then continue
-              try
-                let (defCmd, instCmd) ← liftTermElabM <|
-                  compileInductiveSchedule indSched globalName compSiblings
-                defCmds := defCmds.push defCmd
-                instCmds := instCmds.push instCmd
-              catch e =>
-                logWarning m!"Failed to compile {key.inductiveName}{key.outputIndices}{repr key.deriveSort}: {e.toMessageData}"
-            | _ => logWarning m!"No schedule found for {key.inductiveName}{key.outputIndices}"
-          let getNumArgs (k : SpecKey) : CommandElabM Nat := liftTermElabM do
-            try pure ((← getComponentsOfArrowType (← getConstInfoInduct k.inductiveName).type).size - 1)
-            catch _ => pure k.outputIndices.length
-          -- Emit: mutual block for multi-element, standalone for singletons
+        -- Emit compiled components (already compiled above for the widget)
+        for (compMeta, defCmds, instCmds) in compiledComponents do
+          if defCmds.isEmpty then continue
           let specDescs ← compMeta.toList.mapM fun (k, _) => do
             let numArgs ← getNumArgs k
             let scoreStr := match finalMemo[k]? with
