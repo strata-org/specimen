@@ -351,7 +351,17 @@ def handleConstrainedOutputs (hyp : HypothesisExpr) (outputVars : List TypedVar)
 
       )
 
-  return (patternMatches.filterMap id, (ctorName, args'), newOutputs.filterMap id)
+  -- A delegable variable can span several arguments of the equality (e.g. `i` in
+  -- `g i = i`), which would emit it as a bind output once per argument — a
+  -- non-linear pattern `(i, i)`. The equality is delegated to a single producer,
+  -- so keep only the first occurrence of each output variable. (`constructHypothesis`
+  -- performs the analogous dedup on the scheduler's producible slots.)
+  let outputName : OptionallyTypedVar → Name
+    | .TVar v => v.var
+    | .UVar n => n
+  let dedupedOutputs := (newOutputs.filterMap id).foldl
+    (fun acc o => if acc.any (outputName · == outputName o) then acc else acc ++ [o]) []
+  return (patternMatches.filterMap id, (ctorName, args'), dedupedOutputs)
 
 /-Lazily enumerates pairs where the first elements is all subsets of
   the given list `as` and the second element is the complement-/
@@ -455,6 +465,16 @@ private def constructHypothesis (typeVars : List Name) (delegableMap : Delegable
     if isDelegatedArg arg then
       vars.filter (· ∈ delegableVars)
     else vars)
+  -- A delegable variable can span several arguments of the equality (e.g. `i` in
+  -- `g i = i`), landing in one producible slot per argument. Since the equality
+  -- is delegated to a single producer, keep just the first slot; otherwise the
+  -- scheduler counts the surplus slots as extra outputs and generates the
+  -- variable again in a spurious unconstrained step. (`handleConstrainedOutputs`
+  -- performs the analogous dedup when emitting this premise's output binders.)
+  let safeVarLists := (safeVarLists.foldl (fun (seen, acc) vs =>
+      let vs' := vs.filter (fun v => v ∉ delegableVars || v ∉ seen)
+      (seen ++ vs.filter (· ∈ delegableVars), acc ++ [vs'])) ([], [])).2
+    |>.filter (!·.isEmpty)
   -- A delegated argument's *non-delegable* variables (e.g. `Δ` in `getElem? Δ i`)
   -- are inputs to the delegated producer, so — like `mustBind` variables — they
   -- must be bound before this hypothesis is scheduled. Since they are no longer
