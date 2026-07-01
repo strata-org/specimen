@@ -225,7 +225,8 @@ def mkConstrainedProducerMutualPieces
   (targetTypes : List Expr) (producerSort : ProducerSort)
   (topLevelLocalCtx : LocalContext) (globalDefName : Name)
   (deriveSort : DeriveSort)
-  (precomputedParamInfo : Option (Array (Name × Expr × TSyntax `term)) := none) :
+  (precomputedParamInfo : Option (Array (Name × Expr × TSyntax `term)) := none)
+  (requiredTypeClasses : Option (Array Name) := none) :
   TermElabM (TSyntax `command × TSyntax `command) := do
     -- Reuse the same computation as mkConstrainedProducerTypeClassInstance
     let freshSizeIdent := mkFreshAccessibleIdent topLevelLocalCtx `size
@@ -315,11 +316,15 @@ def mkConstrainedProducerMutualPieces
     for (name, ty) in allParamNamesAndTypes.reverse do
       fullType ← `(($name : $ty) → $fullType)
 
-    -- Add instance binders for type params (Arbitrary + DecidableEq)
-    let producerUnconstrainedClass := match producerSort with
-      | .Generator => ``Plausible.Arbitrary
-      | .Enumerator => ``Enum
-    let defTypeParamInstances ← mkTypeClassInstanceBinders typeParams #[producerUnconstrainedClass, ``DecidableEq]
+    -- Add instance binders for type params
+    let typeClasses := match requiredTypeClasses with
+      | some tcs => tcs
+      | none =>
+        let producerUnconstrainedClass := match producerSort with
+          | .Generator => ``Plausible.Arbitrary
+          | .Enumerator => ``Enum
+        #[producerUnconstrainedClass, ``DecidableEq]
+    let defTypeParamInstances ← mkTypeClassInstanceBinders typeParams typeClasses
 
     -- Emit the def with ∀ type (supports instance binders inline)
     let defIdent := mkIdent globalDefName
@@ -346,9 +351,16 @@ def mkConstrainedProducerMutualPieces
     let fuelLit := Syntax.mkNumLit (toString fuelVal)
     let callArgs : TSyntaxArray `term := #[(⟨fuelLit⟩ : TSyntax `term), (freshSizeIdent : TSyntax `term), (freshSizeIdent : TSyntax `term)] ++ (TSyntaxArray.mk outerParams)
     let callExpr ← `($defIdent $callArgs*)
+    let instTypeClasses := match requiredTypeClasses with
+      | some tcs => tcs
+      | none => match deriveSort with
+        | .Checker | .Theorem => #[``Enum, ``DecidableEq]
+        | _ => match producerSort with
+          | .Generator => #[``Plausible.Arbitrary, ``DecidableEq]
+          | .Enumerator => #[``Enum, ``DecidableEq]
     let instCmd ← match deriveSort with
       | .Checker | .Theorem => do
-        let arbitraryTypeParamInstances ← mkTypeClassInstanceBinders typeParams #[``Enum, ``DecidableEq]
+        let arbitraryTypeParamInstances ← mkTypeClassInstanceBinders typeParams instTypeClasses
         `(command|
           instance $arbitraryTypeParamInstances:bracketedBinder* : $decOptTypeclass (@$(mkIdent inductiveName) $args*) where
             $unqualifiedDecOptFn:ident := fun $freshSizeIdent => $callExpr)
@@ -359,10 +371,7 @@ def mkConstrainedProducerMutualPieces
         let producerTypeClassFunction := match producerSort with
           | .Generator => unqualifiedArbitrarySizedSTFn
           | .Enumerator => unqualifiedEnumSizedSTFn
-        let producerUnconstrainedClass := match producerSort with
-          | .Generator => ``Plausible.Arbitrary
-          | .Enumerator => ``Enum
-        let arbitraryTypeParamInstances ← mkTypeClassInstanceBinders typeParams #[producerUnconstrainedClass, ``DecidableEq]
+        let arbitraryTypeParamInstances ← mkTypeClassInstanceBinders typeParams instTypeClasses
         `(command|
           instance $arbitraryTypeParamInstances:bracketedBinder* : $producerTypeClass $targetTypeSyntax (fun $targetVarPattern => @$(mkIdent inductiveName) $args*) where
             $producerTypeClassFunction:ident := fun $freshSizeIdent => $callExpr)

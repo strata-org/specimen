@@ -450,7 +450,8 @@ structure SpecKey where
 
 /-- Pretty-prints a SpecKey as a spec form like "fun τ => ∃ Γ e, typing Γ e τ".
     Requires knowing the inductive's arg types (number of args). -/
-def SpecKey.prettyPrint (key : SpecKey) (numArgs : Nat) : String :=
+def SpecKey.prettyPrint (key : SpecKey) (numArgs : Nat)
+    (constraints : Array Name := #[]) (typeParamIndices : Array Nat := #[]) : String :=
   let varPool := #["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"]
   let (inputs, outputs, appArgs) := Id.run do
     let mut inputs : List String := []
@@ -464,7 +465,13 @@ def SpecKey.prettyPrint (key : SpecKey) (numArgs : Nat) : String :=
         inputs := inputs ++ [name]
       appArgs := appArgs ++ [name]
     (inputs, outputs, appArgs)
-  let inputsStr := if inputs.isEmpty then "" else s!"fun {String.intercalate " " inputs} => "
+  let constraintStr := if constraints.isEmpty || typeParamIndices.isEmpty then ""
+    else
+      let binders := typeParamIndices.toList.flatMap fun i =>
+        let varName := varPool.getD i s!"v{i}"
+        constraints.toList.map fun c => s!"[{c.getString!} {varName}]"
+      s!" {String.intercalate " " binders}"
+  let inputsStr := if inputs.isEmpty then "" else s!"fun {String.intercalate " " inputs}{constraintStr} => "
   let outputsStr := if outputs.isEmpty then "" else s!"∃ {String.intercalate " " outputs}, "
   let sortStr := match key.deriveSort with
     | .Generator => "[generator] "
