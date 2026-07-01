@@ -1,5 +1,6 @@
 
 import Lean
+import Plausible.Arbitrary
 
 open Lean Meta LocalContext Std
 
@@ -245,12 +246,50 @@ partial def collectFVarOccurrences (e : Expr) (skipArgIndices : List Nat := []) 
     | _ => acc
   aux e {} true
 
+/-- True if every free variable of `e` is a fixed input (member of `fixed`).
+    Such a subterm is fully determined by the producer's inputs. -/
+def allFVarsFixed (fixed : Std.HashSet FVarId) (e : Expr) : Bool :=
+  let fvarIds := (collectFVarOccurrences e).toList.map Prod.fst
+  !fvarIds.isEmpty && fvarIds.all fixed.contains
+
+/-- Whether a subterm should be left in place during flattening rather than
+    lifted into a generated unknown. This holds when the subterm is determined
+    entirely by fixed inputs (`allFVarsFixed`) *and* its type has no `Arbitrary`
+    instance — i.e. it could not be generated anyway, so it must stay fixed.
+
+    The motivating case is an output inductive's structure type-parameter such as
+    `T.mono : LExprParamsT` (where `T` is a fixed input): `LExprParamsT` carries
+    metadata-configuration types and has no `Arbitrary` instance. Crucially, an
+    ordinary fixed value-level subterm like `n * n : Nat` is *not* skipped (since
+    `Arbitrary Nat` exists), so checker/derivation behavior for those is
+    unchanged. -/
+def isFixedUngenerable (fixed : Std.HashSet FVarId) (e : Expr) : MetaM Bool := do
+  if !allFVarsFixed fixed e then return false
+  let ty ← inferType e
+  -- Be conservative if the type isn't fully determined: only the original
+  -- (universe-mismatch) behavior is preserved by *not* skipping such subterms.
+  if ty.hasExprMVar || ty.hasLevelMVar then return false
+  -- The subterm is a candidate for an `Arbitrary` instance; if none can be
+  -- synthesized, keep the subterm fixed rather than lifting it to a generator.
+  let some cls ← (try some <$> Meta.mkAppM ``Plausible.Arbitrary #[ty] catch _ => pure none)
+    | return false
+  let inst ← (try Meta.synthInstance? cls catch _ => pure none)
+  return inst.isNone
+
 /-`collectUnmatchableSubterms` traverses an expression from top down until it finds anything except a constructor application
 or a variable or an inductive. It collects all such subterms. These subterms we cannot match on during unifications so we
-turn them later into equality constraints. -/
-partial def collectUnmatchableSubterms (e : Expr) : MetaM (List Expr) := do
+turn them later into equality constraints.
+
+`fixed` is the set of fixed-input fvars: a subterm all of whose free variables
+are fixed is determined by the inputs (e.g. a type parameter `T.mono` where `T`
+is an input), so we leave it in place rather than lifting it into a generated
+unknown. -/
+partial def collectUnmatchableSubterms (fixed : Std.HashSet FVarId) (e : Expr) : MetaM (List Expr) := do
   let eType ← inferType e
   if eType.isSort then return []
+  -- A fixed subterm whose type has no `Arbitrary` instance (e.g. an output
+  -- type's structure parameter `T.mono`) cannot be generated; keep it in place.
+  if ← isFixedUngenerable fixed e then return []
   match e with
   | .app .. | .const .. => do
     let (f, args) := e.getAppFnArgs
@@ -258,7 +297,7 @@ partial def collectUnmatchableSubterms (e : Expr) : MetaM (List Expr) := do
     if inf.isDefinition then
       return [e]
     else
-      args.foldlM (fun acc arg => (· ++ acc) <$> collectUnmatchableSubterms arg) []
+      args.foldlM (fun acc arg => (· ++ acc) <$> collectUnmatchableSubterms fixed arg) []
   | .fvar .. => return []
   | _ => return [e] -- If it is not an application or a const, it is also not matchable, so we
                     -- should also flatten it out.
@@ -266,11 +305,11 @@ partial def collectUnmatchableSubterms (e : Expr) : MetaM (List Expr) := do
 /-`collectUnmatchableProperSubterms` traverses an expression from top down (ignoring the head, which is a hypothesis that does not need to be
 matched on) until it finds anything except a constructor application or a variable or an inductive. It collects all such subterms. These
 subterms we cannot match on during unifications so we turn them later into equality constraints.-/
-partial def collectUnmatchableProperSubterms (e : Expr) : MetaM (List Expr) :=
+partial def collectUnmatchableProperSubterms (fixed : Std.HashSet FVarId) (e : Expr) : MetaM (List Expr) :=
   match e with
   | .app .. => do
     let args := e.getAppArgs
-    args.foldlM (fun acc arg => (· ++ acc) <$> collectUnmatchableSubterms arg) []
+    args.foldlM (fun acc arg => (· ++ acc) <$> collectUnmatchableSubterms fixed arg) []
   | _ => return []
 
 /-- Looks up a key in a list and returns the value along with the list without that entry -/
