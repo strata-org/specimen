@@ -31,8 +31,6 @@ def negOptFn : Ident := mkIdent $ Name.mkStr2 "DecOpt" "negOpt"
 /-- Ident for `GeneratorCombinators.backtrack`. -/
 def genBacktrackFn : Ident := mkIdent $ Name.mkStr2 "GeneratorCombinators" "backtrack"
 
-/-- Ident for `Scoring.ctorWeight`. -/
-def ctorWeightFn : Ident := mkIdent $ Name.mkStr2 "Scoring" "ctorWeight"
 
 /-- Ident for the `DecOpt.checkerBacktrack` checker combinator (see `DecOpt.lean`) -/
 def checkerBacktrackFn : Ident := mkIdent $ Name.mkStr2 "DecOpt" "checkerBacktrack"

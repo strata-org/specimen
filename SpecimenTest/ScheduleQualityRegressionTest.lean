@@ -74,7 +74,7 @@ section GeneratorQuality
 
 private def treeDepth : BinaryTree → Nat
   | .Leaf => 0
-  | .Node _ l r => 1 + max (treeDepth l) (treeDepth r)
+  | .Node _ l r => 1 + (treeDepth l) + (treeDepth r)
 
 structure QualityStats where
   trials : Nat
@@ -180,6 +180,12 @@ inductive BST_InputAware : Nat → Nat → BinaryTree → Prop
       Between lo x hi → BST_InputAware lo x l → BST_InputAware x hi r →
       BST_InputAware lo hi (.Node x l r)
 
+inductive BST_SourceQuality : Nat → Nat → BinaryTree → Prop
+  | bstLeaf : BST_SourceQuality lo hi .Leaf
+  | bstNode : ∀ x l r lo hi,
+      Between lo x hi → BST_SourceQuality lo x l → BST_SourceQuality x hi r →
+      BST_SourceQuality lo hi (.Node x l r)
+
 set_option specimen.autoDeriveDeps true
 set_option specimen.multiOutput true
 
@@ -207,11 +213,15 @@ set_option specimen.scoreType "Scoring.InputAwareGradedScore" in
 #guard_msgs(drop info) in
 derive_mutual (fun lo hi => ∃ t, BST_InputAware lo hi t)
 
+set_option specimen.scoreType "Scoring.SourceQualityScore" in
+#guard_msgs(drop info) in
+derive_mutual (fun lo hi => ∃ t, BST_SourceQuality lo hi t)
+
 #guard_msgs(drop info) in
 #eval do
   let sample (gen : Nat → Gen BinaryTree) (name : String) : IO Unit := do
     let stats ← sampleQuality gen treeDepth
-      (fun a b => toString (repr a) == toString (repr b)) 200 8
+      (fun a b => toString (repr a) == toString (repr b)) 200 100
     IO.println (ppStats name stats)
     assertQuality name stats (minSuccessRate := 0.5) (minUniques := 10)
 
@@ -228,5 +238,7 @@ derive_mutual (fun lo hi => ∃ t, BST_InputAware lo hi t)
   sample instB.arbitrarySizedST "  BoundedScore  "
   let instIA : ArbitrarySizedSuchThat BinaryTree (fun t => BST_InputAware 0 10 t) := inferInstance
   sample instIA.arbitrarySizedST "  InputAware    "
+  let instIB : ArbitrarySizedSuchThat BinaryTree (fun t => BST_SourceQuality 0 10 t) := inferInstance
+  sample instIB.arbitrarySizedST "  SourceQuality    "
 
 end StrategyComparison

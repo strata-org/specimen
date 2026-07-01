@@ -40,22 +40,102 @@ namespace Scoring
 
 open Lean Meta Schedules
 
-def ctorWeight (density checkSpeed passLikelihood varDeps : Nat)
-    (isRec : Bool) (size : Nat) (numBase numRec : Nat) : Nat :=
-  let qualityBase := match density with
-    | 0 => 4
-    | 1 => 3
-    | 2 => 2
-    | _ => 1
-  let speedPenalty := min 1 (checkSpeed / 2)
-  let likePenalty := min 1 (passLikelihood / 2)
-  let depPenalty := min 1 (varDeps / 4)
-  let quality := max 1 (qualityBase - speedPenalty - likePenalty - depPenalty)
+----------------------------------------------
+-- Weight function type and registry
+----------------------------------------------
+
+/-- A weight function computes the runtime frequency weight for a constructor.
+    Arguments: (scoreBadness, isRec, size, numBase, numRec).
+    - scoreBadness: per-constructor quality from the active scorer (0.0 = best, 1.0 = worst)
+    - isRec: whether this constructor is recursive
+    - size: current generation size parameter
+    - numBase/numRec: counts of base vs recursive constructors for this inductive -/
+abbrev CtorWeightFn := Float → Bool → Nat → Nat → Nat → Nat
+
+/-- Ignores score; base=1, recursive=numBase*size/numRec. -/
+def defaultCtorWeight (_scoreBadness : Float) (isRec : Bool) (size : Nat) (numBase numRec : Nat) : Nat :=
+  if isRec then
+    if size == 0 then 1
+    else max 1 (numBase * size / max 1 numRec)
+  else 1
+
+/-- QuickChick-style weight: base=1, recursive=size+1. Ignores score. -/
+def quickchickCtorWeight (_scoreBadness : Float) (isRec : Bool) (size : Nat) (_numBase _numRec : Nat) : Nat :=
+  if isRec then size + 1 else 1
+
+/-- Flat weight: every constructor gets weight 1. Ignores everything. -/
+def flatCtorWeight (_scoreBadness : Float) (_isRec : Bool) (_size : Nat) (_numBase _numRec : Nat) : Nat := 1
+
+/-- Score-aware weight: boosts good constructors (low badness) and deprioritizes
+    recursive ones. Quality maps to 1–4, recursive ctors get an additional size-based
+    penalty so base cases are preferred at small sizes. -/
+def scoreAwareCtorWeight (scoreBadness : Float) (isRec : Bool) (size : Nat) (numBase numRec : Nat) : Nat :=
+  let quality := if scoreBadness < 0.25 then 4
+    else if scoreBadness < 0.5 then 3
+    else if scoreBadness < 0.75 then 2
+    else 1
   if isRec then
     if size == 0 then 1
     else max 1 (numBase * size / max 1 numRec) * quality
-  else
-    quality
+  else quality
+
+/-- Balanced weight for inductives with many recursive constructors.
+    Controls aggregate P(recursive) ≈ size / (size + 4*numBase) by distributing
+    size across all recursive ctors (so total rec weight ≈ size * quality).
+    Base ctors get a 4x boost so they stay relevant even with many rec branches. -/
+def balancedCtorWeight (scoreBadness : Float) (isRec : Bool) (size : Nat) (_numBase numRec : Nat) : Nat :=
+  let quality := if scoreBadness < 0.25 then 4
+    else if scoreBadness < 0.5 then 3
+    else if scoreBadness < 0.75 then 2
+    else 1
+  if isRec then
+    if size == 0 then 0
+    else max 1 (size / max 1 numRec) * quality
+  else quality * 4
+
+/-- Quality-only weight: no structural bias, budget splitting handles termination. -/
+def qualityCtorWeight (scoreBadness : Float) (_isRec : Bool) (_size : Nat) (_numBase _numRec : Nat) : Nat :=
+  if scoreBadness < 0.25 then 4
+  else if scoreBadness < 0.5 then 3
+  else if scoreBadness < 0.75 then 2
+  else 1
+
+structure WeightFnEntry where
+  name : Name
+  fn : CtorWeightFn
+  leanName : Name
+
+initialize weightFnRegistry : IO.Ref (Array WeightFnEntry) ← IO.mkRef #[]
+
+def registerWeightFn (name : Name) (fn : CtorWeightFn) (leanName : Name) : IO Unit :=
+  weightFnRegistry.modify (·.push { name, fn, leanName })
+
+initialize registerWeightFn `Scoring.defaultCtorWeight defaultCtorWeight ``defaultCtorWeight
+initialize registerWeightFn `Scoring.quickchickCtorWeight quickchickCtorWeight ``quickchickCtorWeight
+initialize registerWeightFn `Scoring.flatCtorWeight flatCtorWeight ``flatCtorWeight
+initialize registerWeightFn `Scoring.scoreAwareCtorWeight scoreAwareCtorWeight ``scoreAwareCtorWeight
+initialize registerWeightFn `Scoring.balancedCtorWeight balancedCtorWeight ``balancedCtorWeight
+initialize registerWeightFn `Scoring.qualityCtorWeight qualityCtorWeight ``qualityCtorWeight
+
+register_option specimen.weightFn : String := {
+  defValue := "Scoring.balancedCtorWeight"
+  descr := "The weight function used for constructor frequency in derived generators."
+}
+
+/-- Get the active weight function name from options. -/
+def getActiveWeightFnName [Monad m] [MonadOptions m] : m Name := do
+  let s : String := Lean.Option.get (← getOptions) specimen.weightFn
+  return s.toName
+
+/-- Resolve the active weight function entry. -/
+def getActiveWeightFn : CoreM WeightFnEntry := do
+  let name ← getActiveWeightFnName
+  let entries ← weightFnRegistry.get
+  match entries.find? (·.name == name) with
+  | some entry => return entry
+  | none => match entries[0]? with
+    | some entry => return entry
+    | none => return { name := `Scoring.balancedCtorWeight, fn := balancedCtorWeight, leanName := ``balancedCtorWeight }
 
 ----------------------------------------------
 -- Core typeclass
@@ -79,12 +159,6 @@ class Scorable (S : Type) where
   /-- Must be worse than any real schedule under `isBetter`. -/
   worst : S
   badness : S → Float
-  /-- Extract (density, checkSpeed, passLikelihood, varDeps) for runtime ctorWeight.
-      Default maps badness to an approximate density. -/
-  weightArgs : S → Array Nat := fun s =>
-    let b := badness s
-    let d := if b < 0.25 then 0 else if b < 0.5 then 1 else if b < 0.75 then 2 else 3
-    #[d, 0, 0, 0]
 
 ----------------------------------------------
 -- Scorer function types (parameterized by score type)
@@ -239,8 +313,6 @@ structure ScorerBundle where
   worstScore : Score
   /-- Map score to [0,1] for HSL color display (0 = best, 1 = worst). -/
   scoreBadness : Score → Float
-  /-- Extract (density, checkSpeed, passLikelihood, varDeps) as Nats for runtime ctorWeight. -/
-  ctorWeightArgs : Score → Array Nat
   pruneStrategy : PruneStrategy := .usePrimary
 
 /-- Build a complete ScorerBundle from typed scorers. -/
@@ -262,7 +334,6 @@ def mkScorerBundle [Inhabited S] [TypeName S] [Repr S] [Scorable S]
     penaltyScore := Score.wrap (Scorable.uncoveredPenalty : S)
     worstScore := Score.wrap (Scorable.worst : S)
     scoreBadness := fun s => Scorable.badness (Score.unwrap S s)
-    ctorWeightArgs := fun s => Scorable.weightArgs (Score.unwrap S s)
     pruneStrategy := .usePrimary }
 
 instance : Inhabited ScorerBundle where
@@ -279,7 +350,6 @@ instance : Inhabited ScorerBundle where
     penaltyScore := default
     worstScore := default
     scoreBadness := fun _ => 0.0
-    ctorWeightArgs := fun _ => #[1, 0, 0, 0]
     pruneStrategy := .noPruning
   }
 
@@ -703,7 +773,6 @@ instance : Scorable GradedUniformDensityScore where
         | .Unlikely => 0.66 | .Desperate => 1.0
       let severity := max speedVal likelVal * 0.7 + min speedVal likelVal * 0.3
       min 1.0 (0.75 + severity * 0.25 + varDepPenalty)
-  weightArgs s := #[s.density.toNat, s.checkSpeed.toNat, s.passLikelihood.toNat, s.varDeps]
 
 private def estimateTypeCtorCount (indName : Name) : MetaM (Option Nat) := do
   let env ← getEnv
@@ -1035,7 +1104,6 @@ instance : Scorable InputAwareGradedScore where
         | .Unlikely => 0.66 | .Desperate => 1.0
       let severity := max speedVal likelVal * 0.7 + min speedVal likelVal * 0.3
       min 1.0 (0.75 + severity * 0.25 + varDepPenalty + inputPenalty)
-  weightArgs s := #[s.density.toNat, s.checkSpeed.toNat, s.passLikelihood.toNat, s.varDeps]
 
 private def countInputCheckDeps (inputVars : Std.HashSet Name) (src : Source) : Nat :=
   let allVars := match src with
