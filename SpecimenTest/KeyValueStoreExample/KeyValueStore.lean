@@ -83,7 +83,7 @@ Notes about the way these are expressed:
 /-- `AddKV k v s1 s2` holds if state `s1` is the same as `s2` where the latter has the pair `(k,v)`
      added at version .zero, bumping the versions of prior pairs with `k`. -/
 inductive AddKV : String → String → List (String × String) → List (String × String) → Prop where
-| ANil : ∀ k v s, k = k → s = s → v = v → AddKV k v s ((k, v)::s)
+| ANil : ∀ k v s, AddKV k v s ((k, v)::s)
 
 /-- Helper function used to improve the generator's success rate. -/
 def ver (k1 : String) (k2 : String) (n : Nat) : Nat :=
@@ -229,5 +229,79 @@ inductive EvalApiCalls : Nat × List (Nat × List (String × String)) → List (
     EvalApiCalls s2 (crs, s3) →
     EvalApiCalls s1 (((c, r)::crs), s3)
 
+
+end KeyValueStore
+
+namespace KeyValueStore
+
+------------------------------------------------------------------------
+-- Part Four: Success-only generation via wishlist + setup synthesis
+------------------------------------------------------------------------
+
+/-- A "wishlist" op: the state-level operation we want to perform, without
+    worrying about whether its preconditions are met. -/
+inductive WishOp where
+| Get (k : String)
+| GetVer (k : String) (n : Nat)
+| KeyExists (k : String)
+| Copy (src dst : String)
+| Append (k : String) (v : String)
+| Delete (k : String)
+deriving Repr, DecidableEq, Arbitrary
+
+/-- `KeyNeeded op k` holds if executing `op` successfully requires key `k` to exist. -/
+def WishOp.neededKey : WishOp → String
+  | .Get k | .GetVer k _ | .KeyExists k | .Copy k _ | .Append k _ | .Delete k => k
+
+/-- `SetupForOp s op sets s'` holds if `sets` is a (possibly empty) list of Set calls
+    that, when applied to state `s`, produce state `s'` where `op` can succeed.
+    Concretely: if the needed key is already present, `sets = []` and `s' = s`;
+    otherwise `sets = [(Set k v)]` for some arbitrary `v`, and `s' = (k,v)::s`. -/
+inductive SetupForOp : List (String × String) → WishOp → List (StateAPICall × StateResult) → List (String × String) → Prop where
+| AlreadyPresent : forall s op k v,
+    op.neededKey = k →
+    LookupKV s (.Ok, k, .zero, v) →
+    SetupForOp s op [] s
+| NeedsSet : forall s op k v,
+    op.neededKey = k →
+    LookupKV s (.NoSuchKeyFailure, k, .zero, v) →
+    SetupForOp s op [(.Set k v, .Ok)] ((k, v) :: s)
+
+/-- Execute a wishlist op on a state that already satisfies its preconditions.
+    Returns the call, the result (always a success), and the new state. -/
+inductive ExecWishOp : List (String × String) → WishOp → StateAPICall × StateResult × List (String × String) → Prop where
+| ExGet : forall s k v,
+    LookupKV s (.Ok, k, .zero, v) →
+    ExecWishOp s (.Get k) (.Get k none, .Result v, s)
+| ExGetVer : forall s k n v,
+    LookupKV s (.Ok, k, n, v) →
+    ExecWishOp s (.GetVer k n) (.Get k (some n), .Result v, s)
+| ExKeyExists : forall s k v,
+    LookupKV s (.Ok, k, .zero, v) →
+    ExecWishOp s (.KeyExists k) (.KeyExists k, .Ok, s)
+| ExCopy : forall s s' k1 k2 v,
+    LookupKV s (.Ok, k1, .zero, v) →
+    AddKV k2 v s s' →
+    ExecWishOp s (.Copy k1 k2) (.Copy k1 k2, .Ok, s')
+| ExAppend : forall s s' k v1 v2 v3,
+    LookupKV s (.Ok, k, .zero, v1) →
+    v3 = v1 ++ v2 →
+    AddKV k v3 s s' →
+    ExecWishOp s (.Append k v2) (.Append k v3, .Ok, s')
+| ExDelete : forall s s' k v,
+    LookupKV s (.Ok, k, .zero, v) →
+    RemoveKV k s s' →
+    ExecWishOp s (.Delete k) (.Delete k, .Ok, s')
+
+/-- Generate a sequence of successful state operations from a wishlist.
+    For each wish op, first synthesizes any needed Set calls, then executes the op.
+    Threads the bucket state through. -/
+inductive ExecWishList : List (String × String) → List WishOp → List (StateAPICall × StateResult) × List (String × String) → Prop where
+| WNil : forall s, ExecWishList s [] ([], s)
+| WCons : forall s s' s'' op ops setupCalls call rest,
+    SetupForOp s op setupCalls s' →
+    ExecWishOp s' op call →
+    ExecWishList call.2.2 ops (rest, s'') →
+    ExecWishList s (op :: ops) (setupCalls ++ [(call.1, call.2.1)] ++ rest, s'')
 
 end KeyValueStore
