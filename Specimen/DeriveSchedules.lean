@@ -801,6 +801,7 @@ private def enumSchedulesChunked {α v} [BEq v] [Hashable v] (vars : List v) (ma
           l.any (fun v => envSet.contains v && !matchableSet.contains v)
           || l.all matchableSet.contains)
 
+      let _ := 0 -- placeholder for trace
       let (out,bound) ← subsetsAndComplements all_unbound_output_indices
       if out.length > 1 || (out.isEmpty && !bound.isEmpty) then .lnil else
 
@@ -1406,15 +1407,19 @@ partial def searchBestScheduleM (ctorName : Name) (vars : List TypedVar)
           unless m.contains depKey do deriveDep depKey
     -- Score
     let memoState ← memo.get
-    let stepScores ← schedSteps.mapM fun step => bundle.stepScorer key memoState inputVarSet step
-    let score := bundle.scheduleScorer stepScores
+    let score ← match bundle.wholeScheduleScorer with
+      | some wss => wss key memoState inputVarSet schedSteps
+      | none =>
+        let stepScores ← schedSteps.mapM fun step => bundle.stepScorer key memoState inputVarSet step
+        pure (bundle.scheduleScorer stepScores)
     -- Dominance check: only at leaves (complete component orderings)
     if ordering.length == sccSize then
       let envKey := compEnv.eraseDups |>.mergeSort (fun a b => compare a b |>.isLE)
       let envDom ← envDominanceRef.get
       match envDom[envKey]? with
       | some prevBest =>
-        if bundle.isBetter prevBest score then return bundle.worstScore
+        if bundle.isBetter prevBest score then
+          return bundle.worstScore
       | none => pure ()
       envDominanceRef.modify fun m =>
         match m[envKey]? with

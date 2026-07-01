@@ -202,6 +202,9 @@ abbrev ResolvedLeafAggregator := List (Name × Score) → Score
 /-- A resolved inductive aggregator. -/
 abbrev ResolvedInductiveAggregator := List Score → Score
 
+/-- A resolved whole-schedule scorer that scores an entire schedule at once (for state-tracking scorers). -/
+abbrev ResolvedWholeScheduleScorer := SpecKey → Std.HashMap SpecKey MemoEntry → Std.HashSet Name → List ScheduleStep → MetaM Score
+
 ----------------------------------------------
 -- Default score type
 ----------------------------------------------
@@ -314,6 +317,10 @@ structure ScorerBundle where
   /-- Map score to [0,1] for HSL color display (0 = best, 1 = worst). -/
   scoreBadness : Score → Float
   pruneStrategy : PruneStrategy := .usePrimary
+  /-- Optional whole-schedule scorer. When present, `searchBestScheduleM` uses
+      this instead of `stepScorer` + `scheduleScorer`. Allows tracking state across
+      steps (e.g., variable source quality). -/
+  wholeScheduleScorer : Option ResolvedWholeScheduleScorer := none
 
 /-- Build a complete ScorerBundle from typed scorers. -/
 def mkScorerBundle [Inhabited S] [TypeName S] [Repr S] [Scorable S]
