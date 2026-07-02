@@ -16,6 +16,7 @@ set_option guard_msgs.diff true
 set_option specimen.autoDeriveDeps true
 set_option specimen.multiOutput true
 
+#guard_msgs(drop info) in
 derive_mutual
   (fun G t => ∃ (e : term), typing G e t)
 

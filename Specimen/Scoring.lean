@@ -59,8 +59,9 @@ def defaultCtorWeight (_scoreBadness : Float) (isRec : Bool) (size : Nat) (numBa
     else max 1 (numBase * size / max 1 numRec)
   else 1
 
-/-- QuickChick-style weight: base=1, recursive=size+1. Ignores score. -/
-def quickchickCtorWeight (_scoreBadness : Float) (isRec : Bool) (size : Nat) (_numBase _numRec : Nat) : Nat :=
+/-- Size-proportional weight: base=1, recursive=size+1. Ignores score.
+    (This is the strategy used by QuickChick.) -/
+def sizeProportionalCtorWeight (_scoreBadness : Float) (isRec : Bool) (size : Nat) (_numBase _numRec : Nat) : Nat :=
   if isRec then size + 1 else 1
 
 /-- Flat weight: every constructor gets weight 1. Ignores everything. -/
@@ -111,7 +112,7 @@ def registerWeightFn (name : Name) (fn : CtorWeightFn) (leanName : Name) : IO Un
   weightFnRegistry.modify (·.push { name, fn, leanName })
 
 initialize registerWeightFn `Scoring.defaultCtorWeight defaultCtorWeight ``defaultCtorWeight
-initialize registerWeightFn `Scoring.quickchickCtorWeight quickchickCtorWeight ``quickchickCtorWeight
+initialize registerWeightFn `Scoring.sizeProportionalCtorWeight sizeProportionalCtorWeight ``sizeProportionalCtorWeight
 initialize registerWeightFn `Scoring.flatCtorWeight flatCtorWeight ``flatCtorWeight
 initialize registerWeightFn `Scoring.scoreAwareCtorWeight scoreAwareCtorWeight ``scoreAwareCtorWeight
 initialize registerWeightFn `Scoring.balancedCtorWeight balancedCtorWeight ``balancedCtorWeight
@@ -149,7 +150,25 @@ def getActiveWeightFn : CoreM WeightFnEntry := do
     - `bestOf`: pick the best from a list (for leaf: best covering ctor)
     - `uncoveredPenalty`: score assigned to a leaf with no covering constructor
     - `worst`: initial upper bound for branch-and-bound (must lose to any real score)
-    - `badness`: map to [0,1] for HSL color (0 = green/good, 1 = red/bad) -/
+    - `badness`: map to [0,1] for HSL color (0 = green/good, 1 = red/bad)
+
+    **Required invariants for correct branch-and-bound pruning:**
+
+    1. **Monotonicity of `combine`**: for all `a b`, `¬ isBetter (combine a b) a`.
+       Extending a partial schedule with more steps can never improve its score.
+       This ensures pruning an intermediate node (whose children can only be worse)
+       never discards the true optimum.
+    2. **Transitivity of `isBetter`**: if `isBetter a b` and `isBetter b c` then
+       `isBetter a c`. Required for the bound to propagate correctly.
+    3. **`worst` is a valid initial bound**: for all reachable `s`, `¬ isBetter worst s`.
+       No real schedule should be pruned by the initial bound.
+    4. **`empty` is identity**: `combine empty s = s` and `combine s empty = s`.
+    5. **`badness` is monotone with `isBetter`**: if `isBetter a b` then
+       `badness a ≤ badness b`. Ensures weight functions don't reward worse schedules.
+
+    Invariant (1) is the critical soundness condition. Violations cause the search to
+    prune subtrees that contain better-scoring leaves, silently dropping valid schedules.
+    The current instances have not been formally verified against these invariants. -/
 class Scorable (S : Type) where
   empty : S
   combine : S → S → S
@@ -1162,6 +1181,164 @@ def inputAwareInductiveAggregator : InductiveAggregator InputAwareGradedScore :=
 
 initialize registerScoringBundle (mkScorerBundle `Scoring.InputAwareGradedScore
   inputAwareStepScorer inputAwareScheduleScorer inputAwareLeafAggregator inputAwareInductiveAggregator)
+
+----------------------------------------------
+-- Built-in: SourceQualityScore
+-- Tracks per-variable source quality across steps.
+-- Variables produced by SuchThat carry the dep's density as quality;
+-- variables produced by Unconstrained (InstVars) carry maximum penalty.
+-- A Check's penalty is the sum of its non-input args' source penalties,
+-- scaled by the relation's arity.
+----------------------------------------------
+
+inductive VarQuality
+  | Input       -- fixed input variable
+  | Purposeful  -- produced by SuchThat with a Total/Partial dep
+  | Constrained -- produced by SuchThat with a Backtracking/Checking dep
+  | Arbitrary   -- produced by Unconstrained (InstVars)
+  deriving Repr, BEq, Inhabited
+
+namespace VarQuality
+def toNat : VarQuality → Nat
+  | .Input => 0
+  | .Purposeful => 1
+  | .Constrained => 2
+  | .Arbitrary => 3
+
+def penalty : VarQuality → Nat
+  | .Input => 0
+  | .Purposeful => 0
+  | .Constrained => 1
+  | .Arbitrary => 3
+end VarQuality
+
+structure SourceQualityScore where
+  density        : Density := .Total
+  checkPenalty   : Nat := 0
+  checkSpeed     : CheckSpeed := .NotACheck
+  varDeps        : Nat := 0
+  deriving Repr, BEq, Inhabited
+
+deriving instance TypeName for SourceQualityScore
+
+instance : Ord SourceQualityScore where
+  compare a b :=
+    match compare a.density.toNat b.density.toNat with
+    | .eq => match compare a.checkPenalty b.checkPenalty with
+      | .eq => match compare a.checkSpeed.toNat b.checkSpeed.toNat with
+        | .eq => compare a.varDeps b.varDeps
+        | r => r
+      | r => r
+    | r => r
+
+instance : LT SourceQualityScore := ltOfOrd
+
+instance : Scorable SourceQualityScore where
+  empty := {}
+  combine a b :=
+    { density := Density.max a.density b.density
+      checkPenalty := a.checkPenalty + b.checkPenalty
+      checkSpeed := CheckSpeed.max a.checkSpeed b.checkSpeed
+      varDeps := a.varDeps + b.varDeps }
+  isBetter a b := a < b
+  bestOf scores := scores.foldl (fun acc s => if s < acc then s else acc) (scores.headD {})
+  uncoveredPenalty := { density := .Checking, checkPenalty := 100, checkSpeed := .Recursive, varDeps := 1000 }
+  worst := { density := .Checking, checkPenalty := 100, checkSpeed := .Recursive, varDeps := 1000 }
+  badness s :=
+    let d := s.density.toNat.toFloat / 3.0
+    let cp := min 1.0 (s.checkPenalty.toFloat / 20.0)
+    let c := s.checkSpeed.toNat.toFloat / 4.0
+    (d * 0.3 + cp * 0.4 + c * 0.2 + min 0.1 (s.varDeps.toFloat * 0.01))
+
+def sourceQualityWholeScheduleScorer : ResolvedWholeScheduleScorer := fun key memo inputVars steps => do
+  let mut varQualities : Std.HashMap Name VarQuality := {}
+  for v in inputVars do
+    varQualities := varQualities.insert v .Input
+  let mut score : SourceQualityScore := {}
+  for step in steps do
+    match step with
+    | .Unconstrained name _src _prodSort =>
+      varQualities := varQualities.insert name .Arbitrary
+      score := { score with density := Density.max score.density .Total }
+    | .SuchThat outputs src prodSort =>
+      let depDensity := match src with
+        | .Rec .. | .MutRec .. => Density.Partial
+        | .NonRec (indName, args) =>
+          let outputIdxs := outputs.filterMap fun (n, _) =>
+            args.findIdx? fun a => match a with | .Unknown v => v == n | _ => false
+          let depDeriveSort := match prodSort with
+            | .Enumerator => DeriveSort.Enumerator
+            | .Generator => DeriveSort.Generator
+          let depKey : SpecKey := { inductiveName := indName, outputIndices := outputIdxs, deriveSort := depDeriveSort }
+          if depKey == key then Density.Partial
+          else match memo[depKey]? with
+            | some (.done depSched) => (Score.unwrap SourceQualityScore depSched.score).density
+            | _ => Density.Partial
+      let quality := match depDensity with
+        | .Total | .Partial => VarQuality.Purposeful
+        | .Backtracking | .Checking => VarQuality.Constrained
+      for (name, _) in outputs do
+        varQualities := varQualities.insert name quality
+      score := { score with density := Density.max score.density depDensity }
+    | .Check src _polarity =>
+      let args := sourceArgs src
+      let allVars := args.flatMap varsInConstructorExpr
+      let arity := args.length
+      let mut penalty : Nat := 0
+      for v in allVars do
+        let q := varQualities[v]?.getD .Arbitrary
+        penalty := penalty + q.penalty
+      let scaledPenalty := penalty * arity
+      let varDeps := allVars.filter (!inputVars.contains ·) |>.length
+      let speed := classifyCheckSpeed memo key src varDeps
+      score := { score with
+        density := .Checking
+        checkPenalty := score.checkPenalty + scaledPenalty
+        checkSpeed := CheckSpeed.max score.checkSpeed speed
+        varDeps := score.varDeps + varDeps }
+    | .Match .. =>
+      score := { score with density := Density.max score.density .Backtracking }
+  return Score.wrap score
+
+def sourceQualityStepScorer : StepScorer SourceQualityScore := fun key memo inputVars step => do
+  match step with
+  | .Unconstrained .. => return { density := .Total }
+  | .Match .. => return { density := .Backtracking }
+  | .Check src _polarity =>
+    let varDeps := countGeneratedVarDeps inputVars src
+    let speed := classifyCheckSpeed memo key src varDeps
+    return { density := .Checking, checkSpeed := speed, varDeps := varDeps, checkPenalty := varDeps * (sourceArgs src).length }
+  | .SuchThat _outputs src prodSort =>
+    let depDensity := match src with
+      | .Rec .. | .MutRec .. => Density.Partial
+      | .NonRec (indName, args) =>
+        let outputIdxs := _outputs.filterMap fun (n, _) =>
+          args.findIdx? fun a => match a with | .Unknown v => v == n | _ => false
+        let depDeriveSort := match prodSort with
+          | .Enumerator => DeriveSort.Enumerator
+          | .Generator => DeriveSort.Generator
+        let depKey : SpecKey := { inductiveName := indName, outputIndices := outputIdxs, deriveSort := depDeriveSort }
+        if depKey == key then Density.Partial
+        else match memo[depKey]? with
+          | some (.done depSched) => (Score.unwrap SourceQualityScore depSched.score).density
+          | _ => Density.Partial
+    return { density := depDensity }
+
+def sourceQualityScheduleScorer : ScheduleScorer SourceQualityScore := fun stepScores =>
+  stepScores.foldl Scorable.combine Scorable.empty
+
+def sourceQualityLeafAggregator : LeafAggregator SourceQualityScore := fun ctors =>
+  match ctors with
+  | [] => Scorable.uncoveredPenalty
+  | _ => Scorable.bestOf (ctors.map Prod.snd)
+
+def sourceQualityInductiveAggregator : InductiveAggregator SourceQualityScore := fun leafScores =>
+  leafScores.foldl Scorable.combine Scorable.empty
+
+initialize do
+  let base := mkScorerBundle `Scoring.SourceQualityScore
+    sourceQualityStepScorer sourceQualityScheduleScorer sourceQualityLeafAggregator sourceQualityInductiveAggregator
+  registerScoringBundle { base with wholeScheduleScorer := some sourceQualityWholeScheduleScorer }
 
 
 end Scoring

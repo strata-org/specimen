@@ -8,6 +8,7 @@ import SpecimenTest.DeriveEnumSuchThat.DerivePermutationEnumerator
 set_option specimen.autoDeriveDeps true
 set_option specimen.multiOutput true
 
+#guard_msgs(drop info) in
 derive_mutual checker
   (fun l l' => Permutation l l')
 

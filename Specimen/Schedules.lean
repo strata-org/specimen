@@ -620,7 +620,14 @@ def scheduleUsesMutualCall (steps : List ScheduleStep) : Bool :=
 /-- Count how many size-consuming calls appear in a constructor's schedule steps.
     Includes self-recursive, mutual-recursive, AND non-recursive calls to the same
     inductive (any mode), since all produce values of the same type and should share
-    the size budget. Used for Haskell-style budget splitting: each gets size/count. -/
+    the size budget. Used for Haskell QuickCheck-style budget splitting: each child
+    gets `size / count`. See the "Generating Recursive Data Types" section of the
+    QuickCheck manual (www.cse.chalmers.se/~rjmh/QuickCheck/manual_body.html), where a
+    binary tree generator passes `n \`div\` 2` to each child so that size bounds the total
+    node count. We generalize beyond direct recursion: mutually recursive calls and
+    non-recursive calls to the same inductive (with a different mode) also consume the
+    budget, since they still use fuel to construct the target output rather than an
+    independent dependency. -/
 def countSizeConsumingCalls (targetInductive : Name) (steps : List ScheduleStep) : Nat :=
   let isSameInductive (src : Source) : Bool :=
     match src with

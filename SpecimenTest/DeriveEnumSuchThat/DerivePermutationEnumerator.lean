@@ -7,6 +7,7 @@ import SpecimenTest.CommonDefinitions.Permutation
 set_option specimen.autoDeriveDeps true
 set_option specimen.multiOutput true
 
+#guard_msgs(drop info) in
 derive_mutual enumerator
   (∃ l l', Permutation l' l)
 

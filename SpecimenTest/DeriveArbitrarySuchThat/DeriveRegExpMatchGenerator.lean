@@ -64,6 +64,7 @@ def r0 : RegExp :=
 set_option specimen.autoDeriveDeps true
 set_option specimen.multiOutput true
 
+#guard_msgs(drop info) in
 derive_mutual
   (fun re => ∃ (s : List Nat), ExpMatch s re)
 

@@ -12,6 +12,7 @@ import SpecimenTest.DeriveEnum.DeriveSTLCTermTypeEnumerators
 set_option specimen.autoDeriveDeps true
 set_option specimen.multiOutput true
 
+#guard_msgs(drop info) in
 derive_mutual enumerator
   (fun Γ τ => ∃ (e : term), typing Γ e τ)
 

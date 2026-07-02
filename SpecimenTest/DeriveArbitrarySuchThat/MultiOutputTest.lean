@@ -26,7 +26,5 @@ derive_generator (fun n => ∃ a b, Split n a b)
 #guard_msgs(drop info) in
 #check (inferInstance : ArbitrarySizedSuchThat (Nat × Nat) (fun (a, b) => Split 5 a b))
 
-set_option trace.plausible.deriving.results true
-
 #guard_msgs(drop info) in
 derive_generator (∃ a n b, Split n a b)

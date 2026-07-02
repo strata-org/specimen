@@ -28,6 +28,7 @@ structure NatPair where
 inductive HasSum10 : NatPair → Prop where
   | mk : Sums x y 10 → HasSum10 ⟨x, y⟩
 
+#guard_msgs(drop info) in
 set_option specimen.autoDeriveDeps true in
 set_option specimen.multiOutput true in
 derive_mutual (∃ (self : _), HasSum10 self)

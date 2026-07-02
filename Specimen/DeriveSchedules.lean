@@ -1259,8 +1259,6 @@ def possibleSchedules (ctorName : Name) (vars : List TypedVar) (hypotheses : Lis
        schedule found.
     4. When scoring encounters a sub-relation dependency not yet derived,
        invoke `deriveDep` to derive it on demand (populates the memo).
-    5. Apply dominance pruning: if the same set of bound variables was reached
-       before with a better score, skip.
 
     **Legacy path**: when `memoRef` is unavailable (e.g. standalone
     `derive_checker`), the caller falls back to `possibleSchedules` which uses
@@ -1381,18 +1379,11 @@ partial def searchBestScheduleM (ctorName : Name) (vars : List TypedVar)
         remaining := to_be_satisfied'
     return (sched, currentEnv, currentEnvSet)
 
-  -- Dominance pruning: only at leaves (complete orderings for this SCC component).
-  -- The tree calls score on intermediates too (for branch-and-bound), but dominance
-  -- only compares complete schedules — matching the legacy path's semantics where
-  -- dominance compared finished SCC permutations against each other.
-  let envDominanceRef ← IO.mkRef ({} : Std.HashMap (List Name) Score)
-
   -- Helper: score an ordering via processChoice → ScheduleSteps → bundle.
   -- On-demand: derives unknown deps before scoring.
   let scoreComponentOrdering := fun (env : List Name) (envSet : Std.HashSet Name)
-      (ordering : List (HypothesisExpr × List (List Name)))
-      (sccSize : Nat) => do
-    let (compSched, compEnv, _) ← processOrdering ordering env envSet
+      (ordering : List (HypothesisExpr × List (List Name))) => do
+    let (compSched, _, _) ← processOrdering ordering env envSet
     let typedSteps := compSched.map (typePreScheduleStep nameTypeMap)
     let schedSteps ← (typedSteps.flatMapM (preScheduleStepToScheduleStep ctorName)).run scheduleEnv
     -- On-demand dep derivation
@@ -1412,19 +1403,6 @@ partial def searchBestScheduleM (ctorName : Name) (vars : List TypedVar)
       | none =>
         let stepScores ← schedSteps.mapM fun step => bundle.stepScorer key memoState inputVarSet step
         pure (bundle.scheduleScorer stepScores)
-    -- Dominance check: only at leaves (complete component orderings)
-    if ordering.length == sccSize then
-      let envKey := compEnv.eraseDups |>.mergeSort (fun a b => compare a b |>.isLE)
-      let envDom ← envDominanceRef.get
-      match envDom[envKey]? with
-      | some prevBest =>
-        if bundle.isBetter prevBest score then
-          return bundle.worstScore
-      | none => pure ()
-      envDominanceRef.modify fun m =>
-        match m[envKey]? with
-        | some prev => if bundle.isBetter score prev then m.insert envKey score else m
-        | none => m.insert envKey score
     return score
 
   -- 4. Process SCC components sequentially using minTreePruningM per component
@@ -1432,9 +1410,8 @@ partial def searchBestScheduleM (ctorName : Name) (vars : List TypedVar)
   let mut accEnv : List Name := fixedVars
   let mut accEnvSet : Std.HashSet Name := Std.HashSet.ofList fixedVars
 
-  for (sccGroup, tree) in componentTrees do
+  for (_sccGroup, tree) in componentTrees do
     if ← done.get then break
-    let sccSize := sccGroup.length
     -- Use minTreePruningM to find the best ordering for this component
     let componentDone ← IO.mkRef false
     let componentBestRef ← IO.mkRef (none : Option (List (PreScheduleStep HypothesisExpr Name) × List Name × Std.HashSet Name × Score))
@@ -1442,7 +1419,7 @@ partial def searchBestScheduleM (ctorName : Name) (vars : List TypedVar)
     let envSnapshot := accEnv
     let envSetSnapshot := accEnvSet
 
-    let _ ← SearchTree.minTreePruningM tree (scoreComponentOrdering envSnapshot envSetSnapshot · sccSize)
+    let _ ← SearchTree.minTreePruningM tree (scoreComponentOrdering envSnapshot envSetSnapshot)
       bundle.isBetter componentWorst componentDone
       fun (ordering, score) currentBest => do
         let c ← countRef.get

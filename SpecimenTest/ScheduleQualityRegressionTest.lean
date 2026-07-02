@@ -30,9 +30,13 @@ set_option match.ignoreUnusedAlts true
 
 -- Sections 1-4 previously snapshotted the aux_arb internal functions.
 -- With derive_mutual, instances use global defs instead. Verify instances exist:
+#guard_msgs(drop info) in
 #check (inferInstance : ArbitrarySizedSuchThat Nat (fun x => Between 0 x 10))
+#guard_msgs(drop info) in
 #check (inferInstance : ArbitrarySizedSuchThat BinaryTree (fun t => BST 0 10 t))
+#guard_msgs(drop info) in
 #check (inferInstance : ArbitrarySizedSuchThat term (fun e => typing [] e .Nat))
+#guard_msgs(drop info) in
 #check (inferInstance : ArbitrarySizedSuchThat (List Nat) (fun s => ExpMatch s (.Char 1)))
 
 -- ============================================================
@@ -72,9 +76,9 @@ fun fuel initSize size n_1 =>
 
 section GeneratorQuality
 
-private def treeDepth : BinaryTree → Nat
+private def treeNodeCount : BinaryTree → Nat
   | .Leaf => 0
-  | .Node _ l r => 1 + (treeDepth l) + (treeDepth r)
+  | .Node _ l r => 1 + (treeNodeCount l) + (treeNodeCount r)
 
 structure QualityStats where
   trials : Nat
@@ -220,7 +224,7 @@ derive_mutual (fun lo hi => ∃ t, BST_SourceQuality lo hi t)
 #guard_msgs(drop info) in
 #eval do
   let sample (gen : Nat → Gen BinaryTree) (name : String) : IO Unit := do
-    let stats ← sampleQuality gen treeDepth
+    let stats ← sampleQuality gen treeNodeCount
       (fun a b => toString (repr a) == toString (repr b)) 200 100
     IO.println (ppStats name stats)
     assertQuality name stats (minSuccessRate := 0.5) (minUniques := 10)
@@ -242,3 +246,8 @@ derive_mutual (fun lo hi => ∃ t, BST_SourceQuality lo hi t)
   sample instIB.arbitrarySizedST "  SourceQuality    "
 
 end StrategyComparison
+
+-- TODO: Strategy differentiation tests require module-local instances so that
+-- the same relation can be derived under multiple strategies and compared at
+-- runtime. Currently derive_mutual registers global instances, preventing A/B
+-- comparison in a single module. See GitHub issue for tracking.

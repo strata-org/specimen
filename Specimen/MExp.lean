@@ -193,7 +193,9 @@ partial def mexpToConstructorExpr (m : MExp) : Option ConstructorExpr :=
 
 /-- `MExp` representation of a recursive function call,
     where `f` is the function name, `fuelPrimeName` is the name for `fuel'`,
-    `sizeExpr` is the size budget passed to the recursive call, and `args` are the input arguments -/
+    `sizeExpr` is the size budget expression passed to the recursive call (an `MExp` rather
+    than a bare `Name` because it may be `size' / N` when the constructor has N size-consuming
+    calls — see `countSizeConsumingCalls`), and `args` are the input arguments -/
 def recCall (f : Name) (fuelPrimeName : Name) (sizeExpr : MExp) (args : List ConstructorExpr) : MExp :=
   .MApp .allowImplicit (.MId f) $
     [.MId fuelPrimeName, .MId `initSize, sizeExpr] ++ (constructorExprToMExp .allExplicit <$> args)
@@ -434,7 +436,11 @@ def scheduleStepToMExp (step : ScheduleStep) (defFuel : MExp) (k : MExp) (output
     let typedVars := List.map (nameAndConstructorExprToTypedVar) varsTys
     match prod with
     | Source.NonRec hypExpr => do
-      -- If the dep targets the same inductive, use split size; otherwise full budget
+      -- Same-inductive deps share the split budget: since fuel (not size) guarantees
+      -- termination, we can split size flexibly, and calls that construct the target
+      -- output (even non-recursively, e.g. a different mode of the same relation)
+      -- should share the budget rather than getting the full allocation meant for
+      -- independent dependencies.
       let fuel := if hypExpr.1 == targetInductive then sizeExpr else defFuel
       let producer ← constrainedProducer ps varsTys (hypothesisExprToMExp hypExpr) fuel
       pure $ .MBind monadSort producer typedVars k
@@ -445,7 +451,11 @@ def scheduleStepToMExp (step : ScheduleStep) (defFuel : MExp) (k : MExp) (output
     let checker :=
       match src with
       | Source.NonRec hypExpr =>
-        -- If the dep targets the same inductive, use split size; otherwise full budget
+        -- Same-inductive deps share the split budget: since fuel (not size) guarantees
+      -- termination, we can split size flexibly, and calls that construct the target
+      -- output (even non-recursively, e.g. a different mode of the same relation)
+      -- should share the budget rather than getting the full allocation meant for
+      -- independent dependencies.
         let fuel := if hypExpr.1 == targetInductive then sizeExpr else defFuel
         decOptChecker (hypothesisExprToMExp hypExpr) fuel
       | Source.Rec f args | Source.MutRec f args =>
