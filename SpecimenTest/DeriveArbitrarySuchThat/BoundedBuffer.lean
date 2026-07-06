@@ -94,25 +94,23 @@ def backwardOnlySizeOps : IO Unit := do
 -----
 
 -- Circular buffer implementation (mutable, using ST)
+-- When `buggy = true`, the buffer is allocated without the extra sentinel slot,
+-- causing head == tail ambiguity (empty vs full) and the overflow check is
+-- disabled, so puts silently overwrite.
 
 structure CircularBuffer where
   buf  : Array String
   head : Nat
   tail : Nat
 
-def mkCircularBuffer (capacity : Nat) : IO (ST.Ref IO.RealWorld CircularBuffer) :=
-  ST.mkRef { buf := Array.replicate (capacity + 1) "", head := 0, tail := 0 }
+def mkCircularBuffer (capacity : Nat) (buggy : Bool := false) : IO (ST.Ref IO.RealWorld CircularBuffer) :=
+  let slots := if buggy then capacity else capacity + 1
+  ST.mkRef { buf := Array.replicate slots "", head := 0, tail := 0 }
 
-def mkCircularBufferBuggy (capacity : Nat) : IO (ST.Ref IO.RealWorld CircularBuffer) :=
-  ST.mkRef { buf := Array.replicate capacity "", head := 0, tail := 0 }
-  -- This implementation is buggy because it creates ambiguity: When
-  -- head = tail, is the buffer empty or full?
-
-def put (cb : ST.Ref IO.RealWorld CircularBuffer) (v : String) : IO Unit := do
+def put (cb : ST.Ref IO.RealWorld CircularBuffer) (v : String) (buggy : Bool := false) : IO Unit := do
   let s ← cb.get
   let newTail := (s.tail + 1) % s.buf.size
-  -- COMMENT OUT THE NEXT TWO LINES TO SEE THE BUG (and the lines further down)
-  if newTail == s.head then
+  if !buggy && newTail == s.head then
     throw <| IO.userError "put: buffer full"
   let buf := s.buf.set! s.tail v
   cb.set { s with buf, tail := newTail }
@@ -129,11 +127,11 @@ def size (cb : ST.Ref IO.RealWorld CircularBuffer) : IO Nat := do
 
 -- Differentially test the mutable implementation against the specification
 
-def executeTrace (cb : ST.Ref IO.RealWorld CircularBuffer) : List BBAPI → IO Unit
+def executeTrace (cb : ST.Ref IO.RealWorld CircularBuffer) (buggy : Bool := false) : List BBAPI → IO Unit
   | [] => return ()
   | op :: ops => do
     match op with
-    | .Put v => put cb v
+    | .Put v => put cb v buggy
     | .Get expected =>
       let actual ← get cb
       if actual != expected then
@@ -142,19 +140,112 @@ def executeTrace (cb : ST.Ref IO.RealWorld CircularBuffer) : List BBAPI → IO U
       let actual ← size cb
       if actual != expected then
         throw <| IO.userError s!"Size mismatch: expected {expected}, got {actual}"
-    executeTrace cb ops
+    executeTrace cb buggy ops
 
-def differentialTest : IO Unit := do
+def differentialTest (buggy : Bool := false) : IO Unit := do
   for i in List.range 100 do
     let (trace, _) ← Gen.run
       (ArbitrarySizedSuchThat.arbitrarySizedST
         (fun (t, s) => WF_BBTrace ([], 3) t s) 10) (i + 5)
-    let cb ← mkCircularBuffer 3
-    -- REPLACE THE ABOVE WITH THE LINE BELOW TO INTRODUCE A BUG
-    -- let cb ← mkCircularBufferBuggy 3
-    executeTrace cb trace
+    let cb ← mkCircularBuffer 3 buggy
+    executeTrace cb buggy trace
 
+-- Correct implementation passes
 #guard_msgs in
 #eval differentialTest
 
+-- Buggy implementation is detected
+/--error: Size mismatch: expected 3, got 0-/
+#guard_msgs(error, drop info) in
+#eval differentialTest (buggy := true)
+
 end BoundedBuffer
+
+/-
+## Next steps: Testing error handling (non-well-formed traces)
+
+The current tests confirm that well-formed traces (generated via `WF_BBTrace`)
+execute correctly against the circular buffer implementation. The next goal is
+to also confirm that *non*-well-formed traces produce errors — i.e., that the
+imperative implementation correctly rejects invalid operations (putting into a
+full buffer, getting from an empty one).
+
+### The challenge
+
+`BBAPI` currently embeds expected outputs (`Get s_out`, `Size n_out`) directly
+in the operation. This conflates two concerns:
+  1. What *command* the caller issues (Put a value, Get, query Size)
+  2. What *result* the system should produce (the dequeued value, the count)
+
+For well-formed trace testing this is fine: the generator produces commands with
+their correct expected results baked in. But for error testing we need to
+generate *arbitrary* command sequences — including ones that violate
+preconditions — without needing to know the correct output in advance.
+
+### Proposed refactoring
+
+Separate the command from the observation:
+
+```
+inductive BBCmd where
+| Put (v : String)
+| Get
+| Size
+
+inductive BBResult where
+| PutOk
+| GetOk (v : String)
+| SizeOk (n : Nat)
+| Error (msg : String)
+```
+
+The specification (`BBStep`) would relate a state and a `BBCmd` to a
+`BBResult` and a next state. A trace is then `List BBCmd`, and executing it
+against the imperative implementation produces a `List BBResult`.
+
+### Testing strategy
+
+1. **Generate arbitrary `List BBCmd`**: Random sequences of Put/Get/Size with
+   random arguments, without regard to well-formedness. Use `deriving Arbitrary`
+   for `BBCmd`.
+
+2. **Execute against both models in lockstep**: For each command in the trace,
+   run it against:
+   - The abstract model (list-based state), which determines whether the
+     operation is valid and what the correct result is.
+   - The imperative circular buffer.
+
+3. **Compare outcomes at each step**:
+   - If the abstract model says the command is valid: the imperative code
+     should succeed with the same result.
+   - If the abstract model says the command is invalid (Get on empty, Put on
+     full): the imperative code should raise an error.
+   - If the imperative code raises an error when the abstract model says it
+     should succeed (or vice versa): test failure.
+
+4. **Derive a checker**: Use `derive_checker` for `BBStep` so we can
+   efficiently validate whether a given (state, command, result, next-state)
+   tuple is a valid transition. This would let us check well-formedness of
+   prefixes without maintaining the abstract state by hand — though for this
+   test the manual abstract-state approach may be simpler.
+
+### Open questions
+
+- Should `Size` ever be "invalid"? In the current spec it always succeeds
+  (querying size has no precondition beyond `WithinCapacity`). If we keep
+  `WithinCapacity` on `SizeOp`, then Size on a state that somehow violates
+  capacity is invalid — but that can't happen if we start from a valid state
+  and only apply valid operations. So Size errors would only arise if the
+  implementation itself corrupted state.
+
+- Do we need to test Get with a *wrong* expected value, or just Get on an
+  empty buffer? The former tests output correctness (already covered by
+  `executeTrace`), the latter tests precondition enforcement. With the
+  `BBCmd`/`BBResult` split, this distinction becomes natural.
+
+- The `WithinCapacity` guard on `GetOp` and `SizeOp` was added to constrain
+  the backward generator. For error testing it means the spec considers *any*
+  operation on an over-capacity state invalid, even though that state can't
+  arise in practice. We may want to distinguish "unreachable invalid" from
+  "reachable invalid" (Get on empty, Put on full).
+-/
