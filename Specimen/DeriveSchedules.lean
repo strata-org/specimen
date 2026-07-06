@@ -801,7 +801,6 @@ private def enumSchedulesChunked {α v} [BEq v] [Hashable v] (vars : List v) (ma
           l.any (fun v => envSet.contains v && !matchableSet.contains v)
           || l.all matchableSet.contains)
 
-      let _ := 0 -- placeholder for trace
       let (out,bound) ← subsetsAndComplements all_unbound_output_indices
       if out.length > 1 || (out.isEmpty && !bound.isEmpty) then .lnil else
 
