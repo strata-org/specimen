@@ -203,9 +203,6 @@ def myCtorWeight (ctorName : Name) (outputIndices : List Nat) (deriveSort : Deri
     else max 1 (size / (max 1 numRec * 4))
   else 10
 
--- Register it (this runs at initialization time)
-initialize Scoring.registerWeightFn `myCtorWeight myCtorWeight ``myCtorWeight
-
 -- Use it for a specific derivation
 set_option specimen.weightFn "myCtorWeight" in
 derive_mutual
@@ -245,8 +242,6 @@ def myModifier (baseWeight : Nat) (ctorName : Name) (_outputIndices : List Nat)
   if ctorName == ``MyType.PreferredCtor then baseWeight * 3
   else if ctorName == ``MyType.ExpensiveCtor then baseWeight / 2
   else baseWeight
-
-initialize Scoring.registerWeightModifier `myModifier myModifier ``myModifier
 
 set_option specimen.weightModifier "myModifier" in
 derive_mutual
