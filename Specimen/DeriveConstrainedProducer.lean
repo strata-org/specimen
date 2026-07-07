@@ -1154,8 +1154,6 @@ def computeSpecConstraints (indSched : InductiveSchedule)
         if let some sibCs := sibs[sibKey]? then
           for c in sibCs do constraints := constraints.insert c
     | _ => pure ()
-  if !constraints.isEmpty then
-    constraints := constraints.insert ``DecidableEq
   return constraints.toArray
 
 /-- Bottom-up constraint propagation across all specs in a derive_mutual call.

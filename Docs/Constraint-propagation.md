@@ -1,69 +1,87 @@
 # Constraint Propagation for Polymorphic Dependencies
 
-## Problem
+## Overview
 
-When Specimen generates code for a polymorphic type like `GenList (α : Type) [Arbitrary α]`, the generated definition needs the right typeclass constraints on its type parameters. Previously, constraints were hardcoded per derive-sort: generators always got `[Arbitrary α]`, checkers always got `[Enum α, DecidableEq α]`. This caused two issues:
+When `derive_mutual` generates code for a spec involving polymorphic types, the generated definition needs typeclass constraints on its type parameters (e.g. `[Arbitrary α]`, `[DecidableEq α]`). Constraint propagation determines exactly which constraints each spec requires by walking the dependency graph bottom-up.
 
-1. **Unused constraints** — generators got `[Enum α]` they didn't need.
-2. **Missing constraints** — when a generator depends on a checker that shares a type parameter, the generator's hardcoded constraints didn't include `[Enum α]`, so the checker call inside the generated code couldn't find its required instance.
+## Architecture
 
-## Solution: Bottom-Up Propagation
+The system has four layers:
 
-Replace hardcoded constraints with a bottom-up walk through the dependency graph that discovers what each spec *actually needs*.
+1. **`extractTypeParamRefs`** — structural: which type params does a `ConstructorExpr` reference?
+2. **`synthExternalConstraints`** — semantic: for an external dep, what constraints does its instance need?
+3. **`computeSpecConstraints`** — per-spec: walk all schedule steps and collect constraints
+4. **`propagateConstraints`** — global: orchestrate across all components in topological order
 
-### Algorithm
+### Why bottom-up?
 
-After SCC decomposition gives us components in topological order (leaves first):
+Specs are organized into SCCs (strongly connected components) in topological order, leaves first. By the time we process a spec, all its non-mutual dependencies already have their constraints computed. This avoids re-derivation and gives us a single-pass algorithm for acyclic deps.
 
-```
-for each component (in topo order):
-  if singleton:
-    compute constraints by walking schedule steps
-  if mutual block:
-    fixed-point iteration until stable
-```
+### Why fixed-point for mutual blocks?
 
-For each schedule step, we determine constraints by its kind:
+In a mutual group, spec A may depend on spec B and vice versa. Neither can be computed first. We initialize all constraints to `∅` and iterate: recompute each spec's constraints using siblings' current sets, until no set changes. This converges because constraints can only grow (we never remove) and the universe of possible constraints is finite.
 
-| Step kind | Source of constraints |
-|-----------|---------------------|
-| `Unconstrained (NonRec)` on a bare type param | Own-sort class directly (`Arbitrary`/`Enum`) |
-| `Unconstrained (NonRec)` on a compound type | Synthesis: try `synth [TC (Foo α)]`, read back what the instance needs |
-| `Check (NonRec)` for Eq/Ne | `DecidableEq` (special case) |
-| `Check (NonRec)` for other relations | Look up internal dep map, else synthesize `DecOpt` |
-| `SuchThat (NonRec)` | Look up internal dep map, else synthesize `ArbitrarySizedSuchThat`/`EnumSizedSuchThat` |
-| `Rec` / self-recursive | No-op (constraints come from non-recursive steps) |
-| `MutRec` sibling | Look up sibling's current constraints (fixed-point) |
+## Per-Step Constraint Rules
 
-### Key design decisions
+`computeSpecConstraints` matches on each schedule step:
 
-**Why synthesis for external deps?** When a spec depends on something already in the environment (e.g. `Arbitrary (List α)`), we can't inspect its schedule—it doesn't have one. Instead we ask Lean's instance synthesis to find it, then read the instance's type signature to discover what constraints it required (e.g. `[Arbitrary α]`).
+### Unconstrained generation (`Unconstrained _ (NonRec (indName, args)) ps`)
 
-**Why fixed-point for mutual blocks?** In a mutual group, spec A might depend on spec B and vice versa. We iterate: compute A's constraints assuming B's current set, then B's assuming A's, repeat until neither changes.
+Three cases:
+- **Bare type param** (e.g. generating `α` directly): add the own-sort class (`Arbitrary` for generators, `Enum` for enumerators).
+- **Compound type referencing type params** (e.g. `List α`): use `synthExternalConstraints` to discover transitive requirements. Generating `List α` requires `Arbitrary (List α)`, whose instance in turn requires `[Arbitrary α]`.
+- **No type param involvement**: no constraint needed.
 
-**Why always add `DecidableEq`?** If a spec has *any* constraints, it almost certainly needs `DecidableEq` too (for equality checks in the generated code). Rather than track this precisely, we add it unconditionally when the constraint set is non-empty.
+### Checks (`Check (NonRec (indName, args)) _`)
 
-### Implementation
+- **Eq/Ne**: special-cased to `DecidableEq`. These are the only relations where we know the constraint statically — equality on a type param always needs decidable equality.
+- **Other relations**: three-tier lookup: internal dep map → sibling map (mutual) → synthesis of `DecOpt` on the relation (external). If synthesis fails entirely, conservatively fall back to `{Enum, DecidableEq}` — this only triggers for external deps where we can't determine the actual requirements.
 
-Core functions in `Specimen/DeriveConstrainedProducer.lean`:
+### SuchThat deps (`SuchThat _ (NonRec (indName, args)) ps`)
 
-- `extractTypeParamRefs` — walks a `ConstructorExpr` tree to find which type params it references
-- `synthExternalConstraints` — synthesizes an instance for a compound type and reads back the constraints from the instance's type signature
-- `computeSpecConstraints` — computes constraints for a single spec given the already-computed dep map
-- `propagateConstraints` — orchestrates the full bottom-up walk across all components
+Same three-tier lookup: internal map → sibling map → synthesis of `ArbitrarySizedSuchThat`/`EnumSizedSuchThat`.
 
-The computed constraints are passed to `compileInductiveSchedule` which emits them as instance binders in the generated definition.
+### Recursive and mutual-recursive steps
+
+- **Self-recursive** (`Rec`): no-op. Self-recursion doesn't introduce new constraints — whatever the spec needs is already captured by its non-recursive steps.
+- **Mutual-recursive** (`MutRec sibName`): look up the sibling's current constraint set from the fixed-point iteration map.
+
+### No blanket additions
+
+Constraints are collected strictly from what the schedule steps demand. If a generator only generates `List α` unconstrainedly, it gets `[Arbitrary α]` — it does NOT get `DecidableEq` unless some step actually needs it (e.g. an Eq check, or a checker dep that transitively requires it). This avoids polluting generated signatures with unnecessary constraints.
+
+## External Constraint Discovery (`synthExternalConstraints`)
+
+For deps not in the current `derive_mutual` call (already in the environment), we can't inspect their schedules. Instead:
+
+1. Build the fully-applied type expression (e.g. `List α`) with fresh metavariables for non-Sort params and local `Sort`-typed fvars with `[Enum], [Arbitrary], [DecidableEq]` instances available in context.
+2. Ask Lean to synthesize the target class (e.g. `Arbitrary (List α)`).
+3. On success, inspect the synthesized instance's **declaration type** — walk its forall binders and collect `instImplicit` domains. These are the constraints the instance needs (e.g. `[Arbitrary α]`).
+4. Also inspect the **goal type** itself for additional instance-implicit requirements.
+
+This two-pass inspection (declaration + goal) catches constraints from both the instance definition and from the typeclass itself.
+
+### Why provide all three classes in the synthesis context?
+
+When synthesizing `Arbitrary (List α)`, Lean needs `[Arbitrary α]` to be available in context. By providing `Enum`, `Arbitrary`, and `DecidableEq` instances on the fresh type fvars, we ensure synthesis succeeds for any instance that depends on standard classes. The constraints we *read back* from the synthesized instance tell us which subset is actually needed.
+
+### Edge cases
+
+- **Bare type param as indName** (e.g. step says "generate `α`"): short-circuit to returning the own-sort class directly without synthesis.
+- **Predicate-form classes** (`ArbitrarySizedSuchThat`, `EnumSizedSuchThat`): the instance type requires building a lambda predicate over output variables, not just a bare application.
+- **Synthesis failure**: return empty — the caller decides the fallback (checker defaults or nothing).
 
 ## Diagnostics
 
-The propagation system also enables two kinds of warnings:
+After propagation, two diagnostic passes run:
 
-1. **Unprovided constraints** — when propagation discovers a requirement Specimen can't emit (e.g. `[MyHashable α]`), it warns the user. Specimen can only provide `Arbitrary`, `Enum`, and `DecidableEq`.
+1. **Unprovided constraints**: if propagation discovers a class Specimen can't emit (anything other than `Arbitrary`, `Enum`, `DecidableEq`), a warning tells the user what's missing. This catches cases like a custom `[MyHashable α]` that Specimen doesn't know how to add to the generated signature.
 
-2. **Missing concrete instances** — when a schedule step references a concrete type (no type params) but the required instance doesn't exist (e.g. `[Arbitrary MyColor]` with no such instance defined), Specimen warns rather than silently generating broken code.
+2. **Missing concrete instances**: for each schedule step referencing a concrete type (no type params, not being derived in this call), verify the required instance actually exists. If not, warn — e.g. "needs `[Arbitrary MyColor]` but no such instance exists."
 
 ## Display
 
-Computed constraints appear in two places:
-- **Spec labels** in the HTML widget and text output: `Generator Between{Arbitrary, DecidableEq}[0,2]`
-- **Generated code dropdown** in the HTML widget: shows the actual emitted definition with its instance binders
+Computed constraints are shown in:
+- **Spec labels** in both text output and HTML widget: e.g. `Generator Between{Arbitrary, DecidableEq}[0,2]`
+- **Generated code dropdown** in the HTML widget: the actual emitted `def` with instance binders visible
+- **logInfo suppression**: per-component log messages are suppressed when `richOutput` is active (the HTML widget shows everything more clearly)
