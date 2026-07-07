@@ -27,11 +27,7 @@ instance (s : List String) (c : Nat) : DecOpt (WithinCapacity s c) where
 instance (c : Nat) : ArbitrarySizedSuchThat (List String) (fun s => WithinCapacity s c) where
   arbitrarySizedST _ := do
     let n ← Gen.choose Nat 0 c (by omega)
-    let mut xs : List String := []
-    for _ in List.range n.val do
-      let v ← Arbitrary.arbitrary
-      xs := v :: xs
-    return xs
+    (List.range n.val).mapM (fun _ => Arbitrary.arbitrary)
 
 inductive BBStep : BB → BBAPI → BB → Prop where
 -- NOTE: We write `WithinCapacity (v :: s) c` rather than the equivalent
@@ -60,7 +56,7 @@ inductive WF_BBTrace : BB -> BBTrace -> BB -> Prop where
 
 -- Generating well formed traces
 
-instance instKeyValueStoreArbitraryString : Arbitrary String where
+instance instArbitraryString : Arbitrary String where
   arbitrary := GeneratorCombinators.elementsWithDefault "A" ["A", "B", "C", "D", "E", "F", "G", "H", "I"]
 
 set_option specimen.multiOutput true in
@@ -87,6 +83,7 @@ def backwardOnlySizeOps : IO Unit := do
     if !allSize then
       throw <| IO.userError s!"Expected only SizeOp in backward trace, got: {repr trace}"
 
+#guard_msgs in
 #eval backwardOnlySizeOps
 
 -----
@@ -203,6 +200,8 @@ The specification (`BBStep`) would relate a state and a `BBCmd` to a
 `BBResult` and a next state. A trace is then `List BBCmd`, and executing it
 against the imperative implementation produces a `List BBResult`.
 
+This idea is similar to what's done in [quickcheck-state-machine](https://github.com/stevana/quickcheck-state-machine#readme)
+
 ### Testing strategy
 
 1. **Generate arbitrary `List BBCmd`**: Random sequences of Put/Get/Size with
@@ -248,4 +247,30 @@ against the imperative implementation produces a `List BBResult`.
   operation on an over-capacity state invalid, even though that state can't
   arise in practice. We may want to distinguish "unreachable invalid" from
   "reachable invalid" (Get on empty, Put on full).
+
+### Note from ErnestNG
+
+I wonder if an alternative approach is to interleave generation with execution,
+i.e. build up the command sequence one instruction at a time, and at each step:
+
+1. Determine what the set of callable commands is given the current state
+(i.e. the set of instructions that won't cause a crash in the current state)
+2. Sample a random command from this set
+3. Execute this command on both the model + implementation
+4. Repeat steps 1-3 above
+
+In the [Testing Noninterference Quickly](https://catalin-hritcu.github.io/publications/testing-noninterference-icfp2013.pdf) paper (Hritcu et al. ICFP '13), they
+call this technique "generation by execution", and it seems to be effective
+for their use case (generating stack machine instruction sequences that don't
+cause a crash in order to test noninterference).
+
+One of Leo's MS students at UMD also uses this "generation by execution"
+technique to generate random API calls to test a C queue implementation
+(section 3 of [this MS thesis](https://drum.lib.umd.edu/items/894f193b-3791-4d0a-900b-86363cbae75f)).
+
+I wonder if it's possible for a Specimen-derived generator to embody this
+"generation by execution" paradigm, or if this is fundamentally impossible,
+since it requires interleaving generation and execution and a Specimen
+generator only generates commands ahead of time.
+
 -/
