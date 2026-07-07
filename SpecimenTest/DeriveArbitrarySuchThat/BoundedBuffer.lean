@@ -140,7 +140,7 @@ def executeTrace (cb : ST.Ref IO.RealWorld CircularBuffer) (buggy : Bool := fals
     executeTrace cb buggy ops
 
 def differentialTest (buggy : Bool := false) : IO Unit := do
-  for i in List.range 100 do
+  for i in List.range 1000 do
     let (trace, _) ← Gen.run
       (ArbitrarySizedSuchThat.arbitrarySizedST
         (fun (t, s) => WF_BBTrace ([], 3) t s) 10) (i + 5)
