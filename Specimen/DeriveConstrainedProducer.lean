@@ -808,8 +808,18 @@ def deriveConstrainedProducer
       --   3. The current size parameter and the base/rec constructor counts.
       -- The active weight function (e.g. defaultCtorWeight, scoreAwareCtorWeight) maps
       -- these inputs to a Nat weight used by the backtracking combinator at runtime.
+      -- Users can define and register custom weight functions in their own files — see
+      -- README.md and the docstring on `CtorWeightFn` in Scoring.lean.
       let weightEntry ← Scoring.getActiveWeightFn
       let weightFnIdent := mkIdent weightEntry.leanName
+      let modifierEntry ← Scoring.getActiveWeightModifier
+      let modifierIdent : Option Ident := modifierEntry.map (fun e => mkIdent e.leanName)
+      let outputIndicesLit := Lean.quote outputIdxs.toList
+      let deriveSortLit ← match deriveSort with
+        | .Generator => `(Schedules.DeriveSort.Generator)
+        | .Enumerator => `(Schedules.DeriveSort.Enumerator)
+        | .Checker => `(Schedules.DeriveSort.Checker)
+        | .Theorem => `(Schedules.DeriveSort.Theorem)
 
       -- Pre-count base vs recursive constructors for the weight function
       let mut numBaseCtors := 0
@@ -831,36 +841,35 @@ def deriveConstrainedProducer
         match resultOption with
         | some result =>
           let schedule := result.schedule
-          -- Obtain a sub-producer for this constructor, along with an array of all typeclass instances that need to be defined beforehand.
-          -- (Under the hood, we compile the schedule to an `MExp`, then compile the `MExp` to a Lean term containing the code for the sub-producer.
-          -- This is all done in a state monad: when we detect that a new instance is required, we append it to an array of `TSyntax term`s
-          -- (where each term represents a typeclass instance)
           let (subProducer, instances) ← StateT.run (s := #[]) (do
             let mexp ← MExp.scheduleToMExp schedule (.MId `size) (.MId `initSize) outputType (fuelPrimeName := freshFuelPrimeName) (sizePrimeName := freshSizePrimeName) (targetInductive := inductiveName)
             MExp.mexpToTSyntax mexp deriveSort)
 
           requiredInstances := requiredInstances ++ instances
 
-          -- Determine whether the constructor is recursive
-          -- (i.e. if the constructor has a hypothesis that refers to the inductive relation we are targeting)
           let isRecursive ← isConstructorRecursive inductiveName ctorName
+          let ctorNameLit := Lean.quote ctorName
 
           if isRecursive then
-            -- recursive sub-generators use the active weight function with size'
-            -- sub-enumerators don't have any weight associated with them
             let subProducerTerm ←
               match producerSort with
               | .Generator =>
-                `( ($weightFnIdent 0.0 true $freshSize' $numBaseLit $numRecLit, $subProducer) )
+                let baseWeight ← `($weightFnIdent $ctorNameLit $outputIndicesLit $deriveSortLit 0.0 true $freshSize' $numBaseLit $numRecLit)
+                let finalWeight ← match modifierIdent with
+                  | none => pure baseWeight
+                  | some modIdent => `($modIdent $baseWeight $ctorNameLit $outputIndicesLit $deriveSortLit 0.0 true $freshSize' $numBaseLit $numRecLit)
+                `( ($finalWeight, $subProducer) )
               | .Enumerator => pure subProducer
             recursiveProducers := recursiveProducers.push subProducerTerm
           else
-            -- non-recursive sub-generators use the active weight function with size=0
-            -- (sub-enumerators don't have any weight associated with them)
             let subGeneratorTerm ←
               match producerSort with
               | .Generator =>
-                `( ($weightFnIdent 0.0 false 0 $numBaseLit $numRecLit, $subProducer) )
+                let baseWeight ← `($weightFnIdent $ctorNameLit $outputIndicesLit $deriveSortLit 0.0 false 0 $numBaseLit $numRecLit)
+                let finalWeight ← match modifierIdent with
+                  | none => pure baseWeight
+                  | some modIdent => `($modIdent $baseWeight $ctorNameLit $outputIndicesLit $deriveSortLit 0.0 false 0 $numBaseLit $numRecLit)
+                `( ($finalWeight, $subProducer) )
               | .Enumerator => pure subProducer
             nonRecursiveProducers := nonRecursiveProducers.push subGeneratorTerm
 
@@ -894,19 +903,37 @@ private def compileWeightedProducer
     (schedule : List ScheduleStep × ScheduleSort)
     (outputType : Expr) (deriveSort : DeriveSort)
     (fuelPrimeName sizePrimeName targetInductive : Name)
-    (weightFnIdent : Ident) (badness : Float) (isRecursive : Bool)
+    (weightFnIdent : Ident) (modifierIdent : Option Ident)
+    (ctorName : Name) (outputIndices : List Nat)
+    (badness : Float) (isRecursive : Bool)
     (freshSize' numBaseLit numRecLit : TSyntax `term) : TermElabM (TSyntax `term) := do
   let (subProducer, _) ← StateT.run (s := #[]) (do
     let mexp ← MExp.scheduleToMExp schedule (.MId `size) (.MId `initSize) outputType
       (fuelPrimeName := fuelPrimeName) (sizePrimeName := sizePrimeName) (targetInductive := targetInductive)
     MExp.mexpToTSyntax mexp deriveSort)
   let badnessLit := Syntax.mkScientificLit (toString badness)
+  let ctorNameLit := Lean.quote ctorName
+  let outputIndicesLit := Lean.quote outputIndices
+  let deriveSortLit ← match deriveSort with
+    | .Generator => `(Schedules.DeriveSort.Generator)
+    | .Enumerator => `(Schedules.DeriveSort.Enumerator)
+    | .Checker => `(Schedules.DeriveSort.Checker)
+    | .Theorem => `(Schedules.DeriveSort.Theorem)
   match deriveSort with
   | .Generator =>
-    if isRecursive then
-      `( ($weightFnIdent $badnessLit true $freshSize' $numBaseLit $numRecLit, $subProducer) )
-    else
-      `( ($weightFnIdent $badnessLit false 0 $numBaseLit $numRecLit, $subProducer) )
+    let baseWeight ←
+      if isRecursive then
+        `($weightFnIdent $ctorNameLit $outputIndicesLit $deriveSortLit $badnessLit true $freshSize' $numBaseLit $numRecLit)
+      else
+        `($weightFnIdent $ctorNameLit $outputIndicesLit $deriveSortLit $badnessLit false 0 $numBaseLit $numRecLit)
+    let finalWeight ← match modifierIdent with
+      | none => pure baseWeight
+      | some modIdent =>
+        if isRecursive then
+          `($modIdent $baseWeight $ctorNameLit $outputIndicesLit $deriveSortLit $badnessLit true $freshSize' $numBaseLit $numRecLit)
+        else
+          `($modIdent $baseWeight $ctorNameLit $outputIndicesLit $deriveSortLit $badnessLit false 0 $numBaseLit $numRecLit)
+    `( ($finalWeight, $subProducer) )
   | .Enumerator => pure subProducer
   | .Checker | .Theorem => `(fun (_ : Unit) => $subProducer)
 
@@ -967,6 +994,8 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
     -- because they still consume fuel.
     let weightEntry ← Scoring.getActiveWeightFn
     let weightFnIdent := mkIdent weightEntry.leanName
+    let modifierEntry ← Scoring.getActiveWeightModifier
+    let modifierIdent : Option Ident := modifierEntry.map (fun e => mkIdent e.leanName)
     let bundle ← Scoring.getActiveScorerBundle
     let lookupCtorBadness (ctorName : Name) : Float :=
       match indSched.ctorStats.find? (fun (n, _, _, _) => n == ctorName) with
@@ -984,14 +1013,14 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
       let isRec := scheduleUsesMutualCall rewrittenSteps
       let term ← compileWeightedProducer (rewrittenSteps, sort) outputType key.deriveSort
         freshFuelPrimeName freshSizePrimeName key.inductiveName
-        weightFnIdent (lookupCtorBadness ctorName) isRec freshSize' numBaseLit numRecLit
+        weightFnIdent modifierIdent ctorName key.outputIndices (lookupCtorBadness ctorName) isRec freshSize' numBaseLit numRecLit
       if isRec then recursiveProducers := recursiveProducers.push term
       else nonRecursiveProducers := nonRecursiveProducers.push term
     for (ctorName, schedule) in indSched.recSchedules do
       let (steps, sort) := schedule
       let term ← compileWeightedProducer (rewriteSchedule steps, sort) outputType key.deriveSort
         freshFuelPrimeName freshSizePrimeName key.inductiveName
-        weightFnIdent (lookupCtorBadness ctorName) true freshSize' numBaseLit numRecLit
+        weightFnIdent modifierIdent ctorName key.outputIndices (lookupCtorBadness ctorName) true freshSize' numBaseLit numRecLit
       recursiveProducers := recursiveProducers.push term
     -- For checkers/enumerators with recursive constructors, add a failsafe to the base case:
     -- if no base constructor matches, return "unknown" (error) rather than "false",
@@ -1398,9 +1427,17 @@ def deriveConstrainedProducerParts
       let freshSize' := mkIdent freshSizePrimeName
       let freshRecFnName := recFnNameOverride.getD (localCtx.getUnusedName (match deriveSort with
         | .Generator => `aux_arb | .Enumerator => `aux_enum | _ => `aux_dec))
-      -- Resolve the active weight function for constructor frequency
+      -- Resolve the active weight function and optional modifier for constructor frequency
       let weightEntry ← Scoring.getActiveWeightFn
       let weightFnIdent := mkIdent weightEntry.leanName
+      let modifierEntry ← Scoring.getActiveWeightModifier
+      let modifierIdent : Option Ident := modifierEntry.map (fun e => mkIdent e.leanName)
+      let outputIndicesLit := Lean.quote outputIdxs.toList
+      let deriveSortLit ← match deriveSort with
+        | .Generator => `(Schedules.DeriveSort.Generator)
+        | .Enumerator => `(Schedules.DeriveSort.Enumerator)
+        | .Checker => `(Schedules.DeriveSort.Checker)
+        | .Theorem => `(Schedules.DeriveSort.Theorem)
       -- Pre-count base vs recursive constructors for the weight function
       let mut numBaseCtors := 0
       let mut numRecCtors := 0
@@ -1428,16 +1465,25 @@ def deriveConstrainedProducerParts
             let outputIdxsStr := outputNamesTypesIndices.map (fun (n, _, i) => s!"{n}@{i}")
             trace[plausible.deriving.arbitrary] m!"[{repr deriveSort}] {inductiveName} (outputs: {outputIdxsStr}) constructor {ctorName} requires: {requiredInsts}"
           let isRecursive ← (isConstructorRecursive inductiveName ctorName) <||> pure (scheduleUsesMutualCall rewrittenSteps)
+          let ctorNameLit := Lean.quote ctorName
           if isRecursive then
             let subProducerTerm ← match producerSort with
               | .Generator =>
-                `( ($weightFnIdent 0.0 true $freshSize' $numBaseLit $numRecLit, $subProducer) )
+                let baseWeight ← `($weightFnIdent $ctorNameLit $outputIndicesLit $deriveSortLit 0.0 true $freshSize' $numBaseLit $numRecLit)
+                let finalWeight ← match modifierIdent with
+                  | none => pure baseWeight
+                  | some modIdent => `($modIdent $baseWeight $ctorNameLit $outputIndicesLit $deriveSortLit 0.0 true $freshSize' $numBaseLit $numRecLit)
+                `( ($finalWeight, $subProducer) )
               | .Enumerator => pure subProducer
             recursiveProducers := recursiveProducers.push subProducerTerm
           else
             let subGeneratorTerm ← match producerSort with
               | .Generator =>
-                `( ($weightFnIdent 0.0 false 0 $numBaseLit $numRecLit, $subProducer) )
+                let baseWeight ← `($weightFnIdent $ctorNameLit $outputIndicesLit $deriveSortLit 0.0 false 0 $numBaseLit $numRecLit)
+                let finalWeight ← match modifierIdent with
+                  | none => pure baseWeight
+                  | some modIdent => `($modIdent $baseWeight $ctorNameLit $outputIndicesLit $deriveSortLit 0.0 false 0 $numBaseLit $numRecLit)
+                `( ($finalWeight, $subProducer) )
               | .Enumerator => pure subProducer
             nonRecursiveProducers := nonRecursiveProducers.push subGeneratorTerm
         | none => throwError m!"Unable to derive producer schedule for constructor {ctorName}"

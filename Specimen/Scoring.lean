@@ -45,15 +45,32 @@ open Lean Meta Schedules
 ----------------------------------------------
 
 /-- A weight function computes the runtime frequency weight for a constructor.
-    Arguments: (scoreBadness, isRec, size, numBase, numRec).
-    - scoreBadness: per-constructor quality from the active scorer (0.0 = best, 1.0 = worst)
-    - isRec: whether this constructor is recursive
-    - size: current generation size parameter
-    - numBase/numRec: counts of base vs recursive constructors for this inductive -/
-abbrev CtorWeightFn := Float → Bool → Nat → Nat → Nat → Nat
+    The backtracking combinator picks constructors proportionally to their weights.
+
+    Arguments: (ctorName, outputIndices, deriveSort, scoreBadness, isRec, size, numBase, numRec).
+    - ctorName: the fully qualified name of the constructor (e.g. `List.cons)
+    - outputIndices: the output position indices for this derivation
+    - deriveSort: whether we are deriving a Generator, Enumerator, Checker, or Theorem
+    - scoreBadness: per-constructor quality from the active scorer (0.0 = best, 1.0 = worst).
+      Computed at elaboration time from the schedule search and baked in as a literal.
+    - isRec: whether this constructor is recursive (has a hypothesis referring back to
+      the inductive being derived)
+    - size: current generation size parameter (decreases as the generator recurses deeper;
+      at size=0, most functions return weight 0 or 1 for recursive ctors to force base cases)
+    - numBase/numRec: counts of base vs recursive constructors for this inductive
+
+    Returns: a Nat weight. Higher weight = chosen more often.
+
+    **Customization:** Users can define and register their own weight function targeting
+    specific constructors in their own file without modifying Specimen. Use the ctorName,
+    outputIndices, and deriveSort arguments to override weights for particular constructors
+    or modes while falling back to a default for others. See README.md for an example. Use
+    `set_option specimen.weightFn "yourFnName" in` to scope it to a specific derivation. -/
+abbrev CtorWeightFn := Name → List Nat → DeriveSort → Float → Bool → Nat → Nat → Nat → Nat
 
 /-- Ignores score; base=1, recursive=numBase*size/numRec. -/
-def defaultCtorWeight (_scoreBadness : Float) (isRec : Bool) (size : Nat) (numBase numRec : Nat) : Nat :=
+def defaultCtorWeight (_ctorName : Name) (_outputIndices : List Nat) (_deriveSort : DeriveSort)
+    (_scoreBadness : Float) (isRec : Bool) (size : Nat) (numBase numRec : Nat) : Nat :=
   if isRec then
     if size == 0 then 1
     else max 1 (numBase * size / max 1 numRec)
@@ -61,16 +78,19 @@ def defaultCtorWeight (_scoreBadness : Float) (isRec : Bool) (size : Nat) (numBa
 
 /-- Size-proportional weight: base=1, recursive=size+1. Ignores score.
     (This is the strategy used by QuickChick.) -/
-def sizeProportionalCtorWeight (_scoreBadness : Float) (isRec : Bool) (size : Nat) (_numBase _numRec : Nat) : Nat :=
+def sizeProportionalCtorWeight (_ctorName : Name) (_outputIndices : List Nat) (_deriveSort : DeriveSort)
+    (_scoreBadness : Float) (isRec : Bool) (size : Nat) (_numBase _numRec : Nat) : Nat :=
   if isRec then size + 1 else 1
 
 /-- Flat weight: every constructor gets weight 1. Ignores everything. -/
-def flatCtorWeight (_scoreBadness : Float) (_isRec : Bool) (_size : Nat) (_numBase _numRec : Nat) : Nat := 1
+def flatCtorWeight (_ctorName : Name) (_outputIndices : List Nat) (_deriveSort : DeriveSort)
+    (_scoreBadness : Float) (_isRec : Bool) (_size : Nat) (_numBase _numRec : Nat) : Nat := 1
 
 /-- Score-aware weight: boosts good constructors (low badness) and deprioritizes
     recursive ones. Quality maps to 1–4, recursive ctors get an additional size-based
     penalty so base cases are preferred at small sizes. -/
-def scoreAwareCtorWeight (scoreBadness : Float) (isRec : Bool) (size : Nat) (numBase numRec : Nat) : Nat :=
+def scoreAwareCtorWeight (_ctorName : Name) (_outputIndices : List Nat) (_deriveSort : DeriveSort)
+    (scoreBadness : Float) (isRec : Bool) (size : Nat) (numBase numRec : Nat) : Nat :=
   let quality := if scoreBadness < 0.25 then 4
     else if scoreBadness < 0.5 then 3
     else if scoreBadness < 0.75 then 2
@@ -84,7 +104,8 @@ def scoreAwareCtorWeight (scoreBadness : Float) (isRec : Bool) (size : Nat) (num
     Controls aggregate P(recursive) ≈ size / (size + 4*numBase) by distributing
     size across all recursive ctors (so total rec weight ≈ size * quality).
     Base ctors get a 4x boost so they stay relevant even with many rec branches. -/
-def balancedCtorWeight (scoreBadness : Float) (isRec : Bool) (size : Nat) (_numBase numRec : Nat) : Nat :=
+def balancedCtorWeight (_ctorName : Name) (_outputIndices : List Nat) (_deriveSort : DeriveSort)
+    (scoreBadness : Float) (isRec : Bool) (size : Nat) (_numBase numRec : Nat) : Nat :=
   let quality := if scoreBadness < 0.25 then 4
     else if scoreBadness < 0.5 then 3
     else if scoreBadness < 0.75 then 2
@@ -95,7 +116,8 @@ def balancedCtorWeight (scoreBadness : Float) (isRec : Bool) (size : Nat) (_numB
   else quality * 4
 
 /-- Quality-only weight: no structural bias, budget splitting handles termination. -/
-def qualityCtorWeight (scoreBadness : Float) (_isRec : Bool) (_size : Nat) (_numBase _numRec : Nat) : Nat :=
+def qualityCtorWeight (_ctorName : Name) (_outputIndices : List Nat) (_deriveSort : DeriveSort)
+    (scoreBadness : Float) (_isRec : Bool) (_size : Nat) (_numBase _numRec : Nat) : Nat :=
   if scoreBadness < 0.25 then 4
   else if scoreBadness < 0.5 then 3
   else if scoreBadness < 0.75 then 2
@@ -108,6 +130,8 @@ structure WeightFnEntry where
 
 initialize weightFnRegistry : IO.Ref (Array WeightFnEntry) ← IO.mkRef #[]
 
+/-- Register a weight function so it can be selected via `set_option specimen.weightFn`.
+    Call this in an `initialize` block in your own file to add custom weight functions. -/
 def registerWeightFn (name : Name) (fn : CtorWeightFn) (leanName : Name) : IO Unit :=
   weightFnRegistry.modify (·.push { name, fn, leanName })
 
@@ -118,9 +142,82 @@ initialize registerWeightFn `Scoring.scoreAwareCtorWeight scoreAwareCtorWeight `
 initialize registerWeightFn `Scoring.balancedCtorWeight balancedCtorWeight ``balancedCtorWeight
 initialize registerWeightFn `Scoring.qualityCtorWeight qualityCtorWeight ``qualityCtorWeight
 
+----------------------------------------------
+-- Weight modifier (transforms the base weight)
+----------------------------------------------
+
+/-- A weight modifier transforms the weight computed by the active weight function.
+    The first argument is the base weight (already computed by the active `CtorWeightFn`).
+    The remaining arguments provide context for targeted overrides.
+
+    Return the final weight. To pass through unchanged, just return `baseWeight`.
+    To override for specific constructors, match on `ctorName`. To scale, multiply
+    `baseWeight`. -/
+abbrev CtorWeightModifier := Nat → Name → List Nat → DeriveSort → Float → Bool → Nat → Nat → Nat → Nat
+
+/-- Identity modifier: returns the base weight unchanged. -/
+def idWeightModifier (baseWeight : Nat) (_ctorName : Name) (_outputIndices : List Nat)
+    (_deriveSort : DeriveSort) (_scoreBadness : Float) (_isRec : Bool) (_size : Nat)
+    (_numBase _numRec : Nat) : Nat :=
+  baseWeight
+
+structure WeightModifierEntry where
+  name : Name
+  fn : CtorWeightModifier
+  leanName : Name
+
+initialize weightModifierRegistry : IO.Ref (Array WeightModifierEntry) ← IO.mkRef #[]
+
+/-- Register a weight modifier so it can be selected via `set_option specimen.weightModifier`.
+    Call this in an `initialize` block in your own file. -/
+def registerWeightModifier (name : Name) (fn : CtorWeightModifier) (leanName : Name) : IO Unit :=
+  weightModifierRegistry.modify (·.push { name, fn, leanName })
+
+register_option specimen.weightModifier : String := {
+  defValue := ""
+  descr := "Optional weight modifier applied after the weight function. " ++
+    "Receives the computed base weight as first argument. Empty string means no modifier."
+}
+
+/-- Get the active weight modifier name from options (empty = none). -/
+def getActiveWeightModifierName [Monad m] [MonadOptions m] : m (Option Name) := do
+  let s : String := Lean.Option.get (← getOptions) specimen.weightModifier
+  if s.isEmpty then return none
+  else return some s.toName
+
+private unsafe def resolveWeightModifierImpl (env : Environment) (opts : Options) (name : Name) : CtorWeightModifier :=
+  match env.evalConst CtorWeightModifier opts name with
+  | .ok fn => fn
+  | .error _ => idWeightModifier
+
+@[implemented_by resolveWeightModifierImpl]
+private opaque resolveWeightModifier (env : Environment) (opts : Options) (name : Name) : CtorWeightModifier
+
+/-- Resolve the active weight modifier entry, if any.
+    Like `getActiveWeightFn`, falls back to environment lookup for same-file definitions. -/
+def getActiveWeightModifier : CoreM (Option WeightModifierEntry) := do
+  match ← getActiveWeightModifierName with
+  | none => return none
+  | some name =>
+    let entries ← weightModifierRegistry.get
+    match entries.find? (·.name == name) with
+    | some entry => return some entry
+    | none =>
+      let env ← getEnv
+      if env.contains name then
+        let opts ← getOptions
+        let fn := resolveWeightModifier env opts name
+        return some { name := name, fn := fn, leanName := name }
+      else return none
+
+----------------------------------------------
+-- Weight function option and resolution
+----------------------------------------------
+
 register_option specimen.weightFn : String := {
   defValue := "Scoring.balancedCtorWeight"
-  descr := "The weight function used for constructor frequency in derived generators."
+  descr := "The weight function used for constructor frequency in derived generators. " ++
+    "Use `set_option specimen.weightFn \"yourFnName\" in` to scope to a specific derivation."
 }
 
 /-- Get the active weight function name from options. -/
@@ -128,15 +225,31 @@ def getActiveWeightFnName [Monad m] [MonadOptions m] : m Name := do
   let s : String := Lean.Option.get (← getOptions) specimen.weightFn
   return s.toName
 
-/-- Resolve the active weight function entry. -/
+private unsafe def resolveWeightFnImpl (env : Environment) (opts : Options) (name : Name) : CtorWeightFn :=
+  match env.evalConst CtorWeightFn opts name with
+  | .ok fn => fn
+  | .error _ => balancedCtorWeight
+
+@[implemented_by resolveWeightFnImpl]
+private opaque resolveWeightFn (env : Environment) (opts : Options) (name : Name) : CtorWeightFn
+
+/-- Resolve the active weight function entry.
+    First checks the registry (for built-in functions registered via `initialize`),
+    then falls back to resolving the function from the environment directly (for
+    user-defined functions in the same file that haven't been registered yet). -/
 def getActiveWeightFn : CoreM WeightFnEntry := do
   let name ← getActiveWeightFnName
   let entries ← weightFnRegistry.get
   match entries.find? (·.name == name) with
   | some entry => return entry
-  | none => match entries[0]? with
-    | some entry => return entry
-    | none => return { name := `Scoring.balancedCtorWeight, fn := balancedCtorWeight, leanName := ``balancedCtorWeight }
+  | none =>
+    let env ← getEnv
+    if env.contains name then
+      let opts ← getOptions
+      let fn := resolveWeightFn env opts name
+      return { name := name, fn := fn, leanName := name }
+    else
+      return { name := `Scoring.balancedCtorWeight, fn := balancedCtorWeight, leanName := ``balancedCtorWeight }
 
 ----------------------------------------------
 -- Core typeclass

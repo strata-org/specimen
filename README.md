@@ -132,6 +132,8 @@ derive_checker (fun n t => balanced n t)
 | `specimen.autoDeriveDeps` | `false` | Automatically derive dependency instances for sub-relations in `derive_mutual` |
 | `specimen.multiOutput` | `false` | Allow multi-output production steps (multiple `∃` vars generated per hypothesis) |
 | `specimen.scoreType` | `"Scoring.DefaultScore"` | Scoring strategy for schedule quality evaluation (see below) |
+| `specimen.weightFn` | `"Scoring.balancedCtorWeight"` | Weight function for constructor frequency in derived generators (see below) |
+| `specimen.weightModifier` | `""` | Optional modifier layered on top of the weight function (see below) |
 | `specimen.fuel` | `10000` | Fuel (termination budget) for derived generators/enumerators/checkers |
 | `specimen.richOutput` | `true` | Emit rich HTML widget output in the Lean infoview |
 | `specimen.textOutput` | `0` | Plain-text output verbosity (0=off, 1=summary, 2=problems, 3=full) |
@@ -153,6 +155,105 @@ derive_mutual
 ```
 
 See [`ScheduleQualityRegressionTest.lean`](./SpecimenTest/ScheduleQualityRegressionTest.lean) for a comparison of all three strategies on the same relation.
+
+**Weight functions** control how often each constructor is chosen at runtime by the backtracking combinator. The `specimen.weightFn` option selects the active weight function. A weight function has the signature:
+
+```
+CtorWeightFn := Name → List Nat → DeriveSort → Float → Bool → Nat → Nat → Nat → Nat
+```
+
+Arguments: `(ctorName, outputIndices, deriveSort, scoreBadness, isRec, size, numBase, numRec) → weight`
+- `ctorName`: the fully qualified name of the constructor (e.g. `` `List.cons ``).
+- `outputIndices`: the output position indices for this derivation.
+- `deriveSort`: whether we are deriving a `Generator`, `Enumerator`, `Checker`, or `Theorem`.
+- `scoreBadness`: a [0,1] float from the scorer indicating schedule quality for this constructor (0 = best, 1 = worst). Computed at elaboration time and baked in as a literal.
+- `isRec`: whether this constructor is recursive.
+- `size`: the current generation size parameter (decreases as the generator recurses deeper).
+- `numBase` / `numRec`: counts of base vs recursive constructors for this inductive.
+
+The return value is a `Nat` weight — the backtracking combinator picks constructors proportionally to their weights. The `ctorName`, `outputIndices`, and `deriveSort` arguments enable per-constructor and per-mode weight overrides without needing to write a separate weight function for each type.
+
+| Weight function | Option value | Description |
+|----------------|-------------|-------------|
+| Balanced | `"Scoring.balancedCtorWeight"` | Controls aggregate P(recursive) with quality bias. Base ctors get a 4x boost. Good default for inductives with many recursive constructors. |
+| Size-proportional | `"Scoring.sizeProportionalCtorWeight"` | `base=1, rec=size+1`. The strategy used by QuickChick. |
+| Score-aware | `"Scoring.scoreAwareCtorWeight"` | Boosts good constructors (low badness 1–4) and applies size-based penalty to recursive ones. |
+| Quality-only | `"Scoring.qualityCtorWeight"` | No structural bias — maps badness to 1–4, ignores size/recursion. Use with budget splitting for termination. |
+| Flat | `"Scoring.flatCtorWeight"` | Every constructor gets weight 1. Ignores everything. |
+| Default | `"Scoring.defaultCtorWeight"` | `base=1, rec=numBase*size/numRec`. Ignores score. |
+
+For example, to use size-proportional weights (QuickChick-style):
+```lean
+set_option specimen.weightFn "Scoring.sizeProportionalCtorWeight"
+derive_mutual
+  (fun lo hi => ∃ (t : BinaryTree), BST lo hi t)
+```
+
+**Defining a custom weight function.** You can define and register your own weight function in your own file — no need to modify Specimen. This is useful when you've derived generators and found the distribution poorly tuned for your application:
+
+```lean
+import Specimen
+
+open Scoring Schedules in
+-- Custom weight function: heavily favor base cases
+def myCtorWeight (ctorName : Name) (outputIndices : List Nat) (deriveSort : DeriveSort)
+    (scoreBadness : Float) (isRec : Bool) (size : Nat) (numBase numRec : Nat) : Nat :=
+  if isRec then
+    if size == 0 then 0
+    else max 1 (size / (max 1 numRec * 4))
+  else 10
+
+-- Register it (this runs at initialization time)
+initialize Scoring.registerWeightFn `myCtorWeight myCtorWeight ``myCtorWeight
+
+-- Use it for a specific derivation
+set_option specimen.weightFn "myCtorWeight" in
+derive_mutual
+  (fun n => ∃ (xs : List Nat), SortedList n xs)
+```
+
+**Targeting specific constructors.** The `ctorName`, `outputIndices`, and `deriveSort` arguments let you override weights for particular constructors or modes while falling back to a default for everything else:
+
+```lean
+open Scoring Schedules in
+def myTargetedWeight (ctorName : Name) (outputIndices : List Nat) (deriveSort : DeriveSort)
+    (scoreBadness : Float) (isRec : Bool) (size : Nat) (numBase numRec : Nat) : Nat :=
+  -- Give a specific constructor a constant low weight
+  if ctorName == ``MyType.ExpensiveCtor then 1
+  -- Boost another constructor
+  else if ctorName == ``MyType.PreferredCtor then 8
+  -- Fall back to the default balanced strategy for everything else
+  else balancedCtorWeight ctorName outputIndices deriveSort scoreBadness isRec size numBase numRec
+```
+
+The `set_option ... in` scoping means different derivations in the same file can use different weight functions. After changing the weight function, rederive and recompile your file to produce a generator reflecting the new weights.
+
+**Weight modifiers.** Instead of replacing the entire weight function, you can layer a modifier on top. A `CtorWeightModifier` receives the base weight (already computed by the active weight function) as its first argument and can transform it — multiply, cap, override, or pass through:
+
+```
+CtorWeightModifier := Nat → Name → List Nat → DeriveSort → Float → Bool → Nat → Nat → Nat → Nat
+                      (baseWeight, ctorName, outputIndices, deriveSort, scoreBadness, isRec, size, numBase, numRec) → finalWeight
+```
+
+Example — triple the weight for a preferred constructor, halve an expensive one, leave everything else alone:
+
+```lean
+open Scoring Schedules in
+def myModifier (baseWeight : Nat) (ctorName : Name) (_outputIndices : List Nat)
+    (_deriveSort : DeriveSort) (_scoreBadness : Float) (_isRec : Bool)
+    (_size : Nat) (_numBase _numRec : Nat) : Nat :=
+  if ctorName == ``MyType.PreferredCtor then baseWeight * 3
+  else if ctorName == ``MyType.ExpensiveCtor then baseWeight / 2
+  else baseWeight
+
+initialize Scoring.registerWeightModifier `myModifier myModifier ``myModifier
+
+set_option specimen.weightModifier "myModifier" in
+derive_mutual
+  (fun n => ∃ (xs : List Nat), SortedList n xs)
+```
+
+The modifier composes with whatever `specimen.weightFn` is active — you don't need to know or reimplement the base weight logic. This is the lightest-weight way to nudge the distribution for specific constructors.
 
 ## Repo overview
 
