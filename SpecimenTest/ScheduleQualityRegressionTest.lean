@@ -84,20 +84,20 @@ structure QualityStats where
   trials : Nat
   successes : Nat
   uniques : Nat
-  maxDepth : Nat
-  depthBuckets : Array Nat  -- [0-1, 2-3, 4-5, 6+]
+  maxSize : Nat
+  sizeBuckets : Array Nat  -- [0-1, 2-3, 4-5, 6+]
   elapsedMs : Nat := 0
   deriving Repr
 
 private def emptyStats (n : Nat) : QualityStats :=
-  { trials := n, successes := 0, uniques := 0, maxDepth := 0, depthBuckets := #[0, 0, 0, 0] }
+  { trials := n, successes := 0, uniques := 0, maxSize := 0, sizeBuckets := #[0, 0, 0, 0] }
 
-private def depthBucket (d : Nat) : Nat :=
+private def sizeBucket (d : Nat) : Nat :=
   if d ≤ 1 then 0 else if d ≤ 3 then 1 else if d ≤ 5 then 2 else 3
 
 /-- Sample a generator `trials` times, measuring success rate, unique count,
-    depth distribution, and wall-clock time. -/
-private def sampleQuality (gen : Nat → Gen α) (depth : α → Nat) (eq : α → α → Bool)
+    size distribution, and wall-clock time. -/
+private def sampleQuality (gen : Nat → Gen α) (measure : α → Nat) (eq : α → α → Bool)
     (trials : Nat := 200) (size : Nat := 3) : IO QualityStats := do
   let startNs ← IO.monoNanosNow
   let mut stats := emptyStats trials
@@ -106,10 +106,10 @@ private def sampleQuality (gen : Nat → Gen α) (depth : α → Nat) (eq : α �
     try
       let v ← Gen.run (gen size) (size + i % 4)
       stats := { stats with successes := stats.successes + 1 }
-      let d := depth v
-      stats := { stats with maxDepth := max stats.maxDepth d }
-      let bucket := depthBucket d
-      stats := { stats with depthBuckets := stats.depthBuckets.modify bucket (· + 1) }
+      let d := measure v
+      stats := { stats with maxSize := max stats.maxSize d }
+      let bucket := sizeBucket d
+      stats := { stats with sizeBuckets := stats.sizeBuckets.modify bucket (· + 1) }
       if !seen.any (eq v ·) then
         seen := seen.push v
     catch _ => pure ()
@@ -119,8 +119,8 @@ private def sampleQuality (gen : Nat → Gen α) (depth : α → Nat) (eq : α �
 
 private def ppStats (name : String) (s : QualityStats) : String :=
   let rate := (s.successes.toFloat / s.trials.toFloat * 100.0).round.toUInt32.toNat
-  let bucketStr := s!"{s.depthBuckets[0]!}/{s.depthBuckets[1]!}/{s.depthBuckets[2]!}/{s.depthBuckets[3]!}"
-  s!"{name}: {rate}% success, {s.uniques} uniques, maxDepth={s.maxDepth}, buckets=[{bucketStr}], {s.elapsedMs}ms"
+  let bucketStr := s!"{s.sizeBuckets[0]!}/{s.sizeBuckets[1]!}/{s.sizeBuckets[2]!}/{s.sizeBuckets[3]!}"
+  s!"{name}: {rate}% success, {s.uniques} uniques, maxSize={s.maxSize}, buckets=[{bucketStr}], {s.elapsedMs}ms"
 
 /-- Quality assertions: generators should meet minimum quality bars. -/
 private def assertQuality (name : String) (s : QualityStats)
