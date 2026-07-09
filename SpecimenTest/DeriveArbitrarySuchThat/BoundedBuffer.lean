@@ -129,23 +129,11 @@ set_option specimen.multiOutput true
 set_option specimen.autoDeriveDeps true
 set_option match.ignoreUnusedAlts true
 
--- Each stage is derived as a top-level instance, rather than writing only
--- the final `derive_mutual` and letting `autoDeriveDeps` pull every dependency
--- into that one mutual block. Both forms *compile*, but the explicit form
--- produces a markedly better generator: measured over 1000 traces from `([],3)`
--- it yields ~1.8 ops/trace and ~150 traces containing an `Error`, versus ~0.55
--- ops/trace and ~80 error traces for the all-`autoDeriveDeps` form — roughly 3x
--- longer traces and 2x the error coverage, which is exactly the coverage this
--- error-testing generator exists to provide.
---
--- The cause is that bundling every dependency into a single `derive_mutual` SCC
--- makes the scheduler split its size budget across the whole bundle, so each
--- step gets a smaller allocation; independently-derived instances each get a
--- full budget. Empirically the improvement needs the *complete* set of explicit
--- derivations — adding only some of them recovers none of the quality (and some
--- partial combinations fail to derive at all). So resist "simplifying" this to
--- the bare `derive_mutual`, or trimming individual stages, without re-measuring.
---
+-- Every stage is listed explicitly as an entry of this one `derive_mutual`,
+-- rather than as a bare `derive_mutual (fun i => ∃ t s, EveryBBTrace i t s)`
+-- (letting `autoDeriveDeps` discover every dependency). The reason was that
+-- experiments showed that doing so produced a worse generator.
+
 -- The stages:
 --   1. Enumerator for the `BBSafeStep` witnesses `(r, bb')` — used to decide `CanStep`.
 --   2. Checker `DecOpt (CanStep bb c)` — enumerate-and-check (backed by the
@@ -159,13 +147,13 @@ set_option match.ignoreUnusedAlts true
 --   4. Generator for `EveryBBTrace`, via `derive_mutual` so the recursive instance
 --      is registered and the scheduler can step forward and recurse.
 
-derive_enumerator (fun bb c => ∃ r bb', BBSafeStep bb c r bb')
-derive_checker (fun bb c => CanStep bb c)
-derive_generator (fun bb c => ∃ r bb', BBSafeStep bb c r bb')
-derive_generator (fun bb => ∃ cmd r bb', BBSafeStep bb cmd r bb')
-derive_generator (fun bb => ∃ cmd res bb', BBStep bb cmd res bb')
 derive_mutual
-  (fun i => ∃ t s, EveryBBTrace i t s)
+  enumerator (fun bb c => ∃ r bb', BBSafeStep bb c r bb'),
+  checker (fun bb c => CanStep bb c),
+  generator (fun bb c => ∃ r bb', BBSafeStep bb c r bb'),
+  generator (fun bb => ∃ cmd r bb', BBSafeStep bb cmd r bb'),
+  generator (fun bb => ∃ cmd res bb', BBStep bb cmd res bb'),
+  generator (fun i => ∃ t s, EveryBBTrace i t s)
 end
 
 -----
@@ -224,7 +212,7 @@ def executeTrace (cb : ST.Ref IO.RealWorld CircularBuffer) (buggy : Bool := fals
     -- Spec says the command is rejected: the implementation must raise too.
     | (.Put v, .Error) => expectError s!"Put {repr v}" (put cb v buggy)
     | (.Get, .Error) => expectError "Get" (get cb buggy)
-    | (.Size, .Error) => expectError "Size" (size cb)
+    | (.Size, .Error) => expectError "Size" (size cb) -- actually impossible per the spec
     -- Spec says the command succeeds with a particular result.
     | (.Put v, _) => put cb v buggy
     | (.Get, .GetOk expected) =>
@@ -235,7 +223,7 @@ def executeTrace (cb : ST.Ref IO.RealWorld CircularBuffer) (buggy : Bool := fals
       let actual ← size cb
       if actual != expected then
         throw <| IO.userError s!"Size mismatch: expected {expected}, got {actual}"
-    | _ => return ()
+    | _ => throw <| IO.userError s!"unexpected cmd/result pair: {repr op}"
     executeTrace cb buggy ops
 
 def differentialTest (buggy : Bool := false) : IO Unit := do
