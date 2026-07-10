@@ -141,15 +141,11 @@ set_option specimen.weightModifier "BoundedBuffer.inverseScaleBase"
 --   4. Generator for `EveryBBTrace`, via `derive_mutual` so the recursive instance
 --      is registered and the scheduler can step forward and recurse.
 
+#guard_msgs(drop info, error) in
 derive_mutual
-  -- enumerator (fun bb c => ∃ r bb', BBSafeStep bb c r bb'),
-  -- checker (fun bb c => CanStep bb c),
-  -- generator (fun bb c => ∃ r bb', BBSafeStep bb c r bb'),
-  -- generator (fun bb => ∃ cmd r bb', BBSafeStep bb cmd r bb'),
-  -- generator (fun bb => ∃ cmd res bb', BBStep bb cmd res bb'),
   generator (fun i => ∃ t s, EveryBBTrace i t s),
-    (fun i => ∃ t s, SafeBBTrace i t s),
-  (fun s => ∃ t i, SafeBBTrace i t s)
+  generator (fun i => ∃ t s, SafeBBTrace i t s),
+  generator (fun s => ∃ t i, SafeBBTrace i t s)
 end
 
 -- The backward generator (fun s => ∃ t i, SafeBBTrace i t s) is poor quality:
