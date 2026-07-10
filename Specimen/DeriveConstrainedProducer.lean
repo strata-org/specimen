@@ -1922,7 +1922,7 @@ a term describing the constraint. Entries in the same SCC are compiled into a sh
     Later entries can use instances derived by earlier ones.
     Each entry can optionally be prefixed with a sort keyword (default: generator). -/
 syntax mutualEntry := ("generator" <|> "enumerator" <|> "checker")? term
-syntax (name := mutual_deriver) "derive_mutual" mutualEntry,+ : command
+syntax (name := mutual_deriver) Term.attrKind "derive_mutual" mutualEntry,+ : command
 
 /-- Derives a constrained producer instance directly from a ScheduleDep,
     without going through syntax parsing. Returns the instance command. -/
@@ -1969,12 +1969,27 @@ def deriveFromScheduleDep (dep : ScheduleDep) (scheduleRewriter : List ScheduleS
       dep.inductiveName indLevels freshArgIdents freshenedOutputNames.toList
       outTypes.toList producerSort localCtx
 
+/-- Rewrites a generated `instance` command to use `scoped instance` or `local instance`
+    by patching the `attrKind` node in the syntax tree (declaration → instance → attrKind). -/
+private def setInstanceVisibility (cmd : TSyntax `command) (kind : AttributeKind) : TSyntax `command :=
+  if kind == .global then cmd
+  else
+    let raw := cmd.raw
+    let instNode := raw[1]
+    let attrKindNode := instNode[0]
+    let newOptChild := match kind with
+      | .global => mkNullNode
+      | .scoped => mkNullNode #[mkNode ``Lean.Parser.Term.scoped #[mkAtom "scoped"]]
+      | .local => mkNullNode #[mkNode ``Lean.Parser.Term.local #[mkAtom "local"]]
+    let newAttrKind := attrKindNode.setArg 0 newOptChild
+    let newInstNode := instNode.setArg 0 newAttrKind
+    ⟨raw.setArg 1 newInstNode⟩
+
 @[command_elab mutual_deriver]
 def elabDeriveMutual : CommandElab := fun stx => do
-  match stx with
-  | `(derive_mutual $entries,*) => do
-    withScope (fun scope => { scope with opts := scope.opts.set `specimen.multiOutput true }) do
-      let specEntries := entries.getElems
+  let attrKind ← liftMacroM (Lean.Elab.toAttributeKind stx[0])
+  let specEntries := stx[2].getSepArgs
+  withScope (fun scope => { scope with opts := scope.opts.set `specimen.multiOutput true }) do
 
       -- Step 1: Parse all specs to get (inductiveName, outputIdxs, deriveSort) and assign global def names
       let mut specMeta : Array (Name × List Nat × Name × DeriveSort) := #[]
@@ -1982,13 +1997,13 @@ def elabDeriveMutual : CommandElab := fun stx => do
         let entry := specEntries[i]!
         -- Parse the optional sort keyword from the mutualEntry syntax
         let (deriveSort, termStx) : DeriveSort × (TSyntax `term) := Id.run do
-          let children := entry.raw.getArgs
+          let children : Array Syntax := entry.getArgs
           -- mutualEntry = ("generator" | "enumerator" | "checker")? term
           -- If keyword present: children[0] is the keyword, children[1] is the term
           -- If no keyword: children[0] is empty, children[1] is the term (or just the term)
           if children.size >= 2 then
-            let kw := children[0]!
-            let tm := children[1]!
+            let kw : Syntax := children[0]!
+            let tm : Syntax := children[1]!
             if kw.isOfKind `null && kw.getArgs.isEmpty then
               (.Generator, ⟨tm⟩)
             else
@@ -1997,7 +2012,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
                 else .Generator
               (sort, ⟨tm⟩)
           else
-            (.Generator, ⟨entry.raw⟩)
+            (.Generator, ⟨entry⟩)
         let (indName, outIdxs) ← liftTermElabM do
           let e ← elabTerm termStx .none
           lambdaTelescope e fun _args body => do
@@ -2688,7 +2703,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
             if !richOutput then logInfo m!"  ● {specDescs.head!}"
             elabCommand defCmds[0]!
           for instCmd in instCmds do
-            elabCommand instCmd
+            elabCommand (setInstanceVisibility instCmd attrKind)
       else
         -- Fallback: no auto-derive, use old per-entry compilation
         let siblings := specMeta.toList
@@ -2698,8 +2713,8 @@ def elabDeriveMutual : CommandElab := fun stx => do
           let rawEntry := specEntries[i]!
           -- Extract term from mutualEntry syntax (skip optional keyword)
           let termStx : TSyntax `term := Id.run do
-            let children := rawEntry.raw.getArgs
-            if children.size >= 2 then ⟨children[1]!⟩ else ⟨rawEntry.raw⟩
+            let children : Array Syntax := rawEntry.getArgs
+            if children.size >= 2 then ⟨children[1]!⟩ else ⟨rawEntry⟩
           let (_, _, globalName, _) := specMeta[i]!
           let rewriter := fun steps => rewriteMutualCalls steps siblings
           let (defCmd, instCmd) ← liftTermElabM do
@@ -2715,5 +2730,4 @@ def elabDeriveMutual : CommandElab := fun stx => do
         let mutualCmd ← `(command| mutual $defCmds* end)
         elabCommand mutualCmd
         for instCmd in instCmds do
-          elabCommand instCmd
-  | _ => throwUnsupportedSyntax
+          elabCommand (setInstanceVisibility instCmd attrKind)
