@@ -12,24 +12,26 @@ namespace BoundedBuffer
 
 abbrev BB := (List String) × Nat
 
-inductive BBAPI where
-| Put (s_in : String)
-| Get (s_out : String)
-| Size (n_out : Nat)
+inductive BBCmd where
+| Put (v : String)
+| Get
+| Size
 deriving Repr
+
+inductive BBResult where
+| PutOk
+| GetOk (v : String)
+| SizeOk (n : Nat)
+| Error
+deriving Repr
+
+abbrev BBTrace := List (BBCmd × BBResult)
 
 inductive WithinCapacity : List String → Nat → Prop where
 | mk : s.length ≤ c → WithinCapacity s c
 
-instance (s : List String) (c : Nat) : DecOpt (WithinCapacity s c) where
-  decOpt _ := if s.length ≤ c then .ok true else .ok false
-
-instance (c : Nat) : ArbitrarySizedSuchThat (List String) (fun s => WithinCapacity s c) where
-  arbitrarySizedST _ := do
-    let n ← Gen.choose Nat 0 c (by omega)
-    (List.range n.val).mapM (fun _ => Arbitrary.arbitrary)
-
-inductive BBStep : BB → BBAPI → BB → Prop where
+-- Evaluation without error; error'ing evaluation defined further down
+inductive BBSafeStep : BB → BBCmd → BBResult → BB → Prop where
 -- NOTE: We write `WithinCapacity (v :: s) c` rather than the equivalent
 -- `WithinCapacity s' c` (with `s' = List.concat s v`). The scheduler should
 -- be able to bind s' via the equality first and then DecOpt-check it, but
@@ -39,34 +41,45 @@ inductive BBStep : BB → BBAPI → BB → Prop where
 | PutOp: ∀ s s' c v,
     WithinCapacity (v :: s) c →
     s' = List.concat s v →
-    BBStep (s,c) (BBAPI.Put v) (s',c)
+    BBSafeStep (s,c) (BBCmd.Put v) BBResult.PutOk (s',c)
 | GetOp: ∀ s c v,
-    WithinCapacity (v :: s) c → BBStep (v :: s, c) (BBAPI.Get v) (s,c)
+    WithinCapacity (v :: s) c → BBSafeStep (v :: s, c) BBCmd.Get (BBResult.GetOk v) (s,c)
 | SizeOp: ∀ s c,
-    WithinCapacity s c → BBStep (s,c) (BBAPI.Size (List.length s)) (s,c)
+    WithinCapacity s c → BBSafeStep (s,c) BBCmd.Size (BBResult.SizeOk (List.length s)) (s,c)
 
-abbrev BBTrace := List BBAPI
+-- Error-free trace
+inductive SafeBBTrace : BB -> BBTrace -> BB -> Prop where
+| WF_Empty: ∀ s c, WithinCapacity s c → SafeBBTrace (s,c) [] (s,c)
+| WF_Op: ∀ s s' s'' cmd res ps,
+    BBSafeStep s cmd res s' ->
+    SafeBBTrace s' ps s'' ->
+    SafeBBTrace s ((cmd, res)::ps) s''
 
-inductive WF_BBTrace : BB -> BBTrace -> BB -> Prop where
-| WF_Empty: ∀ s c, WithinCapacity s c → WF_BBTrace (s,c) [] (s,c)
-| WF_Op: ∀ s s' s'' p ps,
-    BBStep s p s' ->
-    WF_BBTrace s' ps s'' ->
-    WF_BBTrace s (p::ps) s''
+-- Generating safe traces (no ErrResult ever generated)
 
--- Generating well formed traces
+instance (s : List String) (c : Nat) : DecOpt (WithinCapacity s c) where
+  decOpt _ := if s.length ≤ c then .ok true else .ok false
+
+instance (c : Nat) : ArbitrarySizedSuchThat (List String) (fun s => WithinCapacity s c) where
+  arbitrarySizedST _ := do
+    let n ← Gen.choose Nat 0 c (by omega)
+    (List.range n.val).mapM (fun _ => Arbitrary.arbitrary)
 
 instance instArbitraryString : Arbitrary String where
   arbitrary := GeneratorCombinators.elementsWithDefault "A" ["A", "B", "C", "D", "E", "F", "G", "H", "I"]
+
+-- An unconstrained `Arbitrary BBCmd` is needed by `BBStep.ErrStep`, which
+-- generates a command freely and then checks `¬ CanStep`.
+deriving instance Arbitrary for BBCmd
 
 set_option specimen.multiOutput true in
 set_option specimen.autoDeriveDeps true in
 set_option match.ignoreUnusedAlts true in
 derive_mutual
-  (fun i => ∃ t s, WF_BBTrace i t s),
-  (fun s => ∃ t i, WF_BBTrace i t s)
+  (fun i => ∃ t s, SafeBBTrace i t s),
+  (fun s => ∃ t i, SafeBBTrace i t s)
 
--- The backward generator (fun s => ∃ t i, WF_BBTrace i t s) is poor quality:
+-- The backward generator (fun s => ∃ t i, SafeBBTrace i t s) is poor quality:
 -- it relies on guess-and-check for GetOp and PutOp (randomly generating lists
 -- and hoping they satisfy WithinCapacity), so in practice it only produces
 -- SizeOp operations. When the target final state is already at capacity, GetOp
@@ -76,15 +89,72 @@ def backwardOnlySizeOps : IO Unit := do
   for i in List.range 100 do
     let (_, trace) ← Gen.run
       (ArbitrarySizedSuchThat.arbitrarySizedST
-        (fun (s, t) => WF_BBTrace s t (["A", "B", "C"], 3)) 10) (i + 5)
+        (fun (s, t) => SafeBBTrace s t (["A", "B", "C"], 3)) 10) (i + 5)
     let allSize := trace.all fun
-      | .Size _ => true
+      | (.Size, _) => true
       | _ => false
     if !allSize then
       throw <| IO.userError s!"Expected only SizeOp in backward trace, got: {repr trace}"
 
 #guard_msgs in
 #eval backwardOnlySizeOps
+
+-- Generating traces that admit errors (via `BBStep` / `EveryBBTrace`).
+
+-- `CanStep bb c` reifies the existential `∃ r bb', BBSafeStep bb c r bb'` as a named
+-- inductive. This is needed so that the negated premise in `BBStep.ErrStep`
+-- reads as `¬ CanStep bb c` (a `Not` applied to an inductive head), which the
+-- scheduler can lower to a negated check. Writing `¬(∃ r bb', ...)` directly
+-- fails: the scheduler's `Not`-unwrapping expects a constructor/inductive head
+-- under the `Not`, but finds a bare `Exists`-lambda that `exprToConstructorExpr`
+-- cannot classify. The derived `DecOpt (CanStep bb c)` is backed by an
+-- enumerator of the `BBSafeStep` witnesses (enumerate, succeed if any exists), so
+-- `¬ CanStep` becomes "enumerate all steps; there are none".
+inductive CanStep : BB → BBCmd → Prop where
+| intro : ∀ bb c r bb', BBSafeStep bb c r bb' → CanStep bb c
+
+inductive BBStep : BB → BBCmd → BBResult → BB → Prop where
+| SafeStep: ∀ bb c r bb', BBSafeStep bb c r bb' → BBStep bb c r bb'
+| ErrStep: ∀ bb c, ¬ CanStep bb c → BBStep bb c BBResult.Error bb
+
+inductive EveryBBTrace : BB -> BBTrace -> BB -> Prop where
+| All_Empty: ∀ s c, EveryBBTrace (s,c) [] (s,c)
+| All_Op: ∀ s s' s'' cmd res ps,
+    BBStep s cmd res s' ->
+    EveryBBTrace s' ps s'' ->
+    EveryBBTrace s ((cmd, res)::ps) s''
+
+section
+set_option specimen.multiOutput true
+set_option specimen.autoDeriveDeps true
+set_option match.ignoreUnusedAlts true
+
+-- Every stage is listed explicitly as an entry of this one `derive_mutual`,
+-- rather than as a bare `derive_mutual (fun i => ∃ t s, EveryBBTrace i t s)`
+-- (letting `autoDeriveDeps` discover every dependency). The reason was that
+-- experiments showed that doing so produced a worse generator.
+
+-- The stages:
+--   1. Enumerator for the `BBSafeStep` witnesses `(r, bb')` — used to decide `CanStep`.
+--   2. Checker `DecOpt (CanStep bb c)` — enumerate-and-check (backed by the
+--      enumerator above); negated via `DecOpt.negOpt` for `ErrStep`.
+--   3a. Generator for the `BBSafeStep` witnesses given a command — used by `SafeStep`
+--       when the command is an input.
+--   3b. Forward `BBSafeStep` generator (command generated too) — used by the forward
+--       `BBStep` generator.
+--   3c. Forward `BBStep` generator — one step of `EveryBBTrace`, generating the
+--       command, result, and next state from the current state.
+--   4. Generator for `EveryBBTrace`, via `derive_mutual` so the recursive instance
+--      is registered and the scheduler can step forward and recurse.
+
+derive_mutual
+  enumerator (fun bb c => ∃ r bb', BBSafeStep bb c r bb'),
+  checker (fun bb c => CanStep bb c),
+  generator (fun bb c => ∃ r bb', BBSafeStep bb c r bb'),
+  generator (fun bb => ∃ cmd r bb', BBSafeStep bb cmd r bb'),
+  generator (fun bb => ∃ cmd res bb', BBStep bb cmd res bb'),
+  generator (fun i => ∃ t s, EveryBBTrace i t s)
+end
 
 -----
 -- DIFFERENTIAL TESTING USING TRACES
@@ -112,8 +182,12 @@ def put (cb : ST.Ref IO.RealWorld CircularBuffer) (v : String) (buggy : Bool := 
   let buf := s.buf.set! s.tail v
   cb.set { s with buf, tail := newTail }
 
-def get (cb : ST.Ref IO.RealWorld CircularBuffer) : IO String := do
+def get (cb : ST.Ref IO.RealWorld CircularBuffer) (buggy : Bool := false) : IO String := do
   let s ← cb.get
+  -- Reject Get on an empty buffer (head == tail). The buggy variant skips this
+  -- check, so it happily reads stale/default slots from an "empty" buffer.
+  if !buggy && s.head == s.tail then
+    throw <| IO.userError "get: buffer empty"
   let v := s.buf[s.head]!
   cb.set { s with head := (s.head + 1) % s.buf.size }
   return v
@@ -124,26 +198,39 @@ def size (cb : ST.Ref IO.RealWorld CircularBuffer) : IO Nat := do
 
 -- Differentially test the mutable implementation against the specification
 
-def executeTrace (cb : ST.Ref IO.RealWorld CircularBuffer) (buggy : Bool := false) : List BBAPI → IO Unit
+-- Runs `act` and fails if it does *not* raise: the spec expected this command to
+-- be rejected (result `.Error`), so a silent success is a differential mismatch.
+def expectError (label : String) (act : IO α) : IO Unit := do
+  let succeeded ← (do let _ ← act; return true) <|> return false
+  if succeeded then
+    throw <| IO.userError s!"{label}: expected error, but implementation succeeded"
+
+def executeTrace (cb : ST.Ref IO.RealWorld CircularBuffer) (buggy : Bool := false) : BBTrace → IO Unit
   | [] => return ()
   | op :: ops => do
     match op with
-    | .Put v => put cb v buggy
-    | .Get expected =>
-      let actual ← get cb
+    -- Spec says the command is rejected: the implementation must raise too.
+    | (.Put v, .Error) => expectError s!"Put {repr v}" (put cb v buggy)
+    | (.Get, .Error) => expectError "Get" (get cb buggy)
+    | (.Size, .Error) => expectError "Size" (size cb) -- actually impossible per the spec
+    -- Spec says the command succeeds with a particular result.
+    | (.Put v, _) => put cb v buggy
+    | (.Get, .GetOk expected) =>
+      let actual ← get cb buggy
       if actual != expected then
         throw <| IO.userError s!"Get mismatch: expected {repr expected}, got {repr actual}"
-    | .Size expected =>
+    | (.Size, .SizeOk expected) =>
       let actual ← size cb
       if actual != expected then
         throw <| IO.userError s!"Size mismatch: expected {expected}, got {actual}"
+    | _ => throw <| IO.userError s!"unexpected cmd/result pair: {repr op}"
     executeTrace cb buggy ops
 
 def differentialTest (buggy : Bool := false) : IO Unit := do
   for i in List.range 1000 do
     let (trace, _) ← Gen.run
       (ArbitrarySizedSuchThat.arbitrarySizedST
-        (fun (t, s) => WF_BBTrace ([], 3) t s) 10) (i + 5)
+        (fun (t, s) => SafeBBTrace ([], 3) t s) 10) (i + 5)
     let cb ← mkCircularBuffer 3 buggy
     executeTrace cb buggy trace
 
@@ -156,91 +243,33 @@ def differentialTest (buggy : Bool := false) : IO Unit := do
 #guard_msgs(error, drop info) in
 #eval differentialTest (buggy := true)
 
+-- differential testing with error traces
+
+-- Unlike `differentialTest`, this uses `EveryBBTrace`, whose traces may include
+-- commands the spec rejects (`.Error` results: Get on empty, Put on full).
+-- `executeTrace` checks that the implementation raises exactly on those
+-- commands and succeeds (with the matching result) on the rest.
+def errorDifferentialTest (buggy : Bool := false) : IO Unit := do
+  for i in List.range 1000 do
+    let (trace, _) ← Gen.run
+      (ArbitrarySizedSuchThat.arbitrarySizedST
+        (fun (t, s) => EveryBBTrace ([], 3) t s) 10) (i + 5)
+    let cb ← mkCircularBuffer 3 buggy
+    executeTrace cb buggy trace
+
+-- Correct implementation agrees with the spec on both success and error results
+#guard_msgs in
+#eval errorDifferentialTest
+
+-- Don't want to do this because the test is flaky
+-- #guard_msgs(error, drop info) in
+-- #eval errorDifferentialTest (buggy := true)
+
 end BoundedBuffer
 
 /-
-## Next steps: Testing error handling (non-well-formed traces)
-
-The current tests confirm that well-formed traces (generated via `WF_BBTrace`)
-execute correctly against the circular buffer implementation. The next goal is
-to also confirm that *non*-well-formed traces produce errors — i.e., that the
-imperative implementation correctly rejects invalid operations (putting into a
-full buffer, getting from an empty one).
-
-### The challenge
-
-`BBAPI` currently embeds expected outputs (`Get s_out`, `Size n_out`) directly
-in the operation. This conflates two concerns:
-  1. What *command* the caller issues (Put a value, Get, query Size)
-  2. What *result* the system should produce (the dequeued value, the count)
-
-For well-formed trace testing this is fine: the generator produces commands with
-their correct expected results baked in. But for error testing we need to
-generate *arbitrary* command sequences — including ones that violate
-preconditions — without needing to know the correct output in advance.
-
-### Proposed refactoring
-
-Separate the command from the observation:
-
-```
-inductive BBCmd where
-| Put (v : String)
-| Get
-| Size
-
-inductive BBResult where
-| PutOk
-| GetOk (v : String)
-| SizeOk (n : Nat)
-| Error (msg : String)
-```
-
-The specification (`BBStep`) would relate a state and a `BBCmd` to a
-`BBResult` and a next state. A trace is then `List BBCmd`, and executing it
-against the imperative implementation produces a `List BBResult`.
-
-This idea is similar to what's done in [quickcheck-state-machine](https://github.com/stevana/quickcheck-state-machine#readme)
-
-### Testing strategy
-
-1. **Generate arbitrary `List BBCmd`**: Random sequences of Put/Get/Size with
-   random arguments, without regard to well-formedness. Use `deriving Arbitrary`
-   for `BBCmd`.
-
-2. **Execute against both models in lockstep**: For each command in the trace,
-   run it against:
-   - The abstract model (list-based state), which determines whether the
-     operation is valid and what the correct result is.
-   - The imperative circular buffer.
-
-3. **Compare outcomes at each step**:
-   - If the abstract model says the command is valid: the imperative code
-     should succeed with the same result.
-   - If the abstract model says the command is invalid (Get on empty, Put on
-     full): the imperative code should raise an error.
-   - If the imperative code raises an error when the abstract model says it
-     should succeed (or vice versa): test failure.
-
-4. **Derive a checker**: Use `derive_checker` for `BBStep` so we can
-   efficiently validate whether a given (state, command, result, next-state)
-   tuple is a valid transition. This would let us check well-formedness of
-   prefixes without maintaining the abstract state by hand — though for this
-   test the manual abstract-state approach may be simpler.
 
 ### Open questions
-
-- Should `Size` ever be "invalid"? In the current spec it always succeeds
-  (querying size has no precondition beyond `WithinCapacity`). If we keep
-  `WithinCapacity` on `SizeOp`, then Size on a state that somehow violates
-  capacity is invalid — but that can't happen if we start from a valid state
-  and only apply valid operations. So Size errors would only arise if the
-  implementation itself corrupted state.
-
-- Do we need to test Get with a *wrong* expected value, or just Get on an
-  empty buffer? The former tests output correctness (already covered by
-  `executeTrace`), the latter tests precondition enforcement. With the
-  `BBCmd`/`BBResult` split, this distinction becomes natural.
 
 - The `WithinCapacity` guard on `GetOp` and `SizeOp` was added to constrain
   the backward generator. For error testing it means the spec considers *any*
