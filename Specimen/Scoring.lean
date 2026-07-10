@@ -1454,4 +1454,158 @@ initialize do
   registerScoringBundle { base with wholeScheduleScorer := some sourceQualityWholeScheduleScorer }
 
 
+----------------------------------------------
+-- Built-in: RecAwareGradedScore
+-- Like GradedUniformDensityScore but with a RecursionKind axis that
+-- distinguishes direct recursion (Source.Rec) from mutual recursion
+-- (detected as Source.NonRec whose dep is inProgress in the memo,
+-- meaning we're in a cycle with that dep).
+-- Direct recursion is preferred because it's structurally simpler
+-- and doesn't require coordinating termination across multiple specs.
+----------------------------------------------
+
+inductive RecursionKind
+  | None
+  | Direct
+  | Mutual
+  deriving Repr, BEq, Inhabited
+
+namespace RecursionKind
+
+def toNat : RecursionKind → Nat
+  | .None => 0
+  | .Direct => 1
+  | .Mutual => 2
+
+instance : Ord RecursionKind where
+  compare a b := compare a.toNat b.toNat
+
+def max (a b : RecursionKind) : RecursionKind :=
+  if a.toNat ≥ b.toNat then a else b
+
+end RecursionKind
+
+structure RecAwareGradedScore where
+  density        : Density := .Total
+  recursionKind  : RecursionKind := .None
+  checkSpeed     : CheckSpeed := .NotACheck
+  passLikelihood : PassLikelihood := .Certain
+  varDeps        : Nat := 0
+  deriving Repr, BEq, Inhabited
+
+deriving instance TypeName for RecAwareGradedScore
+
+instance : Ord RecAwareGradedScore where
+  compare a b :=
+    match compare a.density.toNat b.density.toNat with
+    | .eq => match compare a.recursionKind.toNat b.recursionKind.toNat with
+      | .eq => match compare a.checkSpeed.toNat b.checkSpeed.toNat with
+        | .eq => match compare a.passLikelihood.toNat b.passLikelihood.toNat with
+          | .eq => compare a.varDeps b.varDeps
+          | r => r
+        | r => r
+      | r => r
+    | r => r
+
+instance : LT RecAwareGradedScore := ltOfOrd
+
+instance : Scorable RecAwareGradedScore where
+  empty := {}
+  combine a b :=
+    { density := Density.max a.density b.density
+      recursionKind := RecursionKind.max a.recursionKind b.recursionKind
+      checkSpeed := CheckSpeed.max a.checkSpeed b.checkSpeed
+      passLikelihood := PassLikelihood.max a.passLikelihood b.passLikelihood
+      varDeps := a.varDeps + b.varDeps }
+  isBetter a b := a < b
+  bestOf scores := scores.foldl (fun acc s => if s < acc then s else acc) (scores.headD {})
+  uncoveredPenalty := { density := .Partial, varDeps := 0 }
+  worst := { density := .Checking, recursionKind := .Mutual, checkSpeed := .Recursive, passLikelihood := .Desperate, varDeps := 1000 }
+  badness s :=
+    let varDepPenalty := min 0.05 (s.varDeps.toFloat * 0.01)
+    let recPenalty := s.recursionKind.toNat.toFloat * 0.15
+    if s.density != .Checking then
+      let level := s.density.toNat.toFloat / 4.0
+      min 1.0 (level + recPenalty + varDepPenalty)
+    else
+      let speedVal := match s.checkSpeed with
+        | .NotACheck => 0.0 | .Decidable => 0.0 | .Moderate => 0.33
+        | .Expensive => 0.66 | .Recursive => 1.0
+      let likelVal := match s.passLikelihood with
+        | .Certain => 0.0 | .Likely => 0.0 | .Moderate => 0.33
+        | .Unlikely => 0.66 | .Desperate => 1.0
+      let severity := max speedVal likelVal * 0.7 + min speedVal likelVal * 0.3
+      min 1.0 (0.75 + severity * 0.25 + recPenalty + varDepPenalty)
+
+private def classifyRecursionKind (key : SpecKey)
+    (src : Source) (outputs : List (Name × Option ConstructorExpr)) (prodSort : ProducerSort) : RecursionKind :=
+  match src with
+  | .Rec .. => .Direct
+  | .MutRec .. => .Mutual
+  | .NonRec (indName, args) =>
+    if indName != key.inductiveName then .None
+    else
+      let outputIdxs := outputs.filterMap fun (n, _) =>
+        args.findIdx? fun a => match a with | .Unknown v => v == n | _ => false
+      let depDeriveSort := match prodSort with
+        | .Enumerator => DeriveSort.Enumerator
+        | .Generator => DeriveSort.Generator
+      let depKey : SpecKey := { inductiveName := indName, outputIndices := outputIdxs, deriveSort := depDeriveSort }
+      if depKey == key then .Direct
+      else .Mutual
+
+private def classifyRecursionKindCheck (key : SpecKey) (src : Source) : RecursionKind :=
+  match src with
+  | .Rec .. => .Direct
+  | .MutRec .. => .Mutual
+  | .NonRec (indName, _args) =>
+    if indName != key.inductiveName then .None
+    else
+      if key.deriveSort == .Checker && key.outputIndices.isEmpty then .Direct
+      else .Mutual
+
+def recAwareStepScorer : StepScorer RecAwareGradedScore := fun key memo inputVars step => do
+  match step with
+  | .Unconstrained .. => return { density := .Total }
+  | .Match .. => return { density := .Backtracking }
+  | .Check src polarity =>
+    let varDeps := countGeneratedVarDeps inputVars src
+    let speed := classifyCheckSpeed memo key src varDeps
+    let likelihood ← classifyPassLikelihood inputVars key src polarity varDeps
+    let recKind := classifyRecursionKindCheck key src
+    return { density := .Checking, recursionKind := recKind, checkSpeed := speed, passLikelihood := likelihood, varDeps := varDeps }
+  | .SuchThat outputs src prodSort =>
+    let outputNames := Std.HashSet.ofList (outputs.map (·.1))
+    let varDeps := countGeneratedVarDeps (inputVars.union outputNames) src
+    let recKind := classifyRecursionKind key src outputs prodSort
+    let depDensity : Density := match src with
+      | .Rec .. => .Partial
+      | .MutRec .. => .Partial
+      | .NonRec (indName, args) =>
+        let outputIdxs := outputs.filterMap fun (n, _) =>
+          args.findIdx? fun a => match a with | .Unknown v => v == n | _ => false
+        let depDeriveSort := match prodSort with
+          | .Enumerator => DeriveSort.Enumerator
+          | .Generator => DeriveSort.Generator
+        let depKey : SpecKey := { inductiveName := indName, outputIndices := outputIdxs, deriveSort := depDeriveSort }
+        if depKey == key then .Partial
+        else match memo[depKey]? with
+          | some (.done depSched) => (Score.unwrap RecAwareGradedScore depSched.score).density
+          | _ => .Partial
+    return { density := depDensity, recursionKind := recKind, varDeps := varDeps }
+
+def recAwareScheduleScorer : ScheduleScorer RecAwareGradedScore := fun stepScores =>
+  stepScores.foldl Scorable.combine Scorable.empty
+
+def recAwareLeafAggregator : LeafAggregator RecAwareGradedScore := fun ctors =>
+  match ctors with
+  | [] => Scorable.uncoveredPenalty
+  | _ => Scorable.bestOf (ctors.map Prod.snd)
+
+def recAwareInductiveAggregator : InductiveAggregator RecAwareGradedScore := fun leafScores =>
+  leafScores.foldl Scorable.combine Scorable.empty
+
+initialize registerScoringBundle (mkScorerBundle `Scoring.RecAwareGradedScore
+  recAwareStepScorer recAwareScheduleScorer recAwareLeafAggregator recAwareInductiveAggregator)
+
 end Scoring
