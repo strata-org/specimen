@@ -1969,6 +1969,8 @@ def deriveFromScheduleDep (dep : ScheduleDep) (scheduleRewriter : List ScheduleS
       dep.inductiveName indLevels freshArgIdents freshenedOutputNames.toList
       outTypes.toList producerSort localCtx
 
+/-- Rewrites a generated `instance` command to use `scoped instance` or `local instance`
+    by patching the `attrKind` node in the syntax tree (declaration → instance → attrKind). -/
 private def setInstanceVisibility (cmd : TSyntax `command) (kind : AttributeKind) : TSyntax `command :=
   if kind == .global then cmd
   else
