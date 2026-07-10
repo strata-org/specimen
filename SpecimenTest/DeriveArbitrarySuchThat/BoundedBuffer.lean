@@ -240,7 +240,7 @@ def executeTrace (cb : ST.Ref IO.RealWorld CircularBuffer) (buggy : Bool := fals
 
 def differentialTest (buggy : Bool := false) : IO Unit := do
   for i in List.range 1000 do
-    let (trace, bb) ← Gen.run
+    let (trace, _) ← Gen.run
       (ArbitrarySizedSuchThat.arbitrarySizedST
         (fun (t, s) => SafeBBTrace ([], 3) t s) 10) (i + 5)
     let cb ← mkCircularBuffer 3 buggy
