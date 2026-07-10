@@ -1457,11 +1457,10 @@ initialize do
 ----------------------------------------------
 -- Built-in: RecAwareGradedScore
 -- Like GradedUniformDensityScore but with a RecursionKind axis that
--- distinguishes direct recursion (Source.Rec) from mutual recursion
--- (detected as Source.NonRec whose dep is inProgress in the memo,
--- meaning we're in a cycle with that dep).
--- Direct recursion is preferred because it's structurally simpler
--- and doesn't require coordinating termination across multiple specs.
+-- distinguishes direct recursion (Source.Rec) from same-inductive
+-- cross-mode calls (Source.NonRec targeting the same inductive with
+-- different output indices or derive sort). Direct recursion is
+-- preferred as the simpler pattern when both are available.
 ----------------------------------------------
 
 inductive RecursionKind
