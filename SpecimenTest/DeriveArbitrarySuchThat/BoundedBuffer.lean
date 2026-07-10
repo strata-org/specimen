@@ -57,6 +57,10 @@ inductive SafeBBTrace : BB -> BBTrace -> BB -> Prop where
 
 -- Generating safe traces (no ErrResult ever generated)
 
+set_option specimen.multiOutput true
+set_option specimen.autoDeriveDeps true
+set_option match.ignoreUnusedAlts true
+
 instance (s : List String) (c : Nat) : DecOpt (WithinCapacity s c) where
   decOpt _ := if s.length ≤ c then .ok true else .ok false
 
@@ -72,9 +76,6 @@ instance instArbitraryString : Arbitrary String where
 -- generates a command freely and then checks `¬ CanStep`.
 deriving instance Arbitrary for BBCmd
 
-set_option specimen.multiOutput true in
-set_option specimen.autoDeriveDeps true in
-set_option match.ignoreUnusedAlts true in
 derive_mutual
   (fun i => ∃ t s, SafeBBTrace i t s),
   (fun s => ∃ t i, SafeBBTrace i t s)
@@ -124,37 +125,8 @@ inductive EveryBBTrace : BB -> BBTrace -> BB -> Prop where
     EveryBBTrace s' ps s'' ->
     EveryBBTrace s ((cmd, res)::ps) s''
 
-section
-set_option specimen.multiOutput true
-set_option specimen.autoDeriveDeps true
-set_option match.ignoreUnusedAlts true
-
--- Every stage is listed explicitly as an entry of this one `derive_mutual`,
--- rather than as a bare `derive_mutual (fun i => ∃ t s, EveryBBTrace i t s)`
--- (letting `autoDeriveDeps` discover every dependency). The reason was that
--- experiments showed that doing so produced a worse generator.
-
--- The stages:
---   1. Enumerator for the `BBSafeStep` witnesses `(r, bb')` — used to decide `CanStep`.
---   2. Checker `DecOpt (CanStep bb c)` — enumerate-and-check (backed by the
---      enumerator above); negated via `DecOpt.negOpt` for `ErrStep`.
---   3a. Generator for the `BBSafeStep` witnesses given a command — used by `SafeStep`
---       when the command is an input.
---   3b. Forward `BBSafeStep` generator (command generated too) — used by the forward
---       `BBStep` generator.
---   3c. Forward `BBStep` generator — one step of `EveryBBTrace`, generating the
---       command, result, and next state from the current state.
---   4. Generator for `EveryBBTrace`, via `derive_mutual` so the recursive instance
---      is registered and the scheduler can step forward and recurse.
-
 derive_mutual
-  enumerator (fun bb c => ∃ r bb', BBSafeStep bb c r bb'),
-  checker (fun bb c => CanStep bb c),
-  generator (fun bb c => ∃ r bb', BBSafeStep bb c r bb'),
-  generator (fun bb => ∃ cmd r bb', BBSafeStep bb cmd r bb'),
-  generator (fun bb => ∃ cmd res bb', BBStep bb cmd res bb'),
   generator (fun i => ∃ t s, EveryBBTrace i t s)
-end
 
 -----
 -- DIFFERENTIAL TESTING USING TRACES
