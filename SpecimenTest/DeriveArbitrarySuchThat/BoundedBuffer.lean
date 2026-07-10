@@ -57,10 +57,6 @@ inductive SafeBBTrace : BB -> BBTrace -> BB -> Prop where
 
 -- Generating safe traces (no ErrResult ever generated)
 
-set_option specimen.multiOutput true
-set_option specimen.autoDeriveDeps true
-set_option match.ignoreUnusedAlts true
-
 instance (s : List String) (c : Nat) : DecOpt (WithinCapacity s c) where
   decOpt _ := if s.length ≤ c then .ok true else .ok false
 
@@ -76,29 +72,17 @@ instance instArbitraryString : Arbitrary String where
 -- generates a command freely and then checks `¬ CanStep`.
 deriving instance Arbitrary for BBCmd
 
-derive_mutual
-  (fun i => ∃ t s, SafeBBTrace i t s),
-  (fun s => ∃ t i, SafeBBTrace i t s)
+set_option specimen.multiOutput true
+set_option specimen.autoDeriveDeps true
+set_option match.ignoreUnusedAlts true
+-- set_option specimen.scoreType "Scoring.BoundedGradedScore"
+set_option specimen.scoreType "Scoring.RecAwareGradedScore"
+instance : ArbitrarySizedSuchThat Nat (fun b => a <= b) where
+  arbitrarySizedST _ := do
+    let n ← Gen.choose _ 0 5 (by omega)
+    return (n.1 + a)
 
--- The backward generator (fun s => ∃ t i, SafeBBTrace i t s) is poor quality:
--- it relies on guess-and-check for GetOp and PutOp (randomly generating lists
--- and hoping they satisfy WithinCapacity), so in practice it only produces
--- SizeOp operations. When the target final state is already at capacity, GetOp
--- and PutOp both require generating valid pre-states that the scheduler can't
--- efficiently construct.
-def backwardOnlySizeOps : IO Unit := do
-  for i in List.range 100 do
-    let (_, trace) ← Gen.run
-      (ArbitrarySizedSuchThat.arbitrarySizedST
-        (fun (s, t) => SafeBBTrace s t (["A", "B", "C"], 3)) 10) (i + 5)
-    let allSize := trace.all fun
-      | (.Size, _) => true
-      | _ => false
-    if !allSize then
-      throw <| IO.userError s!"Expected only SizeOp in backward trace, got: {repr trace}"
 
-#guard_msgs in
-#eval backwardOnlySizeOps
 
 -- Generating traces that admit errors (via `BBStep` / `EveryBBTrace`).
 
@@ -125,8 +109,64 @@ inductive EveryBBTrace : BB -> BBTrace -> BB -> Prop where
     EveryBBTrace s' ps s'' ->
     EveryBBTrace s ((cmd, res)::ps) s''
 
+
+
+def inverseScaleBase (baseWeight : Nat) (_ctorName : Name) (_outputIndices : List Nat)
+    (_deriveSort : Schedules.DeriveSort) (_scoreBadness : Float) (isRec : Bool) (size : Nat)
+    (_numBase _numRec : Nat) : Nat :=
+  if isRec then baseWeight
+  else max 1 (baseWeight / (size + 1))
+
+section
+set_option specimen.multiOutput true
+set_option specimen.autoDeriveDeps true
+set_option match.ignoreUnusedAlts true
+set_option specimen.weightModifier "BoundedBuffer.inverseScaleBase"
+
+-- Every stage is listed explicitly as an entry of this one `derive_mutual`,
+-- rather than as a bare `derive_mutual (fun i => ∃ t s, EveryBBTrace i t s)`
+-- (letting `autoDeriveDeps` discover every dependency). The reason was that
+-- experiments showed that doing so produced a worse generator.
+
+-- The stages:
+--   1. Enumerator for the `BBSafeStep` witnesses `(r, bb')` — used to decide `CanStep`.
+--   2. Checker `DecOpt (CanStep bb c)` — enumerate-and-check (backed by the
+--      enumerator above); negated via `DecOpt.negOpt` for `ErrStep`.
+--   3a. Generator for the `BBSafeStep` witnesses given a command — used by `SafeStep`
+--       when the command is an input.
+--   3b. Forward `BBSafeStep` generator (command generated too) — used by the forward
+--       `BBStep` generator.
+--   3c. Forward `BBStep` generator — one step of `EveryBBTrace`, generating the
+--       command, result, and next state from the current state.
+--   4. Generator for `EveryBBTrace`, via `derive_mutual` so the recursive instance
+--      is registered and the scheduler can step forward and recurse.
+
+#guard_msgs(drop info, error) in
 derive_mutual
-  generator (fun i => ∃ t s, EveryBBTrace i t s)
+  generator (fun i => ∃ t s, EveryBBTrace i t s),
+  generator (fun i => ∃ t s, SafeBBTrace i t s),
+  generator (fun s => ∃ t i, SafeBBTrace i t s)
+end
+
+-- The backward generator (fun s => ∃ t i, SafeBBTrace i t s) is poor quality:
+-- it relies on guess-and-check for GetOp and PutOp (randomly generating lists
+-- and hoping they satisfy WithinCapacity), so in practice it only produces
+-- SizeOp operations. When the target final state is already at capacity, GetOp
+-- and PutOp both require generating valid pre-states that the scheduler can't
+-- efficiently construct.
+def backwardOnlySizeOps : IO Unit := do
+  for i in List.range 100 do
+    let (_, trace) ← Gen.run
+      (ArbitrarySizedSuchThat.arbitrarySizedST
+        (fun (s, t) => SafeBBTrace s t (["A", "B", "C"], 3)) 10) (i + 5)
+    let allSize := trace.all fun
+      | (.Size, _) => true
+      | _ => false
+    if !allSize then
+      throw <| IO.userError s!"Expected only SizeOp in backward trace, got: {repr trace}"
+
+#guard_msgs in
+#eval backwardOnlySizeOps
 
 -----
 -- DIFFERENTIAL TESTING USING TRACES
@@ -236,6 +276,89 @@ def errorDifferentialTest (buggy : Bool := false) : IO Unit := do
 -- Don't want to do this because the test is flaky
 -- #guard_msgs(error, drop info) in
 -- #eval errorDifferentialTest (buggy := true)
+
+-----
+-- STATISTICS: comparing SafeBBTrace vs EveryBBTrace output distributions
+-----
+
+structure TraceStats where
+  samples     : Nat := 0
+  puts        : Nat := 0
+  gets        : Nat := 0
+  sizes       : Nat := 0
+  errors      : Nat := 0
+  created     : Nat := 0  -- successful Put count (keys added)
+  destroyed   : Nat := 0  -- successful Get count (keys removed)
+  finalBufLen : Nat := 0  -- sum of final buffer lengths
+  emptyTraces : Nat := 0
+  deriving Repr
+
+def classifyOp : BBCmd × BBResult → TraceStats → TraceStats
+  | (.Put _, .PutOk), s => { s with puts := s.puts + 1, created := s.created + 1 }
+  | (.Put _, .Error), s => { s with puts := s.puts + 1, errors := s.errors + 1 }
+  | (.Get, .GetOk _), s => { s with gets := s.gets + 1, destroyed := s.destroyed + 1 }
+  | (.Get, .Error), s => { s with gets := s.gets + 1, errors := s.errors + 1 }
+  | (.Size, .SizeOk _), s => { s with sizes := s.sizes + 1 }
+  | (.Size, .Error), s => { s with sizes := s.sizes + 1, errors := s.errors + 1 }
+  | _, s => s
+
+def collectStats (traces : List (BBTrace × BB)) : TraceStats :=
+  traces.foldl (fun acc (trace, (finalBuf, _)) =>
+    let s := trace.foldl (fun st op => classifyOp op st) acc
+    { s with
+      samples := s.samples + 1
+      finalBufLen := s.finalBufLen + finalBuf.length
+      emptyTraces := s.emptyTraces + if trace.isEmpty then 1 else 0 }
+  ) {}
+
+def printStats (name : String) (s : TraceStats) : IO Unit := do
+  IO.println s!"=== {name} ({s.samples} samples) ==="
+  let totalOps := s.puts + s.gets + s.sizes
+  IO.println s!"  Total ops: {totalOps}"
+  IO.println s!"  Put: {s.puts}, Get: {s.gets}, Size: {s.sizes}"
+  IO.println s!"  Errors: {s.errors}"
+  IO.println s!"  Created (successful puts): {s.created}"
+  IO.println s!"  Destroyed (successful gets): {s.destroyed}"
+  IO.println s!"  Avg final buffer length: {if s.samples > 0 then s.finalBufLen / s.samples else 0}"
+  IO.println s!"  Empty traces: {s.emptyTraces}"
+
+def generateTraces (gen : Nat → Plausible.Gen (BBTrace × BB)) (n : Nat := 1000) : IO (List (BBTrace × BB)) := do
+  let mut results : List (BBTrace × BB) := []
+  for i in List.range n do
+    let (trace, bb) ← Gen.run (gen 10) (i + 5)
+    results := (trace, bb) :: results
+  return results
+
+def assertGeneratorQuality (name : String) (stats : TraceStats)
+    (minOps : Nat) (maxEmptyPct : Nat) (minGets : Nat := 0) : IO Unit := do
+  let totalOps := stats.puts + stats.gets + stats.sizes
+  let emptyPct := stats.emptyTraces * 100 / stats.samples
+  if totalOps < minOps then
+    throw <| IO.userError s!"{name}: too few ops ({totalOps} < {minOps})"
+  if emptyPct > maxEmptyPct then
+    throw <| IO.userError s!"{name}: too many empty traces ({emptyPct}% > {maxEmptyPct}%)"
+  if stats.destroyed < minGets then
+    throw <| IO.userError s!"{name}: too few successful gets ({stats.destroyed} < {minGets})"
+
+def safeBBTraceQuality : IO Unit := do
+  let results ← generateTraces (ArbitrarySizedSuchThat.arbitrarySizedST
+    (fun (t, s) => SafeBBTrace ([], 3) t s))
+  let stats := collectStats results
+  assertGeneratorQuality "SafeBBTrace" stats
+    (minOps := 2000) (maxEmptyPct := 20) (minGets := 100)
+
+#guard_msgs in
+#eval safeBBTraceQuality
+
+def everyBBTraceQuality : IO Unit := do
+  let results ← generateTraces (ArbitrarySizedSuchThat.arbitrarySizedST
+    (fun (t, s) => EveryBBTrace ([], 3) t s))
+  let stats := collectStats results
+  assertGeneratorQuality "EveryBBTrace" stats
+    (minOps := 2000) (maxEmptyPct := 20) (minGets := 100)
+
+#guard_msgs in
+#eval everyBBTraceQuality
 
 end BoundedBuffer
 
