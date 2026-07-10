@@ -58,6 +58,29 @@ derive_mutual checker
   (fun Γ e τ => typing Γ e τ)
 ```
 
+**Instance visibility**: By default, `derive_mutual` registers global instances. You can prefix with `scoped` or `local` to control visibility:
+
+```lean
+-- Scoped: instance only visible when namespace is opened
+namespace MyStrategy
+scoped derive_mutual
+  (fun lo hi => ∃ (t : BinaryTree), BST lo hi t)
+end MyStrategy
+
+-- Use it explicitly:
+open MyStrategy in #eval ...
+
+-- Local: instance only visible within the enclosing section
+section
+local derive_mutual
+  (fun lo hi => ∃ (t : BinaryTree), BST lo hi t)
+-- instance available here
+end
+-- instance gone here
+```
+
+This enables A/B comparison of scoring strategies by deriving the same relation under different namespaces with different `specimen.scoreType` options.
+
 **How `autoDeriveDeps` works**: When enabled, `derive_mutual` inspects the constructors of the target relation and automatically derives generator/checker instances for any sub-relations (e.g., `typing` depends on `lookup` — both will be derived). This eliminates the need to manually derive dependencies first.
 
 **How `multiOutput` works**: When enabled, hypothesis steps can produce multiple output variables simultaneously. For instance, a hypothesis `typing Γ e τ` can generate both `e` and `τ` in a single step (producing a `Prod`), rather than requiring separate steps.
