@@ -186,6 +186,7 @@ unsafe def elabSpecimenTest : CommandElab := fun stx => do
     let memo ← IO.mkRef ({} : Std.HashMap SpecKey MemoEntry)
 
     -- Elaborate the proposition and compute its schedule
+    let scheduleStartTime ← IO.monoNanosNow
     let scheduleResult ← withScope (fun scope => { scope with opts := scope.opts.set `specimen.multiOutput true }) do
       liftTermElabM do
         let e ← elabTerm prop (some (mkSort .zero))
@@ -194,12 +195,14 @@ unsafe def elabSpecimenTest : CommandElab := fun stx => do
         let deriveDep : SpecKey → MetaM Unit := fun depKey => do
           let _ ← (deriveBestInductiveSchedule depKey memo).run termElabCtx
         getTheoremSchedule tgt (memoRef := some memo) (deriveDep := deriveDep)
+    let scheduleEndTime ← IO.monoNanosNow
+    let scheduleTimeUs := (scheduleEndTime - scheduleStartTime) / 1000
 
     match scheduleResult with
     | none => throwError "specimen: unable to compute a testing schedule for this proposition.\n\
         It must be of the form `∀ x₁ ... xₙ, H₁ → ... → Hₘ → C` where\n\
         the hypotheses and conclusion involve inductive relations."
-    | some (steps, sort, varNamesTypes, _count, _score) =>
+    | some (steps, sort, varNamesTypes, schedulesConsidered, theoremScore) =>
       -- Ensure the conclusion's relation has a DecOpt instance derived
       match sort with
       | .TheoremSchedule (conclusionName, _) true =>
@@ -224,8 +227,9 @@ unsafe def elabSpecimenTest : CommandElab := fun stx => do
           let depKey : SpecKey := { inductiveName := dep.inductiveName, outputIndices := dep.outputIndices, deriveSort := dep.deriveSort }
           usedKeys := collectUsedDeps depKey finalMemo usedKeys
 
-      -- Emit all dependency instances
+      -- Emit all dependency instances (and collect compiled code for the widget)
       let components := computeSpecSCC usedKeys.toList finalMemo
+      let mut compiledCodeMap : Std.HashMap SpecKey (String × String) := {}
       for comp in components do
         for key in comp do
           match finalMemo[key]? with
@@ -240,14 +244,32 @@ unsafe def elabSpecimenTest : CommandElab := fun stx => do
             try
               let (defCmd, instCmd) ← liftTermElabM <|
                 compileInductiveSchedule indSched globalName siblings
+              let defStr ← liftTermElabM <| try
+                let fmt ← Lean.PrettyPrinter.ppCommand defCmd
+                pure fmt.pretty
+              catch _ => pure "(failed to pretty-print def)"
+              let instStr ← liftTermElabM <| try
+                let fmt ← Lean.PrettyPrinter.ppCommand instCmd
+                pure fmt.pretty
+              catch _ => pure "(failed to pretty-print instance)"
+              compiledCodeMap := compiledCodeMap.insert key (defStr, instStr)
               elabCommand defCmd
               elabCommand instCmd
             catch e : Exception =>
               logWarning m!"specimen: failed to compile instance for {key.inductiveName}: {e.toMessageData}"
           | _ => pure ()
 
-      -- Emit rich HTML widget showing the theorem schedule + derived dependencies
-      -- (reuses the same HTML structure as derive_mutual)
+      -- Compile the theorem schedule into a checker def (before widget so we can show the code)
+      let defName ← liftTermElabM (Lean.Core.mkFreshUserName `specimen_theorem_checker)
+      let defCmd ← withScope (fun scope => { scope with opts := scope.opts.set `specimen.multiOutput true }) do
+        liftTermElabM <| compileTheoremDef steps sort (mkSort .zero) defName
+      let theoremCodeStr ← liftTermElabM <| try
+        let fmt ← Lean.PrettyPrinter.ppCommand defCmd
+        pure fmt.pretty
+      catch _ => pure "(failed to pretty-print)"
+      elabCommand defCmd
+
+      -- Emit rich HTML widget (full derive_mutual-style display)
       let richOutput := Lean.Option.get (← getOptions) specimen.richOutput
       if richOutput then
         liftTermElabM do
@@ -258,6 +280,8 @@ unsafe def elabSpecimenTest : CommandElab := fun stx => do
           let scoreStyle := json% {"color": "#808080", "fontSize": "0.9em"}
           let singletonStyle := json% {"color": "#b5cea8"}
           let srcStyle := json% {"color": "#dcdcaa", "fontWeight": "bold"}
+          let dstStyle := json% {"color": "#9cdcfe"}
+          let reqStyle := json% {"color": "#c586c0", "fontStyle": "italic"}
           let bundle ← Scoring.getActiveScorerBundle
           let scoreToColor (score : Score) : String :=
             let b := bundle.scoreBadness score
@@ -267,56 +291,64 @@ unsafe def elabSpecimenTest : CommandElab := fun stx => do
           let getNumArgs (k : SpecKey) : TermElabM Nat := do
             try pure ((← getComponentsOfArrowType (← getConstInfoInduct k.inductiveName).type).size - 1)
             catch _ => pure k.outputIndices.length
-          let mut htmlChildren : Array ProofWidgets.Html := #[]
-          -- Title
-          htmlChildren := htmlChildren.push (.element "div" #[("style", json% {"marginBottom": "12px"})] #[
-            mkSpan headerStyle s!"⚗ specimen_test — {usedKeys.size} derived specs"
-          ])
-          -- Theorem schedule section
           let stepColor (step : ScheduleStep) : String :=
             match step with
             | .Check (.NonRec (name, _)) true =>
-              let depKey := SpecKey.mk name [] .Checker
-              match finalMemo[depKey]? with
+              match finalMemo[SpecKey.mk name [] .Checker]? with
               | some (.done depSched) => specColor depSched
               | _ => "hsl(30, 70%, 60%)"
             | .Check _ false => "hsl(0, 70%, 60%)"
             | .Check _ true => "hsl(30, 70%, 60%)"
             | .Unconstrained _ (.NonRec (name, _)) _ =>
-              let depKey := SpecKey.mk name [] .Generator
-              match finalMemo[depKey]? with
+              match finalMemo[SpecKey.mk name [] .Generator]? with
               | some (.done depSched) => specColor depSched
               | _ => "hsl(60, 70%, 60%)"
             | .Unconstrained _ _ _ => "hsl(60, 70%, 60%)"
             | .SuchThat vs (.NonRec (name, args)) ps =>
-              let outNames := vs.map Prod.fst
-              let outIdxs := computeOutputIndices args outNames
+              let outIdxs := computeOutputIndices args (vs.map Prod.fst)
               let ds := match ps with | .Generator => DeriveSort.Generator | .Enumerator => .Enumerator
-              let depKey := SpecKey.mk name outIdxs ds
-              match finalMemo[depKey]? with
+              match finalMemo[SpecKey.mk name outIdxs ds]? with
               | some (.done depSched) => specColor depSched
               | _ => "hsl(90, 70%, 60%)"
             | .SuchThat _ (.Rec ..) _ | .SuchThat _ (.MutRec ..) _ => "hsl(200, 50%, 60%)"
             | .Match .. => "hsl(120, 40%, 60%)"
+          let mut htmlChildren : Array ProofWidgets.Html := #[]
+          -- Title
+          htmlChildren := htmlChildren.push (.element "div" #[("style", json% {"marginBottom": "12px"})] #[
+            mkSpan headerStyle s!"⚗ specimen_test — {usedKeys.size} derived specs, {components.length} components"
+          ])
+          -- Theorem schedule section with score, time, code
+          let theoremScoreStr := bundle.reprScore theoremScore
+          let theoremScoreColor := scoreToColor theoremScore
+          let theoremTimeStr := if scheduleTimeUs >= 1000 then s!"{scheduleTimeUs / 1000}ms"
+            else if scheduleTimeUs > 0 then s!"{scheduleTimeUs}μs" else ""
           let stepHtmls := steps.toArray.map fun step =>
-            let color := stepColor step
-            ProofWidgets.Html.element "div" #[] #[mkSpan (json% {"color": $(color)}) (ppStep step)]
+            ProofWidgets.Html.element "div" #[] #[mkSpan (json% {"color": $(stepColor step)}) (ppStep step)]
           let conclusionStr := match sort with
             | .TheoremSchedule hyp _ => s!"check_conclusion {ppHypothesisExpr hyp}"
             | _ => "?"
-          let conclusionHtml := ProofWidgets.Html.element "div" #[] #[
+          let conclusionHtml : ProofWidgets.Html := .element "div" #[] #[
             mkSpan (json% {"color": "hsl(120, 70%, 70%)"}) conclusionStr]
-          htmlChildren := htmlChildren.push (ProofWidgets.Html.element "details" #[("open", json% true)] #[
+          let codeStyle := json% {"whiteSpace": "pre-wrap", "fontFamily": "var(--vscode-editor-font-family, monospace)", "fontSize": "0.85em", "lineHeight": "1.4", "padding": "8px", "background": "#0d1117", "borderRadius": "4px", "border": "1px solid #30363d", "overflow": "auto", "maxHeight": "400px"}
+          let theoremCodeDropdown : ProofWidgets.Html := .element "details" #[] #[
+            .element "summary" #[("style", json% {"cursor": "pointer", "marginTop": "4px", "marginBottom": "2px"})] #[
+              mkSpan (json% {"color": "#79c0ff", "fontSize": "0.9em"}) "📝 generated theorem checker"
+            ],
+            .element "div" #[("style", codeStyle)] #[.text theoremCodeStr]
+          ]
+          htmlChildren := htmlChildren.push (.element "details" #[("open", json% true)] #[
             .element "summary" #[("style", json% {"cursor": "pointer", "fontWeight": "bold", "color": "#569cd6", "marginBottom": "6px"})] #[
-              .text "📋 Theorem Schedule"
+              .text "📋 Theorem Schedule",
+              mkSpan scoreStyle s!" ({schedulesConsidered} considered, {theoremTimeStr}) ",
+              mkSpan (json% {"color": $(theoremScoreColor)}) s!"score: {theoremScoreStr}"
             ],
             .element "div" #[("style", json% {"marginLeft": "16px", "marginBottom": "6px", "padding": "4px 8px", "background": "#1a1a2e", "borderRadius": "4px", "border": "1px solid #2a2a4a", "whiteSpace": "pre", "fontFamily": "var(--vscode-editor-font-family, monospace)", "fontSize": "0.9em", "lineHeight": "1.5"})]
-              (stepHtmls.push conclusionHtml)
+              ((stepHtmls.push conclusionHtml).push theoremCodeDropdown)
           ])
-          -- Derived specs section (same as derive_mutual's topological order display)
-          let components' := computeSpecSCC usedKeys.toList finalMemo
+          -- Derived specs section with constructor scores, code dropdowns
           let mut orderItems : Array ProofWidgets.Html := #[]
-          for comp in components' do
+          let mut totalEdges : Nat := 0
+          for comp in components do
             for k in comp do
               let numArgs ← getNumArgs k
               match finalMemo[k]? with
@@ -332,14 +364,29 @@ unsafe def elabSpecimenTest : CommandElab := fun stx => do
                   let nCtors := indSched.baseSchedules.length + indSched.recSchedules.length
                   let specNameStyle := json% {"color": $(specColor indSched), "fontWeight": "bold"}
                   let indScoreStr := bundle.reprScore indSched.score
-                  -- Per-constructor schedule details
+                  -- Per-constructor details with scores
                   let allScheds := indSched.baseSchedules ++ indSched.recSchedules
+                  -- Count edges for dep graph
+                  let deps := allScheds.flatMap (fun (_, (s, _)) => collectNonRecDeps s)
+                  let relDeps := deps.filter (fun d => d.kind == .relation || d.kind == .checker)
+                  let depKeys := relDeps.map (fun d => SpecKey.mk d.inductiveName d.outputIndices d.deriveSort)
+                    |>.filter (usedKeys.contains ·) |>.eraseDups
+                  totalEdges := totalEdges + depKeys.length
                   let ctorItems : Array ProofWidgets.Html := Id.run do
                     let mut items := #[]
                     for (ctorName, (ctorSteps, ctorSort)) in allScheds do
                       let isBase := indSched.baseSchedules.any (fun (n, _) => n == ctorName)
                       let tag := if isBase then "base" else "rec"
                       let tagColor := if isBase then json% {"color": "#4ec9b0"} else json% {"color": "#d7ba7d"}
+                      let (ctorInfoStr, ctorColor) := match indSched.ctorStats.find? (fun (n, _, _, _) => n == ctorName) with
+                        | some (_, us, count, score) =>
+                          let timeStr := if us >= 1000 then s!"{us / 1000}ms" else if us > 0 then s!"{us}μs" else ""
+                          let countStr := if count > 1 then s!"{count} considered" else ""
+                          let scoreStr := bundle.reprScore score
+                          let parts := [timeStr, countStr, scoreStr].filter (· != "")
+                          (s!" ({String.intercalate ", " parts})", scoreToColor score)
+                        | none => ("", scoreToColor bundle.emptyScore)
+                      let ctorNameStyle := json% {"color": $(ctorColor), "fontWeight": "bold"}
                       let ctorStepHtmls := ctorSteps.toArray.map fun step =>
                         ProofWidgets.Html.element "div" #[] #[mkSpan (json% {"color": $(stepColor step)}) (ppStep step)]
                       let ctorConclusionStr := match ctorSort with
@@ -350,48 +397,155 @@ unsafe def elabSpecimenTest : CommandElab := fun stx => do
                           s!"return {outputStr}"
                         | .CheckerSchedule => "return ok"
                         | .TheoremSchedule hyp _ => s!"check_conclusion {ppHypothesisExpr hyp}"
-                      let ctorConcHtml := ProofWidgets.Html.element "div" #[] #[
+                      let ctorConcHtml : ProofWidgets.Html := .element "div" #[] #[
                         mkSpan (json% {"color": "hsl(120, 70%, 70%)"}) ctorConclusionStr]
-                      items := items.push (ProofWidgets.Html.element "details" #[] #[
+                      items := items.push (.element "details" #[] #[
                         .element "summary" #[("style", json% {"cursor": "pointer", "marginBottom": "2px"})] #[
-                          mkSpan (json% {"fontWeight": "bold"}) ctorName.getString!,
+                          mkSpan ctorNameStyle ctorName.getString!,
                           .text " ",
-                          mkSpan tagColor s!"[{tag}]"
+                          mkSpan tagColor s!"[{tag}]",
+                          mkSpan scoreStyle ctorInfoStr
                         ],
-                        .element "div" #[("style", json% {"marginLeft": "16px", "marginBottom": "6px", "padding": "4px 8px", "background": "#1a1a2e", "borderRadius": "4px", "border": "1px solid #2a2a4a"})]
+                        .element "div" #[("style", json% {"marginLeft": "16px", "marginBottom": "6px", "padding": "4px 8px", "background": "#1a1a2e", "borderRadius": "4px", "border": "1px solid #2a2a4a", "whiteSpace": "pre", "fontFamily": "var(--vscode-editor-font-family, monospace)", "fontSize": "0.9em", "lineHeight": "1.5"})]
                           (ctorStepHtmls.push ctorConcHtml)
                       ])
                     items
-                  orderItems := orderItems.push (ProofWidgets.Html.element "details" #[] #[
+                  -- Code dropdown
+                  let codeDropdown : Array ProofWidgets.Html := match compiledCodeMap[k]? with
+                    | some (defStr, instStr) =>
+                      let codeStyle := json% {"whiteSpace": "pre-wrap", "fontFamily": "var(--vscode-editor-font-family, monospace)", "fontSize": "0.85em", "lineHeight": "1.4", "padding": "8px", "background": "#0d1117", "borderRadius": "4px", "border": "1px solid #30363d", "overflow": "auto", "maxHeight": "400px"}
+                      #[.element "details" #[] #[
+                        .element "summary" #[("style", json% {"cursor": "pointer", "marginTop": "4px", "marginBottom": "2px"})] #[
+                          mkSpan (json% {"color": "#79c0ff", "fontSize": "0.9em"}) "📝 generated code"
+                        ],
+                        .element "div" #[("style", codeStyle)] #[.text (defStr ++ "\n\n" ++ instStr)]
+                      ]]
+                    | none => #[]
+                  orderItems := orderItems.push (.element "details" #[] #[
                     .element "summary" #[("style", json% {"cursor": "pointer", "marginBottom": "2px"})] #[
                       .text "● ",
                       mkSpan specNameStyle (k.prettyPrint numArgs),
                       mkSpan scoreStyle s!" ({nCtors} ctors{timeStr}) score: {indScoreStr}"
                     ],
-                    .element "div" #[("style", json% {"marginLeft": "12px"})] ctorItems
+                    .element "div" #[("style", json% {"marginLeft": "12px"})] (ctorItems ++ codeDropdown)
                   ])
               | _ => pure ()
           if !orderItems.isEmpty then
-            htmlChildren := htmlChildren.push (ProofWidgets.Html.element "details" #[("open", json% true)] #[
+            htmlChildren := htmlChildren.push (.element "details" #[("open", json% true)] #[
               .element "summary" #[("style", json% {"cursor": "pointer", "fontWeight": "bold", "color": "#569cd6", "marginBottom": "6px"})] #[
-                .text s!"📋 Derived Specs ({usedKeys.size} total)"
+                .text s!"📋 Derived Specs ({usedKeys.size} total, topological order)"
               ],
               .element "div" #[("style", json% {"marginLeft": "8px"})] orderItems
+            ])
+          -- Dependency graph section
+          if totalEdges > 0 then
+            let mut graphItems : Array ProofWidgets.Html := #[]
+            for k in usedKeys.toList do
+              let nArgs ← getNumArgs k
+              let label := k.prettyPrint nArgs
+              match finalMemo[k]? with
+              | some (.done indSched) =>
+                let allScheds := indSched.baseSchedules ++ indSched.recSchedules
+                let mut depCtors : Std.HashMap SpecKey (List Name) := {}
+                for (ctorName, (ctorSteps, _)) in allScheds do
+                  let deps := collectNonRecDeps ctorSteps
+                  let relDeps := deps.filter (fun d => d.kind == .relation || d.kind == .checker)
+                  for d in relDeps do
+                    let dk := SpecKey.mk d.inductiveName d.outputIndices d.deriveSort
+                    if usedKeys.contains dk then
+                      let existing := depCtors.getD dk []
+                      if ctorName ∉ existing then
+                        depCtors := depCtors.insert dk (existing ++ [ctorName])
+                if !depCtors.isEmpty then
+                  let mut dstItems : Array ProofWidgets.Html := #[]
+                  for (dk, ctors) in depCtors.toList do
+                    let dkArgs ← getNumArgs dk
+                    let ctorStr := String.intercalate ", " (ctors.map Name.getString!)
+                    dstItems := dstItems.push (.element "div" #[("style", json% {"marginLeft": "16px", "marginBottom": "3px"})] #[
+                      mkSpan reqStyle "requires ",
+                      mkSpan dstStyle (dk.prettyPrint dkArgs),
+                      .text s!"  via {ctorStr}"
+                    ])
+                  graphItems := graphItems.push (.element "details" #[] #[
+                    .element "summary" #[("style", json% {"cursor": "pointer", "marginBottom": "2px"})] #[
+                      mkSpan srcStyle label,
+                      mkSpan (json% {"color": "#808080"}) s!" ({depCtors.size} deps)"
+                    ],
+                    .element "div" #[] dstItems
+                  ])
+              | _ => pure ()
+            htmlChildren := htmlChildren.push (.element "details" #[] #[
+              .element "summary" #[("style", json% {"cursor": "pointer", "fontWeight": "bold", "color": "#569cd6", "marginTop": "12px", "marginBottom": "6px"})] #[
+                .text s!"📊 Dependency Graph ({totalEdges} edges)"
+              ],
+              .element "div" #[("style", json% {"marginLeft": "8px", "borderLeft": "2px solid #3c3c3c", "paddingLeft": "12px"})] graphItems
+            ])
+          -- Pattern coverage trie
+          let mut trieItems : Array ProofWidgets.Html := #[]
+          for k in usedKeys.toList do
+            match finalMemo[k]? with
+            | some (.done indSched) =>
+              if indSched.alreadyExists then pure ()
+              else
+                let nArgs ← getNumArgs k
+                let indInfo ← getConstInfoInduct k.inductiveName
+                let mut patterns : List (Name × PatternCoverage.CovPattern) := []
+                for ctorName in indInfo.ctors do
+                  let ctorInfo ← getConstInfoCtor ctorName
+                  let pat ← forallTelescopeReducing ctorInfo.type fun _ conclusion => do
+                    PatternCoverage.conclusionToCovPattern k.inductiveName conclusion k.outputIndices indInfo.numParams
+                  patterns := patterns ++ [(ctorName, pat)]
+                let numAllArgs := indInfo.numParams + indInfo.numIndices
+                let initChildren := (List.range numAllArgs).map fun i =>
+                  if i ∈ k.outputIndices then PatternCoverage.CovPattern.output else .wild
+                let initPat := PatternCoverage.CovPattern.ctr k.inductiveName initChildren
+                let tree ← PatternCoverage.coverPatterns patterns initPat
+                let leaves := PatternCoverage.collectLeaves tree
+                let ctorScores : List (Name × Score) := indSched.ctorStats.map fun (name, _, _, score) => (name, score)
+                let mut leafHtmls : Array ProofWidgets.Html := #[]
+                for (pat, rules) in leaves do
+                  let covering := rules.filterMap fun r => ctorScores.find? (fun x => x.1 == r)
+                  let leafScore := bundle.leafAggregator covering
+                  let patStr := PatternCoverage.ppCovPattern pat
+                  let leafColor := scoreToColor leafScore
+                  if covering.isEmpty then
+                    leafHtmls := leafHtmls.push (.element "div" #[("style", json% {"marginLeft": "8px", "marginBottom": "4px"})] #[
+                      mkSpan (json% {"color": "hsl(0, 70%, 60%)"}) s!"{patStr}",
+                      .element "br" #[] #[],
+                      mkSpan (json% {"color": "hsl(0, 50%, 50%)", "marginLeft": "16px"}) "UNCOVERED"
+                    ])
+                  else
+                    let ctorItemsHtml : Array ProofWidgets.Html := covering.toArray.map fun (r, s) =>
+                      let shortName := (r.componentsRev.head?.getD r).toString
+                      .element "div" #[("style", json% {"marginLeft": "16px"})] #[
+                        mkSpan (json% {"color": $(scoreToColor s)}) s!"{shortName}: {bundle.reprScore s}"
+                      ]
+                    leafHtmls := leafHtmls.push (.element "div" #[("style", json% {"marginLeft": "8px", "marginBottom": "6px"})] (
+                      #[mkSpan (json% {"color": $(leafColor), "fontWeight": "bold"}) patStr] ++ ctorItemsHtml
+                    ))
+                trieItems := trieItems.push (.element "details" #[] #[
+                  .element "summary" #[("style", json% {"cursor": "pointer", "marginBottom": "2px"})] #[
+                    mkSpan (json% {"color": $(specColor indSched), "fontWeight": "bold"}) (k.prettyPrint nArgs),
+                    mkSpan scoreStyle s!" ({leaves.length} leaves, score: {bundle.reprScore indSched.score})"
+                  ],
+                  .element "div" #[("style", json% {"marginLeft": "12px", "padding": "4px 0", "fontSize": "0.9em", "fontFamily": "var(--vscode-editor-font-family, monospace)"})] leafHtmls
+                ])
+            | _ => pure ()
+          if !trieItems.isEmpty then
+            htmlChildren := htmlChildren.push (.element "details" #[] #[
+              .element "summary" #[("style", json% {"cursor": "pointer", "fontWeight": "bold", "color": "#569cd6", "marginTop": "12px", "marginBottom": "6px"})] #[
+                .text s!"🌲 Pattern Coverage ({trieItems.size} inductives)"
+              ],
+              .element "div" #[("style", json% {"marginLeft": "8px", "borderLeft": "2px solid #3c3c3c", "paddingLeft": "12px"})] trieItems
             ])
           let fullHtml := ProofWidgets.Html.element "div"
             #[("style", json% {"fontFamily": "var(--vscode-editor-font-family, monospace)", "fontSize": "13px", "lineHeight": "1.6", "padding": "8px"})]
             htmlChildren
           let htmlMsg ← Lean.MessageData.ofHtml fullHtml
-            s!"specimen_test: {usedKeys.size} derived specs"
+            s!"specimen_test: {usedKeys.size} derived specs, {components.length} components"
           logInfo htmlMsg
 
-      -- Compile the theorem schedule into a checker def
-      let defName ← liftTermElabM (Lean.Core.mkFreshUserName `specimen_theorem_checker)
-      let defCmd ← withScope (fun scope => { scope with opts := scope.opts.set `specimen.multiOutput true }) do
-        liftTermElabM <| compileTheoremDef steps sort (mkSort .zero) defName
-      elabCommand defCmd
-
-      -- Run the test loop using TheoremProperty
+      -- Run the test loop
       let checkerIdent : TSyntax `term := mkIdent defName
       let testExpr ← liftTermElabM <| `(do
         let mut successes : Nat := 0

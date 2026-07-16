@@ -293,7 +293,8 @@ mutual
       -- Note: right now we compile `MFail` and `MOutOfFuel` to the same Lean terms
       -- for simplicity, but in the future we may want to distinguish them
       match deriveSort with
-      | .Generator | .Enumerator | .Theorem => `($failFn $genericFailure)
+      | .Generator | .Enumerator => `($failFn $genericFailure)
+      | .Theorem => `(return ($(mkIdent ``Except.error) $genericFailure))
       | .Checker => `($(mkIdent ``Except.ok) $(mkIdent ``false))
     | .MRet e => do
       let e' ← mexpToTSyntax e deriveSort
@@ -317,13 +318,19 @@ mutual
         -- If we have a producer, we can just produce a monadic bind
         `(do let $compiledArgs:term ← $m1:term ; $k1:term)
       | .Generator, .Checker
-      | .Theorem, .Checker
       | .Enumerator, .Checker => do
         -- If a producer invokes a checker, we have to invoke the checker
         -- provided by the `DecOpt` instance for the proposition, then pattern
         -- match on its result
         let trueCase ← `(Term.matchAltExpr| | $(mkIdent ``Except.ok) $(mkIdent ``true) => $k1)
         let wildCardCase ← `(Term.matchAltExpr| | _ => $failFn $genericFailure)
+        let cases := #[trueCase, wildCardCase]
+        `(match $m1:term with $cases:matchAlt*)
+      | .Theorem, .Checker => do
+        -- For theorem mode: return the error as a value rather than throwing,
+        -- so the RNG state is not reset on discard
+        let trueCase ← `(Term.matchAltExpr| | $(mkIdent ``Except.ok) $(mkIdent ``true) => $k1)
+        let wildCardCase ← `(Term.matchAltExpr| | _ => return ($(mkIdent ``Except.error) $genericFailure))
         let cases := #[trueCase, wildCardCase]
         `(match $m1:term with $cases:matchAlt*)
       | .Checker, .Checker =>
