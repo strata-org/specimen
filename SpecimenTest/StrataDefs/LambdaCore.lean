@@ -132,6 +132,12 @@ instance : DecidableEq LMonoTy :=
 @[match_pattern] def LMonoTy.arrow (t1 t2 : LMonoTy) : LMonoTy :=
   .tcons "arrow" [t1, t2]
 
+/-- Return `some (dom, cod)` if the type is an arrow, `none` otherwise.
+(`Strata/DL/Lambda/LTy.lean`) -/
+def LMonoTy.isArrow : LMonoTy → Option (LMonoTy × LMonoTy)
+  | .tcons "arrow" [dom, cod] => some (dom, cod)
+  | _ => none
+
 /-! ## `Identifiers.lean` — identifiers (slice) -/
 
 /-- Identifiers with a name and additional metadata. -/
@@ -243,5 +249,48 @@ inductive LExpr.HasTypeA {T : LExprParams} : List LMonoTy → LExpr T.mono → L
   | eq    : HasTypeA Δ e1 τ →
             HasTypeA Δ e2 τ →
             HasTypeA Δ (.eq m e1 e2) .bool
+
+/-- Typecheck an annotated `LExpr`, returning `some τ` if well-typed, `none`
+otherwise. `ctx` maps de Bruijn indices to their types from enclosing binders.
+(`Strata/DL/Lambda/Denote/LExprAnnotated.lean`.)
+
+`LExpr.typeCheck` is proved equivalent to `HasTypeA` upstream, so it serves as
+the authoritative soundness oracle for sampled terms. -/
+@[expose]
+def LExpr.typeCheck {T : LExprParams} (ctx : List LMonoTy) : LExpr T.mono → Option LMonoTy
+  | .const _ c => some c.ty
+  | .op _ _ (some ty) => some ty
+  | .op _ _ none => none
+  | .fvar _ _ (some ty) => some ty
+  | .fvar _ _ none => none
+  | .bvar _ i => ctx[i]?
+  | .abs _ _ (some aty) body => do
+    let rty ← typeCheck (aty :: ctx) body
+    some (.arrow aty rty)
+  | .abs _ _ none _ => none
+  | .quant _ _ _ (some qty) tr body => do
+    let _ ← typeCheck (qty :: ctx) tr
+    let bty ← typeCheck (qty :: ctx) body
+    guard (bty == .bool)
+    some .bool
+  | .quant _ _ _ none _ _ => none
+  | .app _ fn arg => do
+    let fty ← typeCheck ctx fn
+    let aty ← typeCheck ctx arg
+    let (dom, cod) ← fty.isArrow
+    guard (dom == aty)
+    some cod
+  | .ite _ c t e => do
+    let cty ← typeCheck ctx c
+    let tty ← typeCheck ctx t
+    let ety ← typeCheck ctx e
+    guard (cty == .bool)
+    guard (tty == ety)
+    some tty
+  | .eq _ e1 e2 => do
+    let ty1 ← typeCheck ctx e1
+    let ty2 ← typeCheck ctx e2
+    guard (ty1 == ty2)
+    some .bool
 
 end Lambda

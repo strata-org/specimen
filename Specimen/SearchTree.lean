@@ -262,8 +262,8 @@ def lowerBoundScore {α v} [BEq α] [BEq v] (currentOrder : List α) (remaining 
     vars.all (currentEnv.contains ·))  -- All vars already bound
 
   let guaranteedChecks := forcedChecks.filter (fun (_, vars) =>
-    let generatableVars := vars  -- For simple case, all vars are generatable
-    generatableVars.any (!arbitraryVars.contains ·))  -- Can't be arbitrary
+    let generableVars := vars  -- For simple case, all vars are generable
+    generableVars.any (!arbitraryVars.contains ·))  -- Can't be arbitrary
 
   let primaryScore := currentScore + guaranteedChecks.length
   let secondaryScore := countGuaranteedArbitraries currentOrder remaining hypVarMap

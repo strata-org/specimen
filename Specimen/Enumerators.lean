@@ -128,6 +128,10 @@ end EnumeratorCombinators
 
 -- Some simple `Enum` instances
 
+/-- `Enum` instance for `Unit` (its single value) -/
+instance : Enum Unit where
+  enum := pureEnum ()
+
 /-- `Enum` instance for `Bool` -/
 instance : Enum Bool where
   enum := pureEnum false <|> pureEnum true
