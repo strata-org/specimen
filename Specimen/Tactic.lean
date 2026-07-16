@@ -151,28 +151,70 @@ def getTheoremSchedule (theoremType : Expr)
         ) emptyUnifyState
       return result.join
 
-/-- Compiles a theorem schedule into a `TheoremProperty` definition.
-    Produces three components from the same schedule:
-    - `generate`: runs the schedule steps (generating vars, checking hypotheses), returns the tuple
-    - `checkConclusion`: re-runs the conclusion check on a tuple
-    - `validShrinks`: for each var, tries shrink candidates, re-checks hypotheses in order
+/-- Compiles a theorem schedule into a def that returns `Gen (Except GenError (Bool × α))`
+    where `α` is the tuple of the original forAll variables.
+    - `Bool` = true means conclusion holds (pass), false means counterexample
+    - On pass: `(true, vars)` — we have the values but they're not interesting
+    - On fail: `(false, vars)` — counterexample! report `vars`
+    - On error: hypothesis failed (discard)
 
-    `varNames` are the universally-quantified variable names (in order),
-    `varTypes` are their elaborated types. -/
+    Uses a custom epilogue that checks the conclusion and bundles the result with the var tuple. -/
 def compileTheoremDef (steps : List ScheduleStep) (sort : ScheduleSort)
-    (recType : Expr) (defName : Name) : TermElabM (TSyntax `command) := do
+    (recType : Expr) (defName : Name) (varNames : List Name) (varTypes : List Expr)
+    : TermElabM (TSyntax `command) := do
   let fuelPrimeName := `fuel'
   let sizePrimeName := `size'
-  let (mexp, _instances) ← (MExp.scheduleToMExp (steps, sort) (.MId `size) (.MId `initSize) recType
-    (fuelPrimeName := fuelPrimeName) (sizePrimeName := sizePrimeName)
-    (targetInductive := `_theorem)).run #[]
-  let (body, _) ← (mexpToTSyntax mexp .Theorem).run #[]
+
+  -- Build the variable tuple MExp (to return alongside the conclusion result)
+  let varMExps := varNames.map (fun n => MExp.MId n)
+  let tupleMExp := match varMExps with
+    | [] => MExp.MConst ``Unit.unit
+    | [v] => v
+    | vs => MExp.tupleOfList (fun e1 e2 => .MApp .allowImplicit (.MConst ``Prod.mk) [e1, e2]) vs vs[0]?
+
+  -- Build a custom epilogue that checks the conclusion and returns (Bool × tuple)
+  let customEpilogue ← match sort with
+    | .TheoremSchedule conclusion typeClassUsed =>
+      let conclusionMExp := MExp.hypothesisExprToMExp conclusion
+      let scrutinee :=
+        if typeClassUsed then MExp.decOptChecker conclusionMExp (.MId `size)
+        else conclusionMExp
+      -- match scrutinee with
+      -- | .ok true => return (.ok (true, tuple))
+      -- | .ok false => return (.ok (false, tuple))
+      -- | .error _ => return (.error genericFailure)
+      let pairTrue := MExp.MApp .allowImplicit (.MConst ``Prod.mk) [MExp.MConst ``true, tupleMExp]
+      let pairFalse := MExp.MApp .allowImplicit (.MConst ``Prod.mk) [MExp.MConst ``false, tupleMExp]
+      let okTrue := MExp.MApp .allowImplicit (.MConst ``Except.ok) [pairTrue]
+      let okFalse := MExp.MApp .allowImplicit (.MConst ``Except.ok) [pairFalse]
+      pure <| MExp.MMatch .allowImplicit scrutinee
+        [ (.CtorPattern ``Except.ok [.UnknownPattern ``true], .MRet okTrue)
+        , (.CtorPattern ``Except.ok [.UnknownPattern ``false], .MRet okFalse)
+        , (.CtorPattern ``Except.error [wildCardPattern], .MRet (.MApp .allowImplicit (.MConst ``Except.error) [.MConst ``Plausible.Gen.genericFailure]))
+        ]
+    | _ => pure <| MExp.MRet (.MApp .allowImplicit (.MConst ``Except.ok)
+        [MExp.MApp .allowImplicit (.MConst ``Prod.mk) [MExp.MConst ``true, tupleMExp]])
+
+  -- Compile steps with the custom epilogue
+  let (body, _) ← (do
+    let sizeExpr : MExp := .MId sizePrimeName
+    let genMExp ← List.foldrM (fun step acc => scheduleStepToMExp step (.MId `initSize) acc recType fuelPrimeName sizeExpr `_theorem)
+      customEpilogue steps
+    mexpToTSyntax genMExp .Theorem).run #[]
+
+  -- Build tuple type syntax
+  let varTypeSyntaxes ← varTypes.mapM (fun ty => PrettyPrinter.delab ty)
+  let tupleType ← match varTypeSyntaxes with
+    | [] => `(Unit)
+    | [t] => pure t
+    | t :: ts => ts.foldlM (fun acc ty => `($acc × $ty)) t
+
   let defIdent := mkIdent defName
   let fuelIdent := mkIdent fuelPrimeName
   let initSizeIdent := mkIdent `initSize
   let sizeIdent := mkIdent `size
   `(private def $defIdent ($fuelIdent : Nat) ($initSizeIdent : Nat) ($sizeIdent : Nat) :
-      Plausible.Gen (Except Plausible.GenError Bool) :=
+      Plausible.Gen (Except Plausible.GenError (Bool × $tupleType)) :=
     $body)
 
 /-- The `specimen` command: property-based testing for propositions involving inductive relations.
@@ -261,8 +303,10 @@ unsafe def elabSpecimenTest : CommandElab := fun stx => do
 
       -- Compile the theorem schedule into a checker def (before widget so we can show the code)
       let defName ← liftTermElabM (Lean.Core.mkFreshUserName `specimen_theorem_checker)
+      let varNames := varNamesTypes.map Prod.fst
+      let varTypes := varNamesTypes.map Prod.snd
       let defCmd ← withScope (fun scope => { scope with opts := scope.opts.set `specimen.multiOutput true }) do
-        liftTermElabM <| compileTheoremDef steps sort (mkSort .zero) defName
+        liftTermElabM <| compileTheoremDef steps sort (mkSort .zero) defName varNames varTypes
       let theoremCodeStr ← liftTermElabM <| try
         let fmt ← Lean.PrettyPrinter.ppCommand defCmd
         pure fmt.pretty
@@ -547,21 +591,51 @@ unsafe def elabSpecimenTest : CommandElab := fun stx => do
 
       -- Run the test loop
       let checkerIdent : TSyntax `term := mkIdent defName
+
+      -- Build per-variable labels: "  name : Type := " for the error message
+      let varTypeSyntaxes ← liftTermElabM <| varTypes.mapM (fun ty => PrettyPrinter.delab ty)
+      let varLabels ← liftTermElabM <| (varNames.zip varTypeSyntaxes).mapM fun (n, tySyn) => do
+        let tyStr := Format.pretty (← PrettyPrinter.ppTerm tySyn)
+        pure s!"  {n} : {tyStr} := "
+
+      -- Build the formatter: for each variable, project from the tuple and repr it
+      -- Single var: just `reprStr cex`
+      -- Multi var (right-nested prod): project with .1, .2.1, .2.2, etc.
+      let cexIdent : TSyntax `term := mkIdent `specimen_cex
+      let formatParts ← liftTermElabM <| do
+        let mut parts : Array (TSyntax `term) := #[]
+        for i in [:varNames.length] do
+          let label := Syntax.mkStrLit varLabels[i]!
+          let proj ← if varNames.length == 1 then
+            pure cexIdent
+          else if i == 0 then
+            `(($cexIdent).1)
+          else
+            let mut e := cexIdent
+            for _ in [:i - 1] do e ← `(($e).2)
+            if i == varNames.length - 1 then
+              `(($e).2)
+            else
+              `(($e).2.1)
+          parts := parts.push (← `($label ++ reprStr $proj))
+        pure parts
+      let nlLit := Syntax.mkStrLit "\n"
+      let formatExpr ← liftTermElabM <|
+        formatParts.toList.tail!.foldlM (fun acc part => `($acc ++ $nlLit ++ $part)) formatParts[0]!
+
       let testExpr ← liftTermElabM <| `(do
         let mut successes : Nat := 0
-        let mut failures : Nat := 0
         let mut discards : Nat := 0
         for i in List.range 100 do
           let size := i + 1
           let genResult ← Plausible.Gen.run (($checkerIdent) size size size) size
           match genResult with
-          | .ok true => successes := successes + 1
-          | .ok false => failures := failures + 1
+          | .ok (true, _) => successes := successes + 1
+          | .ok (false, $cexIdent) =>
+            let details := $formatExpr
+            throw <| IO.userError s!"Found counter-example!\n{details}\n({successes} tests passed, {discards} discarded)"
           | .error _ => discards := discards + 1
-        if failures > 0 then
-          throw <| IO.userError s!"specimen: Found {failures} counter-example(s) in {successes + failures + discards} tests ({discards} discarded)"
-        else
-          IO.println s!"specimen: {successes} tests passed ({discards} discarded)")
+        IO.println s!"{successes} tests passed ({discards} discarded)")
 
       let e ← liftTermElabM <| Term.elabTerm testExpr (some (mkApp (mkConst ``IO) (mkConst ``PUnit [1])))
       let action ← liftTermElabM <| unsafe Lean.Meta.evalExpr (IO PUnit) (mkApp (mkConst ``IO) (mkConst ``PUnit [1])) e

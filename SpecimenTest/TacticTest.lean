@@ -15,11 +15,13 @@ inductive Even : Nat → Prop where
   | zero : Even 0
   | succ_succ : Even n → Even (n + 2)
 
--- Test 1: specimen_test on a true property — should pass
+-- Test 1: true property — should pass
 specimen_test (∀ n : Nat, Even n → Even (n + 2))
 
--- Test 2: A false property — should find counterexamples
--- "Even n implies Even (n + 1)" is false (e.g., Even 2 but not Even 3)
--- Uncomment to verify: specimen_test (∀ n : Nat, Even n → Even (n + 1))
--- Expected: "Found N counter-example(s) in 100 tests"
-
+-- Test 2: false property — should find counterexample with variable names and types
+-- Uncomment to see output:
+-- specimen_test (∀ n : Nat, Even n → Even (n + 1))
+-- Output:
+--   Found counter-example!
+--     n : Nat := 0
+--   (0 tests passed, 0 discarded)
