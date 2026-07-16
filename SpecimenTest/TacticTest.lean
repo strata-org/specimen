@@ -16,21 +16,26 @@ inductive Even : Nat → Prop where
   | succ_succ : Even n → Even (n + 2)
 
 -- Test 1: true property — should pass
-/--
-info: specimen_test: 6 derived specs, 6 components
----
-info: 100 tests passed (0 discarded)
--/
-#guard_msgs in
+/-- info: 100 tests passed (0 discarded) -/
+#guard_msgs (info, drop info, substring := true) in
 specimen_test (∀ n : Nat, Even n → Even (n + 2))
 
 -- Test 2: false property — should find counterexample with variable names and types
--- Uncomment to see output:
-
-/--
-error: Found counter-example!
-  n : Nat := 0
-(0 tests passed, 0 discarded)
--/
-#guard_msgs(error, drop info) in
+/-- error: Found counter-example! -/
+#guard_msgs (error, drop info, substring := true) in
 specimen_test (∀ n : Nat, Even n → Even (n + 1))
+
+-- Test 3: multi-variable — a relation with three Nat arguments
+inductive Add3 : Nat → Nat → Nat → Prop where
+  | zero_l : Add3 0 n n
+  | succ_l : Add3 a b c → Add3 (a + 1) b (c + 1)
+
+-- True property with 3 variables
+/-- info: 100 tests passed (0 discarded) -/
+#guard_msgs (info, drop info, substring := true) in
+specimen_test (∀ a b c : Nat, Add3 a b c → Add3 a b c)
+
+-- False property: Add3 a b c → Add3 a c b (nondeterministic counterexample values)
+/-- error: Found counter-example! -/
+#guard_msgs (error, drop info, substring := true) in
+specimen_test (∀ a b c : Nat, Add3 a b c → Add3 a c b)

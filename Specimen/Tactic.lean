@@ -202,12 +202,17 @@ def compileTheoremDef (steps : List ScheduleStep) (sort : ScheduleSort)
       customEpilogue steps
     mexpToTSyntax genMExp .Theorem).run #[]
 
-  -- Build tuple type syntax
+  -- Build tuple type syntax (right-nested to match tupleOfList)
   let varTypeSyntaxes ← varTypes.mapM (fun ty => PrettyPrinter.delab ty)
   let tupleType ← match varTypeSyntaxes with
     | [] => `(Unit)
     | [t] => pure t
-    | t :: ts => ts.foldlM (fun acc ty => `($acc × $ty)) t
+    | _ =>
+      let rec buildProdType : List (TSyntax `term) → TermElabM (TSyntax `term)
+        | [] => `(Unit)
+        | [t] => pure t
+        | t :: rest => do let r ← buildProdType rest; `($t × $r)
+      buildProdType varTypeSyntaxes
 
   let defIdent := mkIdent defName
   let fuelIdent := mkIdent fuelPrimeName
@@ -313,9 +318,9 @@ unsafe def elabSpecimenTest : CommandElab := fun stx => do
       catch _ => pure "(failed to pretty-print)"
       elabCommand defCmd
 
-      -- Emit rich HTML widget (full derive_mutual-style display)
+      -- Build rich HTML widget (emitted after test result for better infoview order)
       let richOutput := Lean.Option.get (← getOptions) specimen.richOutput
-      if richOutput then
+      let widgetMsg ← if richOutput then
         liftTermElabM do
           let mkSpan (style : Json) (text : String) : ProofWidgets.Html :=
             .element "span" #[("style", style)] #[.text text]
@@ -587,7 +592,9 @@ unsafe def elabSpecimenTest : CommandElab := fun stx => do
             htmlChildren
           let htmlMsg ← Lean.MessageData.ofHtml fullHtml
             s!"specimen_test: {usedKeys.size} derived specs, {components.length} components"
-          logInfo htmlMsg
+          pure (some htmlMsg)
+      else
+        pure none
 
       -- Run the test loop
       let checkerIdent : TSyntax `term := mkIdent defName
@@ -641,10 +648,14 @@ unsafe def elabSpecimenTest : CommandElab := fun stx => do
       let expectedType ← liftTermElabM <| inferType e
       let action ← liftTermElabM <| unsafe Lean.Meta.evalExpr (IO String) expectedType e
       let resultMsg ← action
+      -- Emit the test result first (appears at top of infoview)
       if resultMsg.startsWith "Found counter-example!" then
-        throwError "{resultMsg}"
+        logError resultMsg
       else
         logInfo resultMsg
+      -- Emit widget after test result
+      if let some msg := widgetMsg then
+        logInfo msg
 
   | _ => throwUnsupportedSyntax
 
