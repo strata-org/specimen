@@ -72,19 +72,19 @@ def getTheoremSchedule (theoremType : Expr)
     let localInstances ← getLocalInstances
 
     let result ← UnifyM.runInMetaM (do
-      let outputIndices : List Nat := []
-      let (updatedHypotheses, updatedConclusion, freshNamesAndTypes, updatedLocalCtx) ←
-        linearizeAndFlatten allHypotheses conclusion outputIndices localCtx
-
-      withLCtx updatedLocalCtx localInstances do
-        let hypothesisExprs ← monadLift <| updatedHypotheses.toList.mapM (exprToHypothesisExpr `theorem)
-        let conclusionExpr ← monadLift <| exprToHypothesisExpr `theorem updatedConclusion
+      -- For theorems: skip linearizeAndFlatten on the theorem itself.
+      -- The conclusion is checked directly (not generated), so function calls
+      -- like `n + 6` can be evaluated in place — no need to introduce fresh vars.
+      -- (Sub-relation derivations still use linearizeAndFlatten via deriveBestInductiveSchedule.)
+      withLCtx localCtx localInstances do
+        let hypothesisExprs ← monadLift <| allHypotheses.toList.mapM (exprToHypothesisExpr `theorem)
+        let conclusionExpr ← monadLift <| exprToHypothesisExpr `theorem conclusion
 
         let inputNames : List Name := []
         let initialUnifyState := mkCheckerInitialUnifyState inputNames forAllVars hypothesisExprs
 
         let unknowns : Array Name := forAllVars.toArray.map Prod.fst
-        let updatedForAllVars := forAllVars ++ freshNamesAndTypes
+        let updatedForAllVars := forAllVars
 
         UnifyM.extendState initialUnifyState
         let _ ← unknowns.mapM processCorrespondingRange
@@ -177,7 +177,8 @@ def compileTheoremDef (steps : List ScheduleStep) (sort : ScheduleSort)
     | .TheoremSchedule conclusion typeClassUsed =>
       let conclusionMExp := MExp.hypothesisExprToMExp conclusion
       let scrutinee :=
-        if typeClassUsed then MExp.decOptChecker conclusionMExp (.MId `size)
+        if typeClassUsed then MExp.decOptChecker conclusionMExp
+          (.MApp .allowImplicit (.MConst ``Nat.mul) [.MLit (.natVal 3), .MApp .allowImplicit (.MConst ``Nat.add) [.MId `size, .MLit (.natVal 1)]])
         else conclusionMExp
       -- match scrutinee with
       -- | .ok true => return (.ok (true, tuple))
