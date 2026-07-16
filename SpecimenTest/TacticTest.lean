@@ -16,12 +16,21 @@ inductive Even : Nat → Prop where
   | succ_succ : Even n → Even (n + 2)
 
 -- Test 1: true property — should pass
+/--
+info: specimen_test: 6 derived specs, 6 components
+---
+info: 100 tests passed (0 discarded)
+-/
+#guard_msgs in
 specimen_test (∀ n : Nat, Even n → Even (n + 2))
 
 -- Test 2: false property — should find counterexample with variable names and types
 -- Uncomment to see output:
--- specimen_test (∀ n : Nat, Even n → Even (n + 1))
--- Output:
---   Found counter-example!
---     n : Nat := 0
---   (0 tests passed, 0 discarded)
+
+/--
+error: Found counter-example!
+  n : Nat := 0
+(0 tests passed, 0 discarded)
+-/
+#guard_msgs(error, drop info) in
+specimen_test (∀ n : Nat, Even n → Even (n + 1))

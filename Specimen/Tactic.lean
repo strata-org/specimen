@@ -623,7 +623,7 @@ unsafe def elabSpecimenTest : CommandElab := fun stx => do
       let formatExpr ← liftTermElabM <|
         formatParts.toList.tail!.foldlM (fun acc part => `($acc ++ $nlLit ++ $part)) formatParts[0]!
 
-      let testExpr ← liftTermElabM <| `(do
+      let testExpr ← liftTermElabM <| `((do
         let mut successes : Nat := 0
         let mut discards : Nat := 0
         for i in List.range 100 do
@@ -633,13 +633,18 @@ unsafe def elabSpecimenTest : CommandElab := fun stx => do
           | .ok (true, _) => successes := successes + 1
           | .ok (false, $cexIdent) =>
             let details := $formatExpr
-            throw <| IO.userError s!"Found counter-example!\n{details}\n({successes} tests passed, {discards} discarded)"
+            return s!"Found counter-example!\n{details}\n({successes} tests passed, {discards} discarded)"
           | .error _ => discards := discards + 1
-        IO.println s!"{successes} tests passed ({discards} discarded)")
+        return s!"{successes} tests passed ({discards} discarded)" : IO String))
 
-      let e ← liftTermElabM <| Term.elabTerm testExpr (some (mkApp (mkConst ``IO) (mkConst ``PUnit [1])))
-      let action ← liftTermElabM <| unsafe Lean.Meta.evalExpr (IO PUnit) (mkApp (mkConst ``IO) (mkConst ``PUnit [1])) e
-      _ ← action
+      let e ← liftTermElabM <| Term.elabTerm testExpr none
+      let expectedType ← liftTermElabM <| inferType e
+      let action ← liftTermElabM <| unsafe Lean.Meta.evalExpr (IO String) expectedType e
+      let resultMsg ← action
+      if resultMsg.startsWith "Found counter-example!" then
+        throwError "{resultMsg}"
+      else
+        logInfo resultMsg
 
   | _ => throwUnsupportedSyntax
 
