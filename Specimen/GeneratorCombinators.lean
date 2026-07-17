@@ -28,7 +28,7 @@ def runChecked (x : Gen α) (size : Nat) : IO (GenResult α) := do
   match result with
   | .ok a => return .ok a
   | .error (.userError msg) =>
-    let stripped := msg.stripPrefix "Generation failure:"
+    let stripped := (msg.dropPrefix? "Generation failure:").map (·.toString) |>.getD msg
     if GenError.isInconclusive (.genError stripped) then
       return .insufficientFuel stripped
     else

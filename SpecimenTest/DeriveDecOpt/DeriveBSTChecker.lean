@@ -14,7 +14,7 @@ set_option guard_msgs.diff true
 set_option specimen.autoDeriveDeps true
 set_option specimen.multiOutput true
 
-#guard_msgs(drop info) in
+#guard_msgs(drop info, drop warning) in
 derive_mutual checker
   (fun lo hi t => BST lo hi t)
 

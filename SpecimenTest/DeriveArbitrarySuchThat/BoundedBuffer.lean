@@ -76,6 +76,7 @@ instance instArbitraryString : Arbitrary String where
 -- generates a command freely and then checks `¬ CanStep`.
 deriving instance Arbitrary for BBCmd
 
+#guard_msgs(drop info, drop warning) in
 derive_mutual
   (fun i => ∃ t s, SafeBBTrace i t s),
   (fun s => ∃ t i, SafeBBTrace i t s)
@@ -125,6 +126,7 @@ inductive EveryBBTrace : BB -> BBTrace -> BB -> Prop where
     EveryBBTrace s' ps s'' ->
     EveryBBTrace s ((cmd, res)::ps) s''
 
+#guard_msgs(drop info, drop warning) in
 derive_mutual
   generator (fun i => ∃ t s, EveryBBTrace i t s)
 

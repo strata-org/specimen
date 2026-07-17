@@ -46,9 +46,9 @@ derive_generator (∃ (m : _), Cube m)
 derive_enumerator (∃ (m : _), Cube m)
 
 -- The checker instance was installed despite the silence.
-#check (inferInstance : DecOpt (Between 0 1 2))
+example : DecOpt (Between 0 1 2) := inferInstance
 -- The generator instance was installed despite the silence.
-#check (inferInstance : ArbitrarySizedSuchThat Nat (fun m => Cube m))
+example : ArbitrarySizedSuchThat Nat (fun m => Cube m) := inferInstance
 
 end SilentOld
 
@@ -70,7 +70,7 @@ derive_mutual checker
   (fun lo hi t => BST lo hi t)
 
 -- The checker instance was installed despite the silence.
-#check (inferInstance : DecOpt (BST 0 10 .Leaf))
+example : DecOpt (BST 0 10 .Leaf) := inferInstance
 
 end SilentMutual
 
