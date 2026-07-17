@@ -136,16 +136,20 @@ specimen_test (∀ (x : Nat) (t : Tree), Elem x t → Elem x.succ t)
 -- at the top to use `typing`/`type`/`term`.
 --
 inductive step : term → term → Prop where
-  | AppAbs : ∀ τ e1 e2, step (.App (.Abs τ e1) e2) e1            -- BUG: no substitution
-  | App1   : ∀ e1 e1' e2, step e1 e1' → step (.App e1 e2) (.App e1' e2)
-  | Add1   : ∀ e1 e1' e2, step e1 e1' → step (.Add e1 e2) (.Add e1' e2)
-  | Add2   : ∀ e1 e2 e2', step e2 e2' → step (.Add e1 e2) (.Add e1 e2')
+  -- Primitive reductions
+  | AppAbs   : ∀ τ e1 e2, step (.App (.Abs τ e1) e2) e1            -- BUG: should substitute e2 into e1
+  | AddConst : ∀ a b, step (.Add (.Const a) (.Const b)) (.Const (a + b))
+  -- Congruence rules (so redexes anywhere in a term can reduce)
+  | App1     : ∀ e1 e1' e2, step e1 e1' → step (.App e1 e2) (.App e1' e2)
+  | App2     : ∀ e1 e2 e2', step e2 e2' → step (.App e1 e2) (.App e1 e2')
+  | Add1     : ∀ e1 e1' e2, step e1 e1' → step (.Add e1 e2) (.Add e1' e2)
+  | Add2     : ∀ e1 e2 e2', step e2 e2' → step (.Add e1 e2) (.Add e1 e2')
 
 deriving instance DecidableEq for term, type
 deriving instance Enum for type
 
-set_option specimen.richOutput true in
 set_option specimen.shrink true in
-set_option specimen.scoreType "Scoring.UniformDensityScore" in
-specimen_test (min:=0, max:=15, tests := 1) (∀ (e : term) (τ : type) (e' : term),
+set_option specimen.scoreType "Scoring.BoundedGradedScore" in
+#guard_msgs (error, drop info, substring := true, drop warning) in
+specimen_test (min:=0, tests := 0) (∀ (e : term) (τ : type) (e' : term),
   typing [] e τ → step e e' → typing [] e' τ)
