@@ -1986,6 +1986,73 @@ def setInstanceVisibility (cmd : TSyntax `command) (kind : AttributeKind) : TSyn
     let newInstNode := instNode.setArg 0 newAttrKind
     ⟨raw.setArg 1 newInstNode⟩
 
+/-- Compile each SCC component's specs into `(def, instance)` command pairs.
+
+    Builds one consistent name mapping per component (`compMeta`) and reuses it as the
+    sibling list for every spec in that component — so cross-mode calls (e.g. the two
+    modes of `typing` that call each other) resolve to the correct sibling. Returns the
+    per-component compiled commands together with pretty-printed code for display.
+
+    Shared by `derive_mutual` and the `specimen`/`specimen_test` tactic so both emit
+    mutually-recursive components identically. -/
+def compileSpecComponents (components : List (List SpecKey))
+    (finalMemo : Std.HashMap SpecKey MemoEntry)
+    (constraintMap : Std.HashMap SpecKey (Array Name) := {})
+    : CommandElabM (Array (Array (SpecKey × Name) × Array (TSyntax `command) × Array (TSyntax `command))
+                    × Std.HashMap SpecKey (String × String)) := do
+  let mut compiledComponents : Array (Array (SpecKey × Name) × Array (TSyntax `command) × Array (TSyntax `command)) := #[]
+  let mut compiledCodeMap : Std.HashMap SpecKey (String × String) := {}
+  for comp in components do
+    -- Build the (key → globalName) mapping ONCE per component, then reuse it as the
+    -- sibling list for every spec, so all specs agree on each other's names.
+    let mut compMeta : Array (SpecKey × Name) := #[]
+    for key in comp do
+      let uid ← liftTermElabM (Lean.Core.mkFreshUserName `specimen_mutual)
+      let globalName := Name.mkSimple s!"{uid}_{key.inductiveName.toString.replace "." "_"}"
+      compMeta := compMeta.push (key, globalName)
+    let compSiblings : List (Name × List Nat × Name × DeriveSort) :=
+      compMeta.toList.map (fun (k, gn) => (k.inductiveName, k.outputIndices, gn, k.deriveSort))
+    let mut defCmds : Array (TSyntax `command) := #[]
+    let mut instCmds : Array (TSyntax `command) := #[]
+    for (key, globalName) in compMeta do
+      match finalMemo[key]? with
+      | some (.done indSched) =>
+        if indSched.alreadyExists then continue
+        try
+          let specConstraints := constraintMap[key]?
+          let (defCmd, instCmd) ← liftTermElabM <|
+            compileInductiveSchedule indSched globalName compSiblings specConstraints
+          defCmds := defCmds.push defCmd
+          instCmds := instCmds.push instCmd
+          let defStr ← liftTermElabM <| try
+            let fmt ← Lean.PrettyPrinter.ppCommand defCmd
+            pure fmt.pretty
+          catch _ => pure "(failed to pretty-print def)"
+          let instStr ← liftTermElabM <| try
+            let fmt ← Lean.PrettyPrinter.ppCommand instCmd
+            pure fmt.pretty
+          catch _ => pure "(failed to pretty-print instance)"
+          compiledCodeMap := compiledCodeMap.insert key (defStr, instStr)
+        catch e =>
+          logWarning m!"Failed to compile {key.inductiveName}{key.outputIndices}{repr key.deriveSort}: {e.toMessageData}"
+      | _ => logWarning m!"No schedule found for {key.inductiveName}{key.outputIndices}"
+    compiledComponents := compiledComponents.push (compMeta, defCmds, instCmds)
+  return (compiledComponents, compiledCodeMap)
+
+/-- Emit compiled SCC components: each multi-def component as a single `mutual … end`
+    block, single defs directly, followed by their instances at the given visibility. -/
+def emitSpecComponents
+    (compiledComponents : Array (Array (SpecKey × Name) × Array (TSyntax `command) × Array (TSyntax `command)))
+    (attrKind : AttributeKind) : CommandElabM Unit := do
+  for (_compMeta, defCmds, instCmds) in compiledComponents do
+    if defCmds.isEmpty then continue
+    if defCmds.size > 1 then
+      elabCommand (← `(command| mutual $defCmds* end))
+    else
+      elabCommand defCmds[0]!
+    for instCmd in instCmds do
+      elabCommand (setInstanceVisibility instCmd attrKind)
+
 @[command_elab mutual_deriver]
 def elabDeriveMutual : CommandElab := fun stx => do
   let attrKind ← liftMacroM (Lean.Elab.toAttributeKind stx[0])
@@ -2223,41 +2290,8 @@ def elabDeriveMutual : CommandElab := fun stx => do
                     logWarning m!"derive_mutual: {key.prettyPrint numArgs} needs [{sortStr} ({typeStr})] but no such instance exists"
               | _ => pure ()
           | _ => pure ()
-        let mut compiledComponents : Array (Array (SpecKey × Name) × Array (TSyntax `command) × Array (TSyntax `command)) := #[]
-        let mut compiledCodeMap : Std.HashMap SpecKey (String × String) := {}
-        for comp in components do
-          let mut compMeta : Array (SpecKey × Name) := #[]
-          for key in comp do
-            let uid ← liftTermElabM (Lean.Core.mkFreshUserName `specimen_mutual)
-            let globalName := Name.mkSimple s!"{uid}_{key.inductiveName.toString.replace "." "_"}"
-            compMeta := compMeta.push (key, globalName)
-          let compSiblings : List (Name × List Nat × Name × DeriveSort) :=
-            compMeta.toList.map (fun (k, gn) => (k.inductiveName, k.outputIndices, gn, k.deriveSort))
-          let mut defCmds : Array (TSyntax `command) := #[]
-          let mut instCmds : Array (TSyntax `command) := #[]
-          for (key, globalName) in compMeta do
-            match finalMemo[key]? with
-            | some (.done indSched) =>
-              if indSched.alreadyExists then continue
-              try
-                let specConstraints := constraintMap[key]?
-                let (defCmd, instCmd) ← liftTermElabM <|
-                  compileInductiveSchedule indSched globalName compSiblings specConstraints
-                defCmds := defCmds.push defCmd
-                instCmds := instCmds.push instCmd
-                let defStr ← liftTermElabM <| try
-                  let fmt ← Lean.PrettyPrinter.ppCommand defCmd
-                  pure fmt.pretty
-                catch _ => pure "(failed to pretty-print def)"
-                let instStr ← liftTermElabM <| try
-                  let fmt ← Lean.PrettyPrinter.ppCommand instCmd
-                  pure fmt.pretty
-                catch _ => pure "(failed to pretty-print instance)"
-                compiledCodeMap := compiledCodeMap.insert key (defStr, instStr)
-              catch e =>
-                logWarning m!"Failed to compile {key.inductiveName}{key.outputIndices}{repr key.deriveSort}: {e.toMessageData}"
-            | _ => logWarning m!"No schedule found for {key.inductiveName}{key.outputIndices}"
-          compiledComponents := compiledComponents.push (compMeta, defCmds, instCmds)
+        let (compiledComponents, compiledCodeMap) ←
+          compileSpecComponents components finalMemo constraintMap
         -- Build HTML output using ProofWidgets (controlled by specimen.richOutput)
         let richOutput := Lean.Option.get (← getOptions) specimen.richOutput
         let mkSpan (style : Json) (text : String) : Html :=
@@ -2682,29 +2716,27 @@ def elabDeriveMutual : CommandElab := fun stx => do
                 lines := lines.push instStr
               lines := lines.push ""
           logInfo m!"{String.intercalate "\n" lines.toList}"
-        -- Emit compiled components (already compiled above for the widget)
-        for (compMeta, defCmds, instCmds) in compiledComponents do
-          if defCmds.isEmpty then continue
-          let specDescs ← compMeta.toList.mapM fun (k, _) => do
-            let numArgs ← getNumArgs k
-            let scoreStr := match finalMemo[k]? with
-              | some (.done indSched) =>
-                if indSched.alreadyExists then "(pre-existing)"
-                else s!"({indSched.baseSchedules.length} base, {indSched.recSchedules.length} rec)"
-              | _ => ""
-            let cs := displayConstraintMap[k]?.getD #[]
-            let tpIdxs := typeParamIdxMap[k]?.getD #[]
-            pure s!"{k.prettyPrint numArgs cs tpIdxs} {scoreStr}"
-          let richOutput := Lean.Option.get (← getOptions) specimen.richOutput
-          if defCmds.size > 1 then
-            if !richOutput then logInfo m!"  ◆ mutual ({defCmds.size}):\n    {String.intercalate "\n    " specDescs}"
-            let mutualCmd ← `(command| mutual $defCmds* end)
-            elabCommand mutualCmd
-          else if defCmds.size == 1 then
-            if !richOutput then logInfo m!"  ● {specDescs.head!}"
-            elabCommand defCmds[0]!
-          for instCmd in instCmds do
-            elabCommand (setInstanceVisibility instCmd attrKind)
+        -- Plain-text emission summary (when the rich widget is off)
+        let richOutput := Lean.Option.get (← getOptions) specimen.richOutput
+        if !richOutput then
+          for (compMeta, defCmds, _) in compiledComponents do
+            if defCmds.isEmpty then continue
+            let specDescs ← compMeta.toList.mapM fun (k, _) => do
+              let numArgs ← getNumArgs k
+              let scoreStr := match finalMemo[k]? with
+                | some (.done indSched) =>
+                  if indSched.alreadyExists then "(pre-existing)"
+                  else s!"({indSched.baseSchedules.length} base, {indSched.recSchedules.length} rec)"
+                | _ => ""
+              let cs := displayConstraintMap[k]?.getD #[]
+              let tpIdxs := typeParamIdxMap[k]?.getD #[]
+              pure s!"{k.prettyPrint numArgs cs tpIdxs} {scoreStr}"
+            if defCmds.size > 1 then
+              logInfo m!"  ◆ mutual ({defCmds.size}):\n    {String.intercalate "\n    " specDescs}"
+            else
+              logInfo m!"  ● {specDescs.head!}"
+        -- Emit compiled components (mutual blocks + instances) — shared with the tactic
+        emitSpecComponents compiledComponents attrKind
       else
         -- Fallback: no auto-derive, use old per-entry compilation
         let siblings := specMeta.toList

@@ -51,6 +51,27 @@ register_option specimen.searchLimit : Nat := {
   descr := "max hypothesis orderings to evaluate per constructor during schedule search"
 }
 
+/-- Whether the `specimen`/`specimen_test` shrinker attempts to minimize counterexamples. -/
+register_option specimen.shrink : Bool := {
+  defValue := true
+  descr := "enable counterexample shrinking in specimen_test / specimen"
+}
+
+/-- How many shrink candidates to consider per step. Caps each variable's
+    `Shrinkable.shrink` list (and hence the size of the jointly-constrained
+    cartesian products), bounding both candidate generation and the DecOpt
+    re-checks. Lower = faster but less thorough shrinking. -/
+register_option specimen.shrinkBreadth : Nat := {
+  defValue := 8
+  descr := "max shrink candidates considered per variable/step (bounds cartesian products)"
+}
+
+/-- Maximum number of greedy shrink steps (descent depth) per attempt. -/
+register_option specimen.shrinkDepth : Nat := {
+  defValue := 100
+  descr := "max greedy shrink steps (descent depth) per counterexample"
+}
+
 /-- Global flag for enabling/disabling debug messages -/
 def globalDebugFlag : Bool := false
 

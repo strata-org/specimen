@@ -6,8 +6,10 @@ import Specimen.DeriveSchedules
 import Specimen.Debug
 import Specimen.Utils
 import Specimen.TheoremChecker
+import Specimen.LazyList
 
 import Plausible.Tactic
+import Plausible.DeriveShrinkable
 
 import Lean.Elab.Tactic
 import Lean.Elab.Command
@@ -229,8 +231,9 @@ def compileTheoremDef (steps : List ScheduleStep) (sort : ScheduleSort)
     re-checks the hypothesis with `DecOpt.decOpt` (short-circuiting on failure).
     Finally confirms the conclusion still fails. Returns all valid shrunk tuples. -/
 def compileValidShrinksDef (steps : List ScheduleStep) (sort : ScheduleSort)
-    (defName : Name) (varNames : List Name) (varTypes : List Expr)
+    (defName : Name) (varNames : List Name) (varTypes : List Expr) (breadth : Nat)
     : TermElabM (TSyntax `command) := do
+  let breadthLit := Syntax.mkNumLit (toString breadth)
   let varTypeSyntaxes ← varTypes.mapM (fun ty => PrettyPrinter.delab ty)
   let tupleType ← match varTypeSyntaxes with
     | [] => `(Unit)
@@ -338,17 +341,18 @@ def compileValidShrinksDef (steps : List ScheduleStep) (sort : ScheduleSort)
       checkBody ← `(let $(varIdent) := $projJ; $checkBody)
     pure checkBody
 
-  -- Tier 1: All-at-once for each SuchThat group (cartesian product of all shrink lists)
+  -- A lazy, breadth-capped shrink list for the variable at index `i`.
+  let cappedShrink (i : Nat) : TermElabM (TSyntax `term) := do
+    let proj ← mkProj tupleIdent i
+    `(LazyList.fromList ((Shrinkable.shrink $proj).take $breadthLit))
+
+  -- Tier 1: All-at-once for each SuchThat group (lazy cartesian product of all shrink lists)
   let mut tier1Exprs : Array (TSyntax `term) := #[]
   for group in suchThatGroups do
     if group.size < 2 then continue
-    -- Build cartesian product via nested flatMap:
-    -- (shrink v0).flatMap fun c0 => (shrink v1).flatMap fun c1 => ... => [(rebuilt tuple)]
-    -- Then filter by validity
     let mut candidateIdents : Array Lean.Ident := #[]
-    for (k, _gIdx) in group.toList.zipWith Prod.mk (List.range group.size) do
+    for k in [:group.size] do
       candidateIdents := candidateIdents.push (mkIdent (Name.mkSimple s!"specimen_all_{k}"))
-    -- Build innermost: the rebuilt tuple wrapped in a singleton list
     let mut rebuiltParts : Array (TSyntax `term) := #[]
     for j in [:varNames.length] do
       let gPos := group.toList.findIdx (· == j)
@@ -357,83 +361,74 @@ def compileValidShrinksDef (steps : List ScheduleStep) (sort : ScheduleSort)
       else
         rebuiltParts := rebuiltParts.push (← mkProj tupleIdent j)
     let rebuiltTuple ← mkTupleFromIdents rebuiltParts
-    -- Build nested flatMap from inside out
-    let mut cartesian ← `([$rebuiltTuple])
+    -- Build nested lazy bind from inside out; innermost yields a singleton
+    let mut cartesian ← `(LazyList.pureLazyList $rebuiltTuple)
     for k in (List.range group.size).reverse do
-      let gIdx := group[k]!
-      let proj ← mkProj tupleIdent gIdx
       let cIdent := candidateIdents[k]!
-      cartesian ← `((Shrinkable.shrink $proj).flatMap fun $(cIdent) => $cartesian)
-    -- Filter by validity
+      let base ← cappedShrink group[k]!
+      cartesian ← `(LazyList.bindLazyList $base (fun $(cIdent) => $cartesian))
     let entryIdent := mkIdent `specimen_cart_e
     let rebuiltIdent := mkIdent `specimen_rebuilt
     let checkBody ← mkValidityCheck
-    let filterExpr ← `(($cartesian).filter fun $(entryIdent) =>
+    let filterExpr ← `(LazyList.filter (fun $(entryIdent) =>
       let $(rebuiltIdent) := $(entryIdent)
-      $checkBody)
+      $checkBody) $cartesian)
     tier1Exprs := tier1Exprs.push filterExpr
 
-  -- Tier 2: Pairs for each SuchThat group (cartesian product of each pair)
+  -- Tier 2: Pairs for each SuchThat group (lazy cartesian product of each pair)
   let mut tier2Exprs : Array (TSyntax `term) := #[]
   for group in suchThatGroups do
     for gi in [:group.size] do
       for gj in [gi+1:group.size] do
         let idxI := group[gi]!
         let idxJ := group[gj]!
-        let projI ← mkProj tupleIdent idxI
-        let projJ ← mkProj tupleIdent idxJ
         let ciIdent := mkIdent (Name.mkSimple s!"specimen_pi_{idxI}")
         let cjIdent := mkIdent (Name.mkSimple s!"specimen_pj_{idxJ}")
-        -- Cartesian product of two shrink lists
         let mut rebuiltParts : Array (TSyntax `term) := #[]
         for j in [:varNames.length] do
           if j == idxI then rebuiltParts := rebuiltParts.push ciIdent
           else if j == idxJ then rebuiltParts := rebuiltParts.push cjIdent
           else rebuiltParts := rebuiltParts.push (← mkProj tupleIdent j)
         let rebuiltTuple ← mkTupleFromIdents rebuiltParts
-        let cartesian ← `((Shrinkable.shrink $projI).flatMap fun $(ciIdent) =>
-          (Shrinkable.shrink $projJ).map fun $(cjIdent) => $rebuiltTuple)
+        let baseI ← cappedShrink idxI
+        let baseJ ← cappedShrink idxJ
+        let cartesian ← `(LazyList.bindLazyList $baseI (fun $(ciIdent) =>
+          LazyList.mapLazyList (fun $(cjIdent) => $rebuiltTuple) $baseJ))
         let entryIdent := mkIdent `specimen_pair_e
         let rebuiltIdent := mkIdent `specimen_rebuilt
         let checkBody ← mkValidityCheck
-        let filterExpr ← `(($cartesian).filter fun $(entryIdent) =>
+        let filterExpr ← `(LazyList.filter (fun $(entryIdent) =>
           let $(rebuiltIdent) := $(entryIdent)
-          $checkBody)
+          $checkBody) $cartesian)
         tier2Exprs := tier2Exprs.push filterExpr
 
   -- Tier 3: Singles (each variable independently)
   let mut tier3Exprs : Array (TSyntax `term) := #[]
   for i in [:varNames.length] do
-    let projI ← mkProj tupleIdent i
-    let shrinkCandidates ← `(Shrinkable.shrink $projI)
     let candidateIdent := mkIdent (Name.mkSimple s!"specimen_c_{i}")
     let mut rebuiltParts : Array (TSyntax `term) := #[]
     for j in [:varNames.length] do
       if j == i then rebuiltParts := rebuiltParts.push candidateIdent
       else rebuiltParts := rebuiltParts.push (← mkProj tupleIdent j)
     let rebuiltTuple ← mkTupleFromIdents rebuiltParts
+    let base ← cappedShrink i
     let rebuiltIdent := mkIdent `specimen_rebuilt
     let checkBody ← mkValidityCheck
-    let filterExpr ← `(($shrinkCandidates).filterMap fun $(candidateIdent) =>
-      let $(rebuiltIdent) := $rebuiltTuple
-      if $checkBody then some $(rebuiltIdent) else none)
+    let mapped ← `(LazyList.mapLazyList (fun $(candidateIdent) => $rebuiltTuple) $base)
+    let filterExpr ← `(LazyList.filter (fun $(rebuiltIdent) => $checkBody) $mapped)
     tier3Exprs := tier3Exprs.push filterExpr
 
-  -- Combine: all-at-once first, then pairs, then singles — interleaved within each tier
+  -- Combine tiers lazily in coarse-to-fine order (all-at-once, then pairs, then singles).
+  -- `LazyList.append` keeps evaluation lazy so the greedy shrinker forces only what it consumes.
   let allStreams := tier1Exprs ++ tier2Exprs ++ tier3Exprs
-  let mut fullBody ← match allStreams.toList with
-    | [] => `(([] : List $tupleType))
-    | [x] => pure x
-    | _ =>
-      let mut listLit ← `(([] : List (List $tupleType)))
-      for expr in allStreams.reverse do
-        listLit ← `($expr :: $listLit)
-      `(Specimen.interleave $listLit)
+  let fullBody ← match allStreams.toList with
+    | [] => `((LazyList.lnil : LazyList $tupleType))
+    | x :: rest => rest.foldlM (fun acc e => `(LazyList.append $acc $e)) x
 
   let defIdent := mkIdent defName
   let tupleBinderIdent := mkIdent `specimen_tup
   let fuelBinderIdent := mkIdent `specimen_fuel
-  let retType ← `(List $tupleType)
+  let retType ← `(LazyList $tupleType)
   `(private def $defIdent ($tupleBinderIdent : $tupleType) ($fuelBinderIdent : Nat) : $retType :=
     $fullBody)
 
@@ -444,8 +439,9 @@ def compileValidShrinksDef (steps : List ScheduleStep) (sort : ScheduleSort)
     - "hyp: <hypothesis> failed" (which hypothesis rejected it)
     - "conclusion passed" (conclusion no longer fails — not a counterexample) -/
 def compileShrinkDiagDef (steps : List ScheduleStep) (sort : ScheduleSort)
-    (defName : Name) (varNames : List Name) (varTypes : List Expr)
+    (defName : Name) (varNames : List Name) (varTypes : List Expr) (breadth : Nat)
     : TermElabM (TSyntax `command) := do
+  let breadthLit := Syntax.mkNumLit (toString breadth)
   let varTypeSyntaxes ← varTypes.mapM (fun ty => PrettyPrinter.delab ty)
   let tupleType ← match varTypeSyntaxes with
     | [] => `(Unit)
@@ -520,7 +516,8 @@ def compileShrinkDiagDef (steps : List ScheduleStep) (sort : ScheduleSort)
   let mut allDiagExprs : Array (TSyntax `term) := #[]
   for i in [:varNames.length] do
     let projI ← mkProj tupleIdent i
-    let shrinkCandidates ← `(Shrinkable.shrink $projI)
+    -- Lazy, breadth-capped shrink candidates (mirrors validShrinks' singles tier)
+    let shrinkCandidates ← `(LazyList.fromList ((Shrinkable.shrink $projI).take $breadthLit))
     let candidateIdent := mkIdent (Name.mkSimple s!"specimen_c_{i}")
     let mut rebuiltParts : Array (TSyntax `term) := #[]
     for j in [:varNames.length] do
@@ -546,44 +543,47 @@ def compileShrinkDiagDef (steps : List ScheduleStep) (sort : ScheduleSort)
       letBody ← `(let $(varIdent) := $projJ; $letBody)
 
     let varNameLit := Syntax.mkStrLit varNames[i]!.toString
-    let diagExpr ← `(($shrinkCandidates).map fun $(candidateIdent) =>
+    let diagExpr ← `(LazyList.mapLazyList (fun $(candidateIdent) =>
       let $(rebuiltIdent) := $rebuiltTuple
       let outcome := $letBody
-      ($varNameLit, reprStr $(candidateIdent), outcome))
+      ($varNameLit, reprStr $(candidateIdent), outcome)) $shrinkCandidates)
     allDiagExprs := allDiagExprs.push diagExpr
 
-  let mut fullBody ← match allDiagExprs.toList with
-    | [] => `(([] : List (String × String × String)))
-    | [x] => pure x
-    | x :: rest => rest.foldlM (fun acc e => `($acc ++ $e)) x
+  let fullBody ← match allDiagExprs.toList with
+    | [] => `((LazyList.lnil : LazyList (String × String × String)))
+    | x :: rest => rest.foldlM (fun acc e => `(LazyList.append $acc $e)) x
 
   let defIdent := mkIdent defName
   let tupleBinderIdent := mkIdent `specimen_tup
   let fuelBinderIdent := mkIdent `specimen_fuel
-  let retType ← `(List (String × String × String))
+  let retType ← `(LazyList (String × String × String))
   `(private def $defIdent ($tupleBinderIdent : $tupleType) ($fuelBinderIdent : Nat) : $retType :=
     $fullBody)
 
 /-- The `specimen` command: property-based testing for propositions involving inductive relations.
-    Usage: `specimen_test (prop)`, `specimen_test (min := 5) (prop)`,
-    `specimen_test (max := 200) (prop)`, or `specimen_test (min := 5) (max := 200) (prop)` -/
--- Optional size config: `(min := N)`, `(max := M)`, `(min := N, max := M)`, or `(max := M, min := N)`
+    Config fields `min`, `max`, `tests` are all optional and may appear in any order, e.g.
+    `specimen_test (min := 5, max := 200, tests := 500) (prop)`. -/
 syntax minField := &"min" " := " num
 syntax maxField := &"max" " := " num
-syntax sizeConfig := atomic("(" (minField <|> maxField)) (", " (minField <|> maxField))? ")"
+syntax testsField := &"tests" " := " num
+syntax configField := minField <|> maxField <|> testsField
+syntax sizeConfig := atomic("(" configField) ("," configField)* ")"
 syntax (name := specimenTestCmd) "specimen_test " (sizeConfig)? term : command
 
 /-- Recursively search a syntax tree for a node of the given kind, returning its num arg. -/
 private partial def findFieldNum (stx : Syntax) (kind : Name) : Option Nat :=
   if stx.getKind == kind then
-    -- Field is `&"min" " := " num`, so num is the last arg
+    -- Field is `&"<name>" " := " num`, so num is the last arg
     stx.getArgs.back?.bind (·.isNatLit?)
   else
     stx.getArgs.foldl (fun acc arg => acc <|> findFieldNum arg kind) none
 
-/-- Extract the numeric value of a `min`/`max` field from a `sizeConfig` node. -/
+/-- Extract the numeric value of a `min`/`max`/`tests` field from a `sizeConfig` node. -/
 private def extractSizeField (cfg : Syntax) (fieldName : String) : Option Nat :=
-  let kind := if fieldName == "min" then `Specimen.Tactic.minField else `Specimen.Tactic.maxField
+  let kind := match fieldName with
+    | "min" => `Specimen.Tactic.minField
+    | "max" => `Specimen.Tactic.maxField
+    | _ => `Specimen.Tactic.testsField
   findFieldNum cfg kind
 
 @[command_elab specimenTestCmd]
@@ -595,6 +595,9 @@ unsafe def elabSpecimenTest : CommandElab := fun stx => do
       | none => 1
     let maxSize : Nat := match cfg with
       | some c => (extractSizeField c.raw "max").getD 100
+      | none => 100
+    let numTests : Nat := match cfg with
+      | some c => (extractSizeField c.raw "tests").getD 100
       | none => 100
     let memo ← IO.mkRef ({} : Std.HashMap SpecKey MemoEntry)
 
@@ -667,37 +670,21 @@ unsafe def elabSpecimenTest : CommandElab := fun stx => do
           let depKey : SpecKey := { inductiveName := dep.inductiveName, outputIndices := dep.outputIndices, deriveSort := dep.deriveSort }
           usedKeys := collectUsedDeps depKey finalMemo usedKeys
 
-      -- Emit all dependency instances (and collect compiled code for the widget)
+      -- Compile & emit all dependency instances using the SAME machinery as derive_mutual
+      -- (so mutually-recursive components — e.g. the two modes of `typing` — go into a
+      -- single `mutual … end` block with a consistent sibling-name mapping).
       let components := computeSpecSCC usedKeys.toList finalMemo
-      let mut compiledCodeMap : Std.HashMap SpecKey (String × String) := {}
-      for comp in components do
-        for key in comp do
-          match finalMemo[key]? with
-          | some (.done indSched) =>
-            if indSched.alreadyExists then continue
-            let uid ← liftTermElabM (Lean.Core.mkFreshUserName `specimen_tactic)
-            let globalName := Name.mkSimple s!"{uid}_{key.inductiveName.toString.replace "." "_"}"
-            let siblings : List (Name × List Nat × Name × DeriveSort) :=
-              comp.map (fun (k : SpecKey) =>
-                let gn := Name.mkSimple s!"{uid}_{k.inductiveName.toString.replace "." "_"}"
-                (k.inductiveName, k.outputIndices, gn, k.deriveSort))
-            try
-              let (defCmd, instCmd) ← liftTermElabM <|
-                compileInductiveSchedule indSched globalName siblings
-              let defStr ← liftTermElabM <| try
-                let fmt ← Lean.PrettyPrinter.ppCommand defCmd
-                pure fmt.pretty
-              catch _ => pure "(failed to pretty-print def)"
-              let instStr ← liftTermElabM <| try
-                let fmt ← Lean.PrettyPrinter.ppCommand instCmd
-                pure fmt.pretty
-              catch _ => pure "(failed to pretty-print instance)"
-              compiledCodeMap := compiledCodeMap.insert key (defStr, instStr)
-              elabCommand defCmd
-              elabCommand instCmd
-            catch e : Exception =>
-              logWarning m!"specimen: failed to compile instance for {key.inductiveName}: {e.toMessageData}"
-          | _ => pure ()
+      let debugLog := Lean.Option.get (← getOptions) specimen.debug
+      if debugLog then
+        logInfo m!"specimen: {components.length} SCC components, {usedKeys.size} used keys"
+        for comp in components do
+          let compDesc := comp.map (fun k =>
+            m!"{k.inductiveName} outputs={k.outputIndices} sort={repr k.deriveSort}")
+          logInfo m!"  component: {compDesc}"
+      let constraintMap ← liftTermElabM <| propagateConstraints components finalMemo
+      let (compiledComponents, compiledCodeMap) ←
+        compileSpecComponents components finalMemo constraintMap
+      emitSpecComponents compiledComponents .global
 
       -- Compile the theorem schedule into a checker def (before widget so we can show the code)
       let defName ← liftTermElabM (Lean.Core.mkFreshUserName `specimen_theorem_checker)
@@ -709,16 +696,19 @@ unsafe def elabSpecimenTest : CommandElab := fun stx => do
         let fmt ← Lean.PrettyPrinter.ppCommand defCmd
         pure fmt.pretty
       catch _ => pure "(failed to pretty-print)"
+      if debugLog then
+        logInfo m!"── emitting theorem checker {defName}:\n{theoremCodeStr}"
       elabCommand defCmd
 
       -- Compile the validShrinks function
+      let shrinkBreadth := Lean.Option.get (← getOptions) specimen.shrinkBreadth
       let shrinksName ← liftTermElabM (Lean.Core.mkFreshUserName `specimen_valid_shrinks)
-      let shrinksCmd ← liftTermElabM <| compileValidShrinksDef steps sort shrinksName varNames varTypes
+      let shrinksCmd ← liftTermElabM <| compileValidShrinksDef steps sort shrinksName varNames varTypes shrinkBreadth
       elabCommand shrinksCmd
 
       -- Compile the shrink diagnostic function (for HTML trace)
       let shrinkDiagName ← liftTermElabM (Lean.Core.mkFreshUserName `specimen_shrink_diag)
-      let shrinkDiagCmd ← liftTermElabM <| compileShrinkDiagDef steps sort shrinkDiagName varNames varTypes
+      let shrinkDiagCmd ← liftTermElabM <| compileShrinkDiagDef steps sort shrinkDiagName varNames varTypes shrinkBreadth
       elabCommand shrinkDiagCmd
 
       -- Build rich HTML widget (emitted after test result for better infoview order)
@@ -1059,54 +1049,76 @@ unsafe def elabSpecimenTest : CommandElab := fun stx => do
       -- shrinkTree: for each shrink round, (tupleRepr, diagnostics)
       let minSizeLit := Syntax.mkNumLit (toString minSize)
       let maxSizeLit := Syntax.mkNumLit (toString maxSize)
+      let numTestsLit := Syntax.mkNumLit (toString numTests)
+      -- Denominator for the size ramp (spread min..max over the test runs; avoid div-by-zero).
+      let rampDenomLit := Syntax.mkNumLit (toString (Nat.max 1 (numTests - 1)))
+      -- Only collect the (expensive) shrink-diagnostic tree when the widget is enabled.
+      let collectDiagLit : TSyntax `term ← liftTermElabM <| if richOutput then `(true) else `(false)
+      -- Shrink controls
+      let shrinkEnabled := Lean.Option.get (← getOptions) specimen.shrink
+      let shrinkEnabledLit : TSyntax `term ← liftTermElabM <| if shrinkEnabled then `(true) else `(false)
+      let shrinkBreadthLit := Syntax.mkNumLit (toString (Lean.Option.get (← getOptions) specimen.shrinkBreadth))
+      let shrinkDepthLit := Syntax.mkNumLit (toString (Lean.Option.get (← getOptions) specimen.shrinkDepth))
+      -- Diagnostic display cap: at most breadth candidates per variable.
+      let diagCapLit := Syntax.mkNumLit (toString (shrinkBreadth * varNames.length + 1))
       let testExpr ← liftTermElabM <| `((do
         let mut successes : Nat := 0
         let mut discards : Nat := 0
-        for i in List.range 100 do
-          let sz := $minSizeLit + i * ($maxSizeLit - $minSizeLit) / 99
-          let genResult ← Plausible.Gen.run (($checkerIdent) sz sz sz) sz
+        for i in List.range $numTestsLit do
+          let sz := $minSizeLit + i * ($maxSizeLit - $minSizeLit) / $rampDenomLit
+          -- A dead-ended constrained generator throws (Gen.run turns GenError into an IO
+          -- exception); treat that as a discard rather than crashing the whole test.
+          let genResult ← try
+              (Except.ok <$> Plausible.Gen.run (($checkerIdent) sz sz sz) sz : IO (Except Plausible.GenError _))
+            catch _ => pure (Except.error (Plausible.GenError.genError "generation dead-ended"))
           match genResult with
-          | .ok (true, _) => successes := successes + 1
-          | .ok (false, specimen_cex_raw) =>
+          | .ok (.ok (true, _)) => successes := successes + 1
+          | .ok (.ok (false, specimen_cex_raw)) =>
             let fuel := 3 * (sz + 1)
-            -- Bounded backtracking: try first 20 candidates,
-            -- greedily shrink each to fixpoint, pick the deepest result.
-            -- Record the full path for the winning branch.
-            let candidates := ($shrinksIdent) specimen_cex_raw fuel
+            -- Bounded backtracking over a LAZY candidate stream: `validShrinks` returns a
+            -- `LazyList`, so `.head?`/`.take` force only what is consumed — candidate
+            -- generation and DecOpt re-checks short-circuit at the first valid shrink.
             let mut bestResult := specimen_cex_raw
             let mut bestCount : Nat := 0
+            -- The winning path is only stored when the diagnostic widget is enabled.
             let mut bestPath : List _ := []
-            for candidate in candidates.take 20 do
-              let mut current := candidate
-              let mut count : Nat := 1
-              let mut path := [candidate]
-              for _ in List.range 100 do
-                match ($shrinksIdent) current fuel with
-                | smaller :: _ =>
-                  current := smaller
-                  count := count + 1
-                  path := path ++ [smaller]
-                | [] => break
-              if count > bestCount then
-                bestResult := current
-                bestCount := count
-                bestPath := path
+            if $shrinkEnabledLit then
+              let firstLevel := LazyList.take $shrinkBreadthLit (($shrinksIdent) specimen_cex_raw fuel)
+              for candidate in firstLevel do
+                let mut current := candidate
+                let mut count : Nat := 1
+                let mut path := if $collectDiagLit then [candidate] else []
+                for _ in List.range $shrinkDepthLit do
+                  match LazyList.head? (($shrinksIdent) current fuel) with
+                  | some smaller =>
+                    current := smaller
+                    count := count + 1
+                    if $collectDiagLit then path := path ++ [smaller]
+                  | none => break
+                if count > bestCount then
+                  bestResult := current
+                  bestCount := count
+                  bestPath := path
             let mut $cexIdent:term := bestResult
             let shrinkCount := bestCount
-            -- Build the shrink tree: initial → each step on the winning path → fixpoint
-            let mut shrinkTree : List (String × List (String × String × String)) := []
-            let diag0 := ($diagIdent) specimen_cex_raw fuel
-            let $formatTupleIdent:term := specimen_cex_raw
-            let tupleStr0 := $fmtTupleBody
-            shrinkTree := [(tupleStr0, diag0)]
-            for step in bestPath do
-              let diagS := ($diagIdent) step fuel
-              let $formatTupleIdent:term := step
-              let tupleStrS := $fmtTupleBody
-              shrinkTree := shrinkTree ++ [(tupleStrS, diagS)]
+            -- Build the shrink diagnostic tree only when the widget is enabled
+            -- (recomputing per-candidate outcomes is expensive for large values).
+            let shrinkTree : List (String × List (String × String × String)) :=
+              if $collectDiagLit then Id.run do
+                let mut t : List (String × List (String × String × String)) := []
+                let diag0 := LazyList.take $diagCapLit (($diagIdent) specimen_cex_raw fuel)
+                let $formatTupleIdent:term := specimen_cex_raw
+                t := [($fmtTupleBody, diag0)]
+                for step in bestPath do
+                  let diagS := LazyList.take $diagCapLit (($diagIdent) step fuel)
+                  let $formatTupleIdent:term := step
+                  t := t ++ [($fmtTupleBody, diagS)]
+                t
+              else []
             let details := $formatExpr
             let msg := s!"Found counter-example!\n{details}\n({successes} tests passed, {discards} discarded, {shrinkCount} shrinks)"
             return (msg, shrinkCount, shrinkTree)
+          | .ok (.error _) => discards := discards + 1
           | .error _ => discards := discards + 1
         return (s!"{successes} tests passed ({discards} discarded)", 0, [])
         : IO (String × Nat × List (String × List (String × String × String)))))
@@ -1227,11 +1239,15 @@ def runCommandElabMInCore (x : CommandElabM α) : CoreM α := do
 
 /-- The `specimen` tactic: property-based testing of the current proof goal.
 
-    Reverts all local hypotheses into the goal to form a universally-quantified
-    proposition, then tests it exactly as `specimen_test` does. Derived generators
-    and checkers are added to the environment only for the duration of the test —
-    the environment is restored afterward, so nothing leaks (the definitions are
-    "local to the theorem"). On completion the goal is admitted.
+    Forms a closed universally-quantified proposition from the goal and all local
+    hypotheses (via `mkForallFVars` — the proof state is *not* mutated), then tests
+    it exactly as `specimen_test` does. Derived generators and checkers are added to
+    the environment only for the duration of the test — the environment is restored
+    afterward, so nothing leaks (the definitions are "local to the theorem").
+
+    `specimen` is a diagnostic: it reports whether a counterexample was found and does
+    not alter the goal or claim to prove it. If it passes, prove the goal as usual;
+    if it reports a counterexample, the goal is false as stated.
 
     Usage: `specimen`, `specimen (min := 5)`, `specimen (max := 200)`,
     `specimen (min := 5, max := 200)`. -/
@@ -1241,25 +1257,25 @@ syntax (name := specimenTac) "specimen" (sizeConfig)? : tactic
 unsafe def evalSpecimenTac : Tactic := fun stx => do
   match stx with
   | `(tactic| specimen $[$cfg:sizeConfig]?) => withMainContext do
-    -- Revert all local hypotheses so the goal becomes a closed ∀-proposition
-    let (_, g) ← (← getMainGoal).revert ((← getLocalHyps).map Expr.fvarId!)
-    g.withContext do
-      let tgt ← instantiateMVars (← g.getType)
-      -- Delaborate the goal type into a term syntax
-      let tgtStx ← PrettyPrinter.delab tgt
-      -- Build the `specimen_test` command syntax (forwarding any size config)
-      let cmdStx ← match cfg with
-        | some c => `(command| specimen_test $c:sizeConfig $tgtStx:term)
-        | none => `(command| specimen_test $tgtStx:term)
-      -- Snapshot the environment; run the test; restore so derived defs don't leak
-      let savedEnv ← getEnv
-      try
-        runCommandElabMInCore (Lean.Elab.Command.elabCommand cmdStx)
-      catch e =>
-        setEnv savedEnv
-        throw e
+    -- Build the closed ∀-proposition from the goal + local hypotheses WITHOUT
+    -- mutating the proof state (no revert): abstract the local fvars over the target.
+    let tgt ← getMainTarget
+    let fvars := (← getLocalHyps)
+    let closedProp ← instantiateMVars (← mkForallFVars fvars tgt)
+    -- Delaborate the closed proposition into a term syntax
+    let tgtStx ← PrettyPrinter.delab closedProp
+    -- Build the `specimen_test` command syntax (forwarding any size config)
+    let cmdStx ← match cfg with
+      | some c => `(command| specimen_test $c:sizeConfig $tgtStx:term)
+      | none => `(command| specimen_test $tgtStx:term)
+    -- Snapshot the environment; run the test; restore so derived defs don't leak
+    let savedEnv ← getEnv
+    try
+      runCommandElabMInCore (Lean.Elab.Command.elabCommand cmdStx)
       setEnv savedEnv
-    admitGoal g
+    catch e =>
+      setEnv savedEnv
+      throw e
   | _ => throwUnsupportedSyntax
 
 end Specimen.Tactic
