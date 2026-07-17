@@ -201,9 +201,12 @@ def deriveScheduledChecker' (_args : Array Expr)
       -- For checkers with recursive constructors, add a failsafe to the base case:
       -- if no base constructor matches, return "unknown" (error) rather than "false",
       -- since a recursive constructor might succeed at a larger size.
+      -- Uses `outOfFuelError` (not `genericFailure`) so that `isInconclusiveError`
+      -- recognizes it as inconclusive; otherwise the failsafe reads as a definitive
+      -- "false" and the checker reports false negatives from partial enumeration.
       let baseCheckersWithFailsafe ← do
         if !recursiveCheckers.isEmpty then
-          let failsafe ← `((fun (_ : $(Lean.mkIdent ``Unit)) => $failFn $genericFailure))
+          let failsafe ← `((fun (_ : $(Lean.mkIdent ``Unit)) => $failFn $(mkIdent ``Gen.outOfFuelError)))
           pure (nonRecursiveCheckers.push failsafe)
         else
           pure nonRecursiveCheckers

@@ -1301,14 +1301,17 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
     -- For checkers/enumerators with recursive constructors, add a failsafe to the base case:
     -- if no base constructor matches, return "unknown" (error) rather than "false",
     -- since a recursive constructor might succeed at a larger size.
+    -- Uses `outOfFuelError` (not `genericFailure`) so that `isInconclusiveError`
+    -- recognizes it as inconclusive; otherwise the failsafe reads as a definitive
+    -- "false" and the checker reports false negatives from partial enumeration.
     let baseProducersWithFailsafe ← do
       if !recursiveProducers.isEmpty then
         match key.deriveSort with
         | .Checker | .Theorem =>
-          let failsafe ← `((fun (_ : Unit) => $failFn $genericFailure))
+          let failsafe ← `((fun (_ : Unit) => $failFn $(mkIdent ``Gen.outOfFuelError)))
           pure (nonRecursiveProducers.push failsafe)
         | .Enumerator =>
-          let failsafe ← `($failFn $genericFailure)
+          let failsafe ← `($failFn $(mkIdent ``Gen.outOfFuelError))
           pure (nonRecursiveProducers.push failsafe)
         | .Generator => pure nonRecursiveProducers
       else
