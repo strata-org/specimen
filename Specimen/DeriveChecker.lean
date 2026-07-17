@@ -264,9 +264,11 @@ def elabDeriveScheduledChecker : CommandElab := fun stx => do
     let genFormat ← liftCoreM (PrettyPrinter.ppCommand typeclassInstance)
 
     -- Display the code for the derived checker to the user
-    -- & prompt the user to accept it in the VS Code side panel
-    liftTermElabM $ Tactic.TryThis.addSuggestion stx
-      (Format.pretty genFormat) (header := "Try this checker: ")
+    -- & prompt the user to accept it in the VS Code side panel.
+    -- Suppressed under `set_option specimen.silent true`.
+    unless (← inSilentMode) do
+      liftTermElabM $ Tactic.TryThis.addSuggestion stx
+        (Format.pretty genFormat) (header := "Try this checker: ")
 
     -- Elaborate the typeclass instance and add it to the local context
     elabCommand typeclassInstance

@@ -51,6 +51,19 @@ register_option specimen.searchLimit : Nat := {
   descr := "max hypothesis orderings to evaluate per constructor during schedule search"
 }
 
+/-- When true, all of Specimen's informational derivation output is suppressed:
+    the `Try this:` suggestion popups from the single-derive commands
+    (`derive_checker` / `derive_generator` / `derive_generator_multi` /
+    `derive_enumerator` / `derive_enum`) as well as the HTML widget and
+    plain-text schedule reports from `derive_mutual`. The typeclass instances
+    are still installed exactly as before; only the console/infoview output is
+    skipped. Useful in batch builds where hundreds of derives would otherwise
+    flood the console with tens of thousands of lines. -/
+register_option specimen.silent : Bool := {
+  defValue := false
+  descr := "suppress all informational derivation output (Try this: suggestions, derive_mutual widgets/text)"
+}
+
 /-- Global flag for enabling/disabling debug messages -/
 def globalDebugFlag : Bool := false
 
@@ -62,6 +75,11 @@ macro "schedTrace " msg:interpolatedStr(term) : term =>
 def inDebugMode [Monad m] [MonadOptions m] : m Bool := do
   let opts ← getOptions
   return Lean.Option.get opts specimen.debug
+
+/-- Determines whether the `specimen.silent` Option flag is set -/
+def inSilentMode [Monad m] [MonadOptions m] : m Bool := do
+  let opts ← getOptions
+  return Lean.Option.get opts specimen.silent
 
 /-- Performs a monadic `action` if a flag value is set -/
 def withDebugFlag [Monad m] [MonadOptions m] [MonadWithOptions m] [MonadLog m] [AddMessageContext m] (flag : Bool) (action : m Unit) : m Unit := do

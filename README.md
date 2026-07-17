@@ -137,6 +137,7 @@ derive_checker (fun n t => balanced n t)
 | `specimen.fuel` | `10000` | Fuel (termination budget) for derived generators/enumerators/checkers |
 | `specimen.richOutput` | `true` | Emit rich HTML widget output in the Lean infoview |
 | `specimen.textOutput` | `0` | Plain-text output verbosity (0=off, 1=summary, 2=problems, 3=full) |
+| `specimen.silent` | `false` | Suppress all informational derivation output (`Try this:` suggestions and `derive_mutual` widgets/text). Instances are still installed |
 | `specimen.searchLimit` | `200000` | Max hypothesis orderings to evaluate per constructor during schedule search |
 
 **Scoring strategies** control how Specimen evaluates and selects among candidate schedules during derivation. The `specimen.scoreType` option selects the active strategy:

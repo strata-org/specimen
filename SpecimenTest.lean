@@ -109,4 +109,7 @@ import SpecimenTest.ScheduleQualityRegressionTest
 -- Weight function / modifier customization tests
 import SpecimenTest.WeightCustomizationTest
 
+-- `specimen.silent` output-suppression option tests
+import SpecimenTest.SilentOptionTest
+
 

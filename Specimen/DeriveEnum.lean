@@ -1,5 +1,6 @@
 import Lean
 
+import Specimen.Debug
 import Specimen.Idents
 import Specimen.TSyntaxCombinators
 import Specimen.Enumerators
@@ -275,8 +276,10 @@ def elabDeriveEnum : CommandElab := fun stx => do
       -- in the VS Code side panel
       let instCmd : TSyntax `command := ⟨cmds.back!⟩
       let enumFormat ← liftCoreM (PrettyPrinter.ppCommand instCmd)
-      liftTermElabM $ Tactic.TryThis.addSuggestion stx
-        (Format.pretty enumFormat) (header := "Try this enumerator: ")
+      -- Suppressed under `set_option specimen.silent true`.
+      unless (← inSilentMode) do
+        liftTermElabM $ Tactic.TryThis.addSuggestion stx
+          (Format.pretty enumFormat) (header := "Try this enumerator: ")
 
       -- Elaborate the typeclass instance and add it to the local context
       for cmd in cmds do elabCommand cmd

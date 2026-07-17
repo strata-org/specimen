@@ -245,6 +245,7 @@ Similar hierarchy exists for enumerators (`EnumSizedSuchThat` → `EnumSuchThat`
 | `specimen.fuel` | `10000` | Fuel (termination budget) for derived generators/enumerators/checkers |
 | `specimen.richOutput` | `true` | Emit rich HTML widget in the Lean infoview showing schedule details |
 | `specimen.textOutput` | `0` | Plain-text output verbosity: 0=off, 1=summary, 2=problems only, 3=full schedules |
+| `specimen.silent` | `false` | Suppress all informational derivation output — the `Try this:` suggestions from `derive_checker`/`derive_generator`/`derive_enumerator` and the widget/text reports from `derive_mutual`. Instances are still installed |
 | `specimen.searchLimit` | `200000` | Max hypothesis orderings to evaluate per constructor during branch-and-bound schedule search |
 | `specimen.debug` | `false` | Enable debug messages from Specimen |
 

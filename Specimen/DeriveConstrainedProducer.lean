@@ -1853,9 +1853,11 @@ def elabDeriveGenerator : CommandElab := fun stx => do
     let genFormat ← liftCoreM (PrettyPrinter.ppCommand typeClassInstance)
 
     -- Display the code for the derived generator to the user
-    -- & prompt the user to accept it in the VS Code side panel
-    liftTermElabM $ Tactic.TryThis.addSuggestion stx
-      (Format.pretty genFormat) (header := "Try this generator: ")
+    -- & prompt the user to accept it in the VS Code side panel.
+    -- Suppressed under `set_option specimen.silent true`.
+    unless (← inSilentMode) do
+      liftTermElabM $ Tactic.TryThis.addSuggestion stx
+        (Format.pretty genFormat) (header := "Try this generator: ")
 
     elabCommand typeClassInstance
 
@@ -1873,8 +1875,9 @@ def elabDeriveGeneratorMulti : CommandElab := fun stx => do
     withScope (fun scope => { scope with opts := scope.opts.set `specimen.multiOutput true }) do
       let typeClassInstance ← liftTermElabM <| deriveArbitrarySuchThatInstance descr
       let genFormat ← liftCoreM (PrettyPrinter.ppCommand typeClassInstance)
-      liftTermElabM $ Tactic.TryThis.addSuggestion stx
-        (Format.pretty genFormat) (header := "Try this generator: ")
+      unless (← inSilentMode) do
+        liftTermElabM $ Tactic.TryThis.addSuggestion stx
+          (Format.pretty genFormat) (header := "Try this generator: ")
       elabCommand typeClassInstance
   | _ => throwUnsupportedSyntax
 
@@ -1894,9 +1897,11 @@ def elabDeriveScheduledEnumerator : CommandElab := fun stx => do
     let genFormat ← liftCoreM (PrettyPrinter.ppCommand typeClassInstance)
 
     -- Display the code for the derived enumerator to the user
-    -- & prompt the user to accept it in the VS Code side panel
-    liftTermElabM $ Tactic.TryThis.addSuggestion stx
-      (Format.pretty genFormat) (header := "Try this enumerator: ")
+    -- & prompt the user to accept it in the VS Code side panel.
+    -- Suppressed under `set_option specimen.silent true`.
+    unless (← inSilentMode) do
+      liftTermElabM $ Tactic.TryThis.addSuggestion stx
+        (Format.pretty genFormat) (header := "Try this enumerator: ")
 
     elabCommand typeClassInstance
 
@@ -2260,7 +2265,9 @@ def elabDeriveMutual : CommandElab := fun stx => do
                 logWarning m!"Failed to compile {key.inductiveName}{key.outputIndices}{repr key.deriveSort}: {e.toMessageData}"
             | _ => logWarning m!"No schedule found for {key.inductiveName}{key.outputIndices}"
           compiledComponents := compiledComponents.push (compMeta, defCmds, instCmds)
-        -- Build HTML output using ProofWidgets (controlled by specimen.richOutput)
+        -- Build HTML output using ProofWidgets (controlled by specimen.richOutput).
+        -- `specimen.silent` suppresses all informational output below.
+        let silent ← inSilentMode
         let richOutput := Lean.Option.get (← getOptions) specimen.richOutput
         let mkSpan (style : Json) (text : String) : Html :=
           .element "span" #[("style", style)] #[.text text]
@@ -2571,7 +2578,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
             .element "div" #[("style", json% {"marginLeft": "8px", "borderLeft": "2px solid #3c3c3c", "paddingLeft": "12px"})] trieItems
           ])
         -- Emit the full HTML widget (at top of infoview)
-        if richOutput then
+        if richOutput && !silent then
           let fullHtml := Html.element "div" #[("style", json% {"fontFamily": "var(--vscode-editor-font-family, monospace)", "fontSize": "13px", "lineHeight": "1.6", "padding": "8px"})] htmlChildren
           let graphMsg ← liftCoreM <| Lean.MessageData.ofHtml fullHtml
             s!"derive_mutual: {usedKeys.size} specs in {components.length} components"
@@ -2579,7 +2586,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
         -- Plain-text fallback output (accessible to LLMs and non-IDE tooling)
         -- Levels: 0=off, 1=names+quality, 2=full schedules for poor-quality, 3=everything
         let textLevel := Lean.Option.get (← getOptions) specimen.textOutput
-        if textLevel > 0 then
+        if textLevel > 0 && !silent then
           let specQuality (indSched : InductiveSchedule) : String :=
             let b := bundle.scoreBadness indSched.score
             if b ≤ 0.2 then "★★★"
@@ -2699,11 +2706,11 @@ def elabDeriveMutual : CommandElab := fun stx => do
             pure s!"{k.prettyPrint numArgs cs tpIdxs} {scoreStr}"
           let richOutput := Lean.Option.get (← getOptions) specimen.richOutput
           if defCmds.size > 1 then
-            if !richOutput then logInfo m!"  ◆ mutual ({defCmds.size}):\n    {String.intercalate "\n    " specDescs}"
+            if !richOutput && !silent then logInfo m!"  ◆ mutual ({defCmds.size}):\n    {String.intercalate "\n    " specDescs}"
             let mutualCmd ← `(command| mutual $defCmds* end)
             elabCommand mutualCmd
           else if defCmds.size == 1 then
-            if !richOutput then logInfo m!"  ● {specDescs.head!}"
+            if !richOutput && !silent then logInfo m!"  ● {specDescs.head!}"
             elabCommand defCmds[0]!
           for instCmd in instCmds do
             elabCommand (setInstanceVisibility instCmd attrKind)
