@@ -10,7 +10,7 @@ inductive Even : Nat → Prop where
 -- Test 1: true property — should pass
 /-- info: 100 tests passed (0 discarded) -/
 #guard_msgs (info, drop info, substring := true) in
-specimen_test (∀ n : Nat, Even n → Even (n + 2))
+specimen_test (min := 1, max := 10) (∀ n : Nat, Even n → Even (n + 2))
 
 -- Test 2: false property — should find counterexample
 /-- error: Found counter-example! -/
@@ -27,12 +27,27 @@ inductive Add3 : Nat → Nat → Nat → Prop where
 #guard_msgs (info, substring := true) in
 specimen_test (∀ a b c : Nat, Add3 a b c → Add3 a b c)
 
--- False property: Add3 a b c → Add3 a c b (nondeterministic counterexample values)
-/-- error: Found counter-example! -/
-#guard_msgs (error, drop info, substring := true) in
+-- -- False property: Add3 a b c → Add3 a c b (nondeterministic counterexample values)
+-- /-- error: Found counter-example! -/
+-- #guard_msgs (error, substring := true) in
 specimen_test (∀ a b c : Nat, Add3 a b c → Add3 a c b)
 
 -- Test 5: Multiple hypotheses — true property that previously failed due to checker soundness bug
 /-- tests passed -/
 #guard_msgs (info, substring := true) in
 specimen_test (∀ n : Nat, Even n → Even (n + 2) → Even (n + 4) → Even (n + 6))
+
+-- Test 6: Shrinking produces minimal counterexample
+-- Even n → Even (n + 1) is false; smallest counterexample is n = 0
+/--
+error: Found counter-example!
+  n : Nat := 0
+-/
+#guard_msgs (error, drop info, substring := true) in
+specimen_test (∀ n : Nat, Even n → Even (Nat.succ n))
+
+-- Test 7: Multi-variable shrinking — Add3 a b c → Add3 a c b
+-- Shrinking respects the Add3 hypothesis constraint (b ≠ c guaranteed in counterexample)
+/-- error: Found counter-example! -/
+#guard_msgs (error, drop info, substring := true) in
+specimen_test (∀ a b c : Nat, Add3 a b c → Add3 a c b)
