@@ -1172,6 +1172,94 @@ unsafe def elabSpecimenTest : CommandElab := fun stx => do
 
   | _ => throwUnsupportedSyntax
 
--- TODO: Add `specimen` tactic that extracts the goal and delegates to `specimen_test`
+/-- Run a `CommandElabM` action from within `CoreM`, building a command context/state
+    from the current core context/state and syncing the environment, name generators,
+    messages, traces, and info trees back afterward.
+
+    This is the inverse of `Lean.Elab.Command.runCore` (which runs `CoreM` inside
+    `CommandElabM`). It lets the `specimen` tactic reuse the `specimen_test` command
+    logic (which emits derived instances via `elabCommand`). -/
+def runCommandElabMInCore (x : CommandElabM α) : CoreM α := do
+  let coreCtx ← readThe Core.Context
+  let coreState ← getThe Core.State
+  let opts ← getOptions
+  let cmdCtx : Lean.Elab.Command.Context := {
+    fileName       := coreCtx.fileName
+    fileMap        := coreCtx.fileMap
+    currRecDepth   := coreCtx.currRecDepth
+    currMacroScope := coreCtx.currMacroScope
+    ref            := coreCtx.ref
+    snap?          := none
+    cancelTk?      := coreCtx.cancelTk?
+  }
+  -- Preserve the current namespace and open declarations so name resolution
+  -- inside the emitted commands matches the tactic's context.
+  let scope : Lean.Elab.Command.Scope := {
+    header       := ""
+    opts         := opts
+    currNamespace := coreCtx.currNamespace
+    openDecls    := coreCtx.openDecls
+  }
+  let cmdState : Lean.Elab.Command.State := {
+    env            := coreState.env
+    messages       := coreState.messages
+    scopes         := [scope]
+    nextMacroScope := coreState.nextMacroScope
+    maxRecDepth    := coreCtx.maxRecDepth
+    ngen           := coreState.ngen
+    auxDeclNGen    := coreState.auxDeclNGen
+    infoState      := coreState.infoState
+    traceState     := coreState.traceState
+  }
+  match (← liftM <| EIO.toIO' <| (x cmdCtx).run cmdState) with
+  | .error e => throw e
+  | .ok (a, sNew) =>
+    modifyThe Core.State fun s => { s with
+      env            := sNew.env
+      messages       := sNew.messages
+      nextMacroScope := sNew.nextMacroScope
+      ngen           := sNew.ngen
+      auxDeclNGen    := sNew.auxDeclNGen
+      infoState      := sNew.infoState
+      traceState     := sNew.traceState
+    }
+    return a
+
+/-- The `specimen` tactic: property-based testing of the current proof goal.
+
+    Reverts all local hypotheses into the goal to form a universally-quantified
+    proposition, then tests it exactly as `specimen_test` does. Derived generators
+    and checkers are added to the environment only for the duration of the test —
+    the environment is restored afterward, so nothing leaks (the definitions are
+    "local to the theorem"). On completion the goal is admitted.
+
+    Usage: `specimen`, `specimen (min := 5)`, `specimen (max := 200)`,
+    `specimen (min := 5, max := 200)`. -/
+syntax (name := specimenTac) "specimen" (sizeConfig)? : tactic
+
+@[tactic specimenTac]
+unsafe def evalSpecimenTac : Tactic := fun stx => do
+  match stx with
+  | `(tactic| specimen $[$cfg:sizeConfig]?) => withMainContext do
+    -- Revert all local hypotheses so the goal becomes a closed ∀-proposition
+    let (_, g) ← (← getMainGoal).revert ((← getLocalHyps).map Expr.fvarId!)
+    g.withContext do
+      let tgt ← instantiateMVars (← g.getType)
+      -- Delaborate the goal type into a term syntax
+      let tgtStx ← PrettyPrinter.delab tgt
+      -- Build the `specimen_test` command syntax (forwarding any size config)
+      let cmdStx ← match cfg with
+        | some c => `(command| specimen_test $c:sizeConfig $tgtStx:term)
+        | none => `(command| specimen_test $tgtStx:term)
+      -- Snapshot the environment; run the test; restore so derived defs don't leak
+      let savedEnv ← getEnv
+      try
+        runCommandElabMInCore (Lean.Elab.Command.elabCommand cmdStx)
+      catch e =>
+        setEnv savedEnv
+        throw e
+      setEnv savedEnv
+    admitGoal g
+  | _ => throwUnsupportedSyntax
 
 end Specimen.Tactic

@@ -51,3 +51,30 @@ specimen_test (∀ n : Nat, Even n → Even (Nat.succ n))
 /-- error: Found counter-example! -/
 #guard_msgs (error, drop info, substring := true) in
 specimen_test (∀ a b c : Nat, Add3 a b c → Add3 a c b)
+
+-- Test 8: `specimen` tactic on a true property — tests then admits (uses sorry)
+/-- info: 100 tests passed (0 discarded) -/
+#guard_msgs (info, drop info, substring := true, drop warning) in
+example : ∀ n : Nat, Even n → Even (n + 2) := by
+  specimen
+
+-- Test 9: `specimen` tactic reverts local hypotheses into the goal
+/-- info: 100 tests passed (0 discarded) -/
+#guard_msgs (info, drop info, substring := true, drop warning) in
+example (n : Nat) (h : Even n) : Even (n + 2) := by
+  specimen
+
+-- Test 10: `specimen` tactic finds a counterexample
+/--
+error: Found counter-example!
+  n : Nat := 0
+-/
+#guard_msgs (error, drop info, substring := true, drop warning) in
+example : ∀ n : Nat, Even n → Even (Nat.succ n) := by
+  specimen
+
+-- Test 11: `specimen` tactic with size config
+/-- error: Found counter-example! -/
+#guard_msgs (error, drop info, substring := true, drop warning) in
+example : ∀ a b c : Nat, Add3 a b c → Add3 a c b := by
+  specimen (min := 10, max := 20)
