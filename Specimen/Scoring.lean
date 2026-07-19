@@ -292,6 +292,40 @@ class Scorable (S : Type) where
   worst : S
   badness : S → Float
 
+/-- Laws expected from scoring strategies used by branch-and-bound search.
+
+`Scorable` stays executable and lightweight.  `LawfulScorable` packages the
+extra invariants required by proof-carrying uses of scoring strategies. -/
+class LawfulScorable (S : Type) [Scorable S] : Prop where
+  /-- Adding combined work to a score should not strictly improve it. -/
+  not_isBetter_combine_left :
+    ∀ a b : S, ¬ Scorable.isBetter (S := S) (Scorable.combine (S := S) a b) a
+
+  /-- Strict score comparison should be transitive. -/
+  isBetter_trans :
+    ∀ a b c : S,
+      Scorable.isBetter (S := S) a b →
+      Scorable.isBetter (S := S) b c →
+      Scorable.isBetter (S := S) a c
+
+  /-- `empty` is a left identity for `combine`. -/
+  empty_combine :
+    ∀ a : S, Scorable.combine (S := S) (Scorable.empty (S := S)) a = a
+
+  /-- `empty` is a right identity for `combine`. -/
+  combine_empty :
+    ∀ a : S, Scorable.combine (S := S) a (Scorable.empty (S := S)) = a
+
+  /-- The initial branch-and-bound sentinel should not beat a real candidate. -/
+  not_worst_isBetter :
+    ∀ a : S, ¬ Scorable.isBetter (S := S) (Scorable.worst (S := S)) a
+
+  /-- Scores that are better according to `isBetter` should not have worse visual badness. -/
+  badness_mono :
+    ∀ a b : S,
+      Scorable.isBetter (S := S) a b →
+      Scorable.badness (S := S) a ≤ Scorable.badness (S := S) b
+
 ----------------------------------------------
 -- Scorer function types (parameterized by score type)
 ----------------------------------------------
