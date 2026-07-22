@@ -48,7 +48,6 @@ import SpecimenTest.DeriveArbitrarySuchThat.MultiOutputTest
 import SpecimenTest.DeriveArbitrarySuchThat.MultiOutputSTLCTest
 import SpecimenTest.DeriveArbitrarySuchThat.EqMultiOutputTest
 import SpecimenTest.DeriveArbitrarySuchThat.UserInstancePriorityTest
-import SpecimenTest.DeriveArbitrarySuchThat.BoundedBuffer
 
 -- Tests for instances of `Enum` for simple types and for correctness of enumerator combinators
 import SpecimenTest.Enum.EnumInstancesTest
@@ -95,6 +94,9 @@ import SpecimenTest.CedarExample.Cedar
 import SpecimenTest.CedarExample.CedarCheckerGenerators
 import SpecimenTest.CedarExample.CedarWellTypedTermGenerator
 
+-- Bounded Buffer Example
+import SpecimenTest.BoundedBuffer.BoundedBuffer
+
 -- Strata Lambda Example: well-typed `LExpr` generator via `HasTypeA`
 import SpecimenTest.StrataLexprGen
 
@@ -111,5 +113,3 @@ import SpecimenTest.WeightCustomizationTest
 
 -- `specimen.silent` output-suppression option tests
 import SpecimenTest.SilentOptionTest
-
-
