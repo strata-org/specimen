@@ -95,6 +95,8 @@ import SpecimenTest.CedarExample.CedarCheckerGenerators
 import SpecimenTest.CedarExample.CedarWellTypedTermGenerator
 
 -- Bounded Buffer Example
+import SpecimenTest.BoundedBuffer.BoundedBufferSpec
+import SpecimenTest.BoundedBuffer.BackwardGenerator
 import SpecimenTest.BoundedBuffer.BoundedBuffer
 
 -- Strata Lambda Example: well-typed `LExpr` generator via `HasTypeA`
