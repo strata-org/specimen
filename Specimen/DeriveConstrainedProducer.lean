@@ -14,6 +14,7 @@ import Specimen.Debug
 import Plausible.Arbitrary
 
 import Lean.Elab.Command
+import Lean.Elab.Tactic.Basic
 import ProofWidgets.Component.HtmlDisplay
 
 import Lean.Meta.Basic
@@ -1212,6 +1213,43 @@ def propagateConstraints (components : List (List SpecKey))
         result := result.insert key cs
   return result
 
+/-- Attempt to prove that a constructor's premises are jointly unsatisfiable.
+
+    Telescopes the constructor type into its universally-quantified variables and
+    hypotheses, enters a context holding those hypotheses, and tries to close a
+    `False` goal with an escalating tactic (`simp_all` → `omega` → `decide`) under
+    a bounded heartbeat budget. Returns `true` iff some tactic succeeds — i.e.
+    Lean *proved* the premises entail `False`, so the constructor can never fire.
+
+    Only the constructor's own premises are used; nothing is assumed about the
+    input state. Hence a constructor that is merely unreachable from a particular
+    start (but satisfiable from some state) is NOT reported dead. Sound by
+    construction: a `false` result (no proof / timeout / error) is always safe. -/
+def constructorPremisesUnsat (ctorName : Name) (heartbeats : Nat := 2000) : TermElabM Bool := do
+  let ctorInfo ← getConstInfoCtor ctorName
+  try
+    forallTelescopeReducing ctorInfo.type (cleanupAnnotations := true) fun _vars _concl => do
+      -- Try each tactic in turn; success = the goal is closed (no remaining goals).
+      let tacticStxs : List (TSyntax `tactic) ← do
+        let t1 ← `(tactic| simp_all)
+        let t2 ← `(tactic| omega)
+        let t3 ← `(tactic| decide)
+        pure [t1, t2, t3]
+      let tryClose : TermElabM Bool := do
+        for tac in tacticStxs do
+          -- Fresh `False` goal per attempt (a failed tactic may leave it dirty).
+          let goal ← mkFreshExprMVar (Lean.mkConst ``False)
+          let ok ← (do
+            let remaining ← Lean.Elab.Tactic.run goal.mvarId! (Lean.Elab.Tactic.evalTactic tac)
+            pure remaining.isEmpty) <|> pure false
+          if ok then return true
+        return false
+      -- Bound the effort so a hard/undecidable goal can't stall derivation.
+      withTheReader Core.Context (fun ctx => { ctx with maxHeartbeats := heartbeats * 1000 }) tryClose
+  catch _ =>
+    -- Any elaboration error means we could not prove deadness; keep the ctor.
+    pure false
+
 /-- Compiles an InductiveSchedule from the memo into (def, instance) commands.
     Uses the pre-derived schedules directly (no re-derivation).
     `siblings` is the list of specs in the same mutual block (for rewriting to Source.MutRec). -/
@@ -1283,7 +1321,13 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
     let numRec := indSched.recSchedules.length + numBaseMutual.length
     let numBaseLit := Syntax.mkNumLit (toString numBase)
     let numRecLit := Syntax.mkNumLit (toString numRec)
+    -- Optionally omit constructors whose premises Lean proves unsatisfiable
+    -- (see `constructorPremisesUnsat`). Sound: only proved-dead ctors are dropped.
+    let cullDead := Lean.Option.get (← getOptions) specimen.cullDeadCtors
     for (ctorName, schedule) in indSched.baseSchedules do
+      if cullDead && (← constructorPremisesUnsat ctorName) then
+        trace[plausible.deriving.arbitrary] m!"[cull] dropping base constructor {ctorName}: premises proved unsatisfiable"
+      else
       let (steps, sort) := schedule
       let rewrittenSteps := rewriteSchedule steps
       let isRec := scheduleUsesMutualCall rewrittenSteps
@@ -1293,6 +1337,9 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
       if isRec then recursiveProducers := recursiveProducers.push term
       else nonRecursiveProducers := nonRecursiveProducers.push term
     for (ctorName, schedule) in indSched.recSchedules do
+      if cullDead && (← constructorPremisesUnsat ctorName) then
+        trace[plausible.deriving.arbitrary] m!"[cull] dropping recursive constructor {ctorName}: premises proved unsatisfiable"
+      else
       let (steps, sort) := schedule
       let term ← compileWeightedProducer (rewriteSchedule steps, sort) outputType key.deriveSort
         freshFuelPrimeName freshSizePrimeName key.inductiveName
@@ -1728,7 +1775,13 @@ def deriveConstrainedProducerParts
       let numBaseLit := Syntax.mkNumLit (toString numBaseCtors)
       let numRecLit := Syntax.mkNumLit (toString numRecCtors)
       -- For each constructor: derive a schedule, compile to syntax
+      let cullDead := Lean.Option.get (← getOptions) specimen.cullDeadCtors
       for ctorName in inductiveVal.ctors do
+        -- Optionally cull constructors whose premises Lean proves unsatisfiable.
+        if cullDead then
+          if ← constructorPremisesUnsat ctorName then
+            trace[plausible.deriving.arbitrary] m!"[cull] dropping constructor {ctorName}: premises proved unsatisfiable"
+            continue
         let resultOption ← (UnifyM.runInMetaM
           (getProducerScheduleForInductiveConstructor inductiveName ctorName outputNamesTypesIndices
             freshenedInputNamesExcludingOutput freshUnknowns deriveSort localCtx freshRecFnName)
