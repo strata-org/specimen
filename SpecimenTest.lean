@@ -99,6 +99,19 @@ import SpecimenTest.BoundedBuffer.BoundedBufferSpec
 import SpecimenTest.BoundedBuffer.BackwardGenerator
 import SpecimenTest.BoundedBuffer.BoundedBuffer
 
+-- Multi-step precondition experiments (perfect-square vault): baseline, and the
+-- hand-written step-inlined variants (fused pair, all-combinations).
+import SpecimenTest.VaultExperiment.VaultBaseline
+import SpecimenTest.VaultExperiment.VaultFused
+import SpecimenTest.VaultExperiment.VaultUnrolledAll
+
+-- Tree-structured analog (guarded dereference): baseline and hand-written
+-- inlined variants, inlining across a self-recursive typing relation and the
+-- membership relation it depends on.
+import SpecimenTest.AttrGuardExperiment.AttrGuardBaseline
+import SpecimenTest.AttrGuardExperiment.AttrGuardFused
+import SpecimenTest.AttrGuardExperiment.AttrGuardUnrolledAll
+
 -- Strata Lambda Example: well-typed `LExpr` generator via `HasTypeA`
 import SpecimenTest.StrataLexprGen
 
