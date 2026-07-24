@@ -64,6 +64,17 @@ register_option specimen.silent : Bool := {
   descr := "suppress all informational derivation output (Try this: suggestions, derive_mutual widgets/text)"
 }
 
+/-- When true, `derive_mutual` attempts to prove each constructor's premises
+    jointly unsatisfiable (entailing `False`) and, when it succeeds, omits that
+    constructor from the derived generator. A constructor is culled only when
+    Lean *proves* it can never fire, using only the constructor's own premises
+    (never assuming anything about the input state) — so this is sound and is a
+    pure optimization over the existing runtime backtracking. -/
+register_option specimen.cullDeadCtors : Bool := {
+  defValue := false
+  descr := "cull constructors whose premises Lean proves unsatisfiable"
+}
+
 /-- Global flag for enabling/disabling debug messages -/
 def globalDebugFlag : Bool := false
 
