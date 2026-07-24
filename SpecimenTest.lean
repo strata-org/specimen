@@ -48,7 +48,6 @@ import SpecimenTest.DeriveArbitrarySuchThat.MultiOutputTest
 import SpecimenTest.DeriveArbitrarySuchThat.MultiOutputSTLCTest
 import SpecimenTest.DeriveArbitrarySuchThat.EqMultiOutputTest
 import SpecimenTest.DeriveArbitrarySuchThat.UserInstancePriorityTest
-import SpecimenTest.DeriveArbitrarySuchThat.BoundedBuffer
 
 -- Tests for instances of `Enum` for simple types and for correctness of enumerator combinators
 import SpecimenTest.Enum.EnumInstancesTest
@@ -95,6 +94,24 @@ import SpecimenTest.CedarExample.Cedar
 import SpecimenTest.CedarExample.CedarCheckerGenerators
 import SpecimenTest.CedarExample.CedarWellTypedTermGenerator
 
+-- Bounded Buffer Example
+import SpecimenTest.BoundedBuffer.BoundedBufferSpec
+import SpecimenTest.BoundedBuffer.BackwardGenerator
+import SpecimenTest.BoundedBuffer.BoundedBuffer
+
+-- Multi-step precondition experiments (perfect-square vault): baseline, and the
+-- hand-written step-inlined variants (fused pair, all-combinations).
+import SpecimenTest.VaultExperiment.VaultBaseline
+import SpecimenTest.VaultExperiment.VaultFused
+import SpecimenTest.VaultExperiment.VaultUnrolledAll
+
+-- Tree-structured analog (guarded dereference): baseline and hand-written
+-- inlined variants, inlining across a self-recursive typing relation and the
+-- membership relation it depends on.
+import SpecimenTest.AttrGuardExperiment.AttrGuardBaseline
+import SpecimenTest.AttrGuardExperiment.AttrGuardFused
+import SpecimenTest.AttrGuardExperiment.AttrGuardUnrolledAll
+
 -- Strata Lambda Example: well-typed `LExpr` generator via `HasTypeA`
 import SpecimenTest.StrataLexprGen
 
@@ -111,5 +128,3 @@ import SpecimenTest.WeightCustomizationTest
 
 -- `specimen.silent` output-suppression option tests
 import SpecimenTest.SilentOptionTest
-
-

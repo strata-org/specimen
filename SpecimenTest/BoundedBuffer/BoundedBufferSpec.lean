@@ -6,6 +6,12 @@ import Specimen.EnumeratorCombinators
 
 open Plausible
 
+-- All definitions live under the `BoundedBuffer` namespace. This is not merely
+-- cosmetic: `derive_mutual` with `autoDeriveDeps` emits auto-named dependency
+-- instances (e.g. an `EnumSizedSuchThat` for `Eq`), and without a namespace those
+-- names (`instEnumSizedSuchThatEq_specimenTest`) collide at import time with the
+-- identically-named instance derived in `DeriveEnumSuchThat/DeriveRegExpMatchEnumerator`.
+-- The namespace prefixes the generated names and keeps them distinct.
 namespace BoundedBuffer
 
 -- Bounded Queue: Specification
@@ -69,6 +75,16 @@ instance (c : Nat) : ArbitrarySizedSuchThat (List String) (fun s => WithinCapaci
     let n ← Gen.choose Nat 0 c (by omega)
     (List.range n.val).mapM (fun _ => Arbitrary.arbitrary)
 
+-- The backward direction of `SafeBBTrace` must generate a capacity `c` from a
+-- given list `s`; it needs a capacity that admits the list (`s.length ≤ c`).
+-- When both directions were co-derived in one `derive_mutual`, this dependency
+-- was synthesized in that shared context; now that `BackwardGenerator` derives
+-- the backward direction on its own, we provide the instance explicitly here.
+instance (s : List String) : ArbitrarySizedSuchThat Nat (fun c => s.length ≤ c) where
+  arbitrarySizedST _ := do
+    let extra ← Gen.choose Nat 0 s.length (by omega)
+    return s.length + extra
+
 instance instArbitraryString : Arbitrary String where
   arbitrary := GeneratorCombinators.elementsWithDefault "A" ["A", "B", "C", "D", "E", "F", "G", "H", "I"]
 
@@ -76,30 +92,11 @@ instance instArbitraryString : Arbitrary String where
 -- generates a command freely and then checks `¬ CanStep`.
 deriving instance Arbitrary for BBCmd
 
+-- Only the forward generator is derived here. The (poor-quality) backward
+-- generator `(fun s => ∃ t i, SafeBBTrace i t s)` lives in `BackwardGenerator`.
 #guard_msgs(drop info, drop warning) in
 derive_mutual
-  (fun i => ∃ t s, SafeBBTrace i t s),
-  (fun s => ∃ t i, SafeBBTrace i t s)
-
--- The backward generator (fun s => ∃ t i, SafeBBTrace i t s) is poor quality:
--- it relies on guess-and-check for GetOp and PutOp (randomly generating lists
--- and hoping they satisfy WithinCapacity), so in practice it only produces
--- SizeOp operations. When the target final state is already at capacity, GetOp
--- and PutOp both require generating valid pre-states that the scheduler can't
--- efficiently construct.
-def backwardOnlySizeOps : IO Unit := do
-  for i in List.range 100 do
-    let (_, trace) ← Gen.run
-      (ArbitrarySizedSuchThat.arbitrarySizedST
-        (fun (s, t) => SafeBBTrace s t (["A", "B", "C"], 3)) 10) (i + 5)
-    let allSize := trace.all fun
-      | (.Size, _) => true
-      | _ => false
-    if !allSize then
-      throw <| IO.userError s!"Expected only SizeOp in backward trace, got: {repr trace}"
-
-#guard_msgs in
-#eval backwardOnlySizeOps
+  (fun i => ∃ t s, SafeBBTrace i t s)
 
 -- Generating traces that admit errors (via `BBStep` / `EveryBBTrace`).
 
@@ -129,115 +126,6 @@ inductive EveryBBTrace : BB -> BBTrace -> BB -> Prop where
 #guard_msgs(drop info, drop warning) in
 derive_mutual
   generator (fun i => ∃ t s, EveryBBTrace i t s)
-
------
--- DIFFERENTIAL TESTING USING TRACES
------
-
--- Circular buffer implementation (mutable, using ST)
--- When `buggy = true`, the buffer is allocated without the extra sentinel slot,
--- causing head == tail ambiguity (empty vs full) and the overflow check is
--- disabled, so puts silently overwrite.
-
-structure CircularBuffer where
-  buf  : Array String
-  head : Nat
-  tail : Nat
-
-def mkCircularBuffer (capacity : Nat) (buggy : Bool := false) : IO (ST.Ref IO.RealWorld CircularBuffer) :=
-  let slots := if buggy then capacity else capacity + 1
-  ST.mkRef { buf := Array.replicate slots "", head := 0, tail := 0 }
-
-def put (cb : ST.Ref IO.RealWorld CircularBuffer) (v : String) (buggy : Bool := false) : IO Unit := do
-  let s ← cb.get
-  let newTail := (s.tail + 1) % s.buf.size
-  if !buggy && newTail == s.head then
-    throw <| IO.userError "put: buffer full"
-  let buf := s.buf.set! s.tail v
-  cb.set { s with buf, tail := newTail }
-
-def get (cb : ST.Ref IO.RealWorld CircularBuffer) (buggy : Bool := false) : IO String := do
-  let s ← cb.get
-  -- Reject Get on an empty buffer (head == tail). The buggy variant skips this
-  -- check, so it happily reads stale/default slots from an "empty" buffer.
-  if !buggy && s.head == s.tail then
-    throw <| IO.userError "get: buffer empty"
-  let v := s.buf[s.head]!
-  cb.set { s with head := (s.head + 1) % s.buf.size }
-  return v
-
-def size (cb : ST.Ref IO.RealWorld CircularBuffer) : IO Nat := do
-  let s ← cb.get
-  return (s.tail + s.buf.size - s.head) % s.buf.size
-
--- Differentially test the mutable implementation against the specification
-
--- Runs `act` and fails if it does *not* raise: the spec expected this command to
--- be rejected (result `.Error`), so a silent success is a differential mismatch.
-def expectError (label : String) (act : IO α) : IO Unit := do
-  let succeeded ← (do let _ ← act; return true) <|> return false
-  if succeeded then
-    throw <| IO.userError s!"{label}: expected error, but implementation succeeded"
-
-def executeTrace (cb : ST.Ref IO.RealWorld CircularBuffer) (buggy : Bool := false) : BBTrace → IO Unit
-  | [] => return ()
-  | op :: ops => do
-    match op with
-    -- Spec says the command is rejected: the implementation must raise too.
-    | (.Put v, .Error) => expectError s!"Put {repr v}" (put cb v buggy)
-    | (.Get, .Error) => expectError "Get" (get cb buggy)
-    | (.Size, .Error) => expectError "Size" (size cb) -- actually impossible per the spec
-    -- Spec says the command succeeds with a particular result.
-    | (.Put v, _) => put cb v buggy
-    | (.Get, .GetOk expected) =>
-      let actual ← get cb buggy
-      if actual != expected then
-        throw <| IO.userError s!"Get mismatch: expected {repr expected}, got {repr actual}"
-    | (.Size, .SizeOk expected) =>
-      let actual ← size cb
-      if actual != expected then
-        throw <| IO.userError s!"Size mismatch: expected {expected}, got {actual}"
-    | _ => throw <| IO.userError s!"unexpected cmd/result pair: {repr op}"
-    executeTrace cb buggy ops
-
-def differentialTest (buggy : Bool := false) : IO Unit := do
-  for i in List.range 1000 do
-    let (trace, _) ← Gen.run
-      (ArbitrarySizedSuchThat.arbitrarySizedST
-        (fun (t, s) => SafeBBTrace ([], 3) t s) 10) (i + 5)
-    let cb ← mkCircularBuffer 3 buggy
-    executeTrace cb buggy trace
-
--- Correct implementation passes
-#guard_msgs in
-#eval differentialTest
-
--- Buggy implementation is detected
-/--error: Size mismatch: expected 3, got 0-/
-#guard_msgs(error, drop info) in
-#eval differentialTest (buggy := true)
-
--- differential testing with error traces
-
--- Unlike `differentialTest`, this uses `EveryBBTrace`, whose traces may include
--- commands the spec rejects (`.Error` results: Get on empty, Put on full).
--- `executeTrace` checks that the implementation raises exactly on those
--- commands and succeeds (with the matching result) on the rest.
-def errorDifferentialTest (buggy : Bool := false) : IO Unit := do
-  for i in List.range 1000 do
-    let (trace, _) ← Gen.run
-      (ArbitrarySizedSuchThat.arbitrarySizedST
-        (fun (t, s) => EveryBBTrace ([], 3) t s) 10) (i + 5)
-    let cb ← mkCircularBuffer 3 buggy
-    executeTrace cb buggy trace
-
--- Correct implementation agrees with the spec on both success and error results
-#guard_msgs in
-#eval errorDifferentialTest
-
--- Don't want to do this because the test is flaky
--- #guard_msgs(error, drop info) in
--- #eval errorDifferentialTest (buggy := true)
 
 end BoundedBuffer
 
