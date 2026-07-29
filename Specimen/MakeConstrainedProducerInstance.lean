@@ -53,6 +53,7 @@ def mkTypeClassInstanceBinders (typeParams : Array Name) (typeClasses : Array Na
       `(Lean.Elab.Deriving.instBinderF| [$(mkIdent tc) $(mkIdent param)])
   return TSyntaxArray.mk instances
 
+
 /-- Finds the index of the argument in the inductive application for the value we wish to generate
     (i.e. finds `i` s.t. `args[i] == targetVar`) -/
 def findTargetVarIndex (targetVar : FVarId) (args : Array Expr) : (Option Nat) := do
@@ -84,7 +85,8 @@ def mkConstrainedProducerTypeClassInstance
   (args : TSyntaxArray `term) (targetVars : List Name)
   (targetTypes : List Expr)
   (producerSort : ProducerSort)
-  (topLevelLocalCtx : LocalContext) : TermElabM (TSyntax `command) := do
+  (topLevelLocalCtx : LocalContext)
+  (structLeafBinders : TSyntaxArray `Lean.Parser.Term.bracketedBinder := #[]) : TermElabM (TSyntax `command) := do
     -- Produce fresh names for function parameters
     let freshSizeIdent := mkFreshAccessibleIdent topLevelLocalCtx `size
     let freshSize' := mkFreshAccessibleIdent topLevelLocalCtx `size'
@@ -203,7 +205,8 @@ def mkConstrainedProducerTypeClassInstance
       | .Generator => ``Plausible.Arbitrary
       | .Enumerator => ``Enum
 
-    let arbitraryTypeParamInstances ← mkTypeClassInstanceBinders typeParams #[producerUnconstrainedClass, ``DecidableEq]
+    let arbitraryTypeParamInstances0 ← mkTypeClassInstanceBinders typeParams #[producerUnconstrainedClass, ``DecidableEq]
+    let arbitraryTypeParamInstances := arbitraryTypeParamInstances0 ++ structLeafBinders
 
     let fuelVal := Lean.Option.get (← getOptions) specimen.fuel
     let fuelLit := Syntax.mkNumLit (toString fuelVal)
@@ -226,7 +229,8 @@ def mkConstrainedProducerMutualPieces
   (topLevelLocalCtx : LocalContext) (globalDefName : Name)
   (deriveSort : DeriveSort)
   (precomputedParamInfo : Option (Array (Name × Expr × TSyntax `term)) := none)
-  (requiredTypeClasses : Option (Array Name) := none) :
+  (requiredTypeClasses : Option (Array Name) := none)
+  (structLeafBinders : TSyntaxArray `Lean.Parser.Term.bracketedBinder := #[]) :
   TermElabM (TSyntax `command × TSyntax `command) := do
     -- Reuse the same computation as mkConstrainedProducerTypeClassInstance
     let freshSizeIdent := mkFreshAccessibleIdent topLevelLocalCtx `size
@@ -325,11 +329,17 @@ def mkConstrainedProducerMutualPieces
           | .Enumerator => ``Enum
         #[producerUnconstrainedClass, ``DecidableEq]
     let defTypeParamInstances ← mkTypeClassInstanceBinders typeParams typeClasses
+    -- Struct-param leaf binders (e.g. `[Arbitrary P.info.Metadata]`) are placed
+    -- innermost — after all value params — where those params are in scope.
+    let structParamInstances := structLeafBinders
 
     -- Emit the def with ∀ type (supports instance binders inline)
     let defIdent := mkIdent globalDefName
     -- Build ∀ type with instance binders interleaved after Sort-typed params
     let mut defType ← pure optionTProducerType
+    -- Innermost: structure-parameter field instances (all value params in scope).
+    for instBinder in structParamInstances.reverse do
+      defType ← `(∀ $instBinder:bracketedBinder, $defType)
     -- Add non-Sort value params (from right)
     let insertIdx := 3 + typeParams.size
     for (name, ty) in allParamNamesAndTypes[insertIdx:].toArray.reverse do
@@ -340,9 +350,12 @@ def mkConstrainedProducerMutualPieces
     -- Add Sort-typed params + fuel/initSize/size (from right)
     for (name, ty) in allParamNamesAndTypes[:insertIdx].toArray.reverse do
       defType ← `(($name : $ty) → $defType)
-    -- Lambda includes instance binders at the same position
+    -- Lambda includes instance binders at the same positions as the ∀ type:
+    -- sort-param instances after the sort params, struct-field instances innermost.
     let instParams : Array (TSyntax `term) := defTypeParamInstances.map (fun b => ⟨b.raw⟩)
-    let allInnerParams := innerParamBinders[:insertIdx].toArray ++ instParams ++ innerParamBinders[insertIdx:].toArray
+    let structInstParams : Array (TSyntax `term) := structParamInstances.map (fun b => ⟨b.raw⟩)
+    let allInnerParams := innerParamBinders[:insertIdx].toArray ++ instParams
+      ++ innerParamBinders[insertIdx:].toArray ++ structInstParams
     let lambdaBody ← `(fun $allInnerParams* => $matchExpr)
     let defCmd ← `(command| def $defIdent : $defType := $lambdaBody)
 
@@ -360,7 +373,8 @@ def mkConstrainedProducerMutualPieces
           | .Enumerator => #[``Enum, ``DecidableEq]
     let instCmd ← match deriveSort with
       | .Checker | .Theorem => do
-        let arbitraryTypeParamInstances ← mkTypeClassInstanceBinders typeParams instTypeClasses
+        let arbitraryTypeParamInstances0 ← mkTypeClassInstanceBinders typeParams instTypeClasses
+        let arbitraryTypeParamInstances := arbitraryTypeParamInstances0 ++ structLeafBinders
         `(command|
           instance $arbitraryTypeParamInstances:bracketedBinder* : $decOptTypeclass (@$(mkIdent inductiveName) $args*) where
             $unqualifiedDecOptFn:ident := fun $freshSizeIdent => $callExpr)
@@ -371,7 +385,8 @@ def mkConstrainedProducerMutualPieces
         let producerTypeClassFunction := match producerSort with
           | .Generator => unqualifiedArbitrarySizedSTFn
           | .Enumerator => unqualifiedEnumSizedSTFn
-        let arbitraryTypeParamInstances ← mkTypeClassInstanceBinders typeParams instTypeClasses
+        let arbitraryTypeParamInstances0 ← mkTypeClassInstanceBinders typeParams instTypeClasses
+        let arbitraryTypeParamInstances := arbitraryTypeParamInstances0 ++ structLeafBinders
         `(command|
           instance $arbitraryTypeParamInstances:bracketedBinder* : $producerTypeClass $targetTypeSyntax (fun $targetVarPattern => @$(mkIdent inductiveName) $args*) where
             $producerTypeClassFunction:ident := fun $freshSizeIdent => $callExpr)
