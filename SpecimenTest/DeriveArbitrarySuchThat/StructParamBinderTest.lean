@@ -226,4 +226,54 @@ derive_mutual
     (EnumSizedSuchThat.enumSizedST (fun w => @IsGood Out1 w)) 2
   IO.println s!"§3 nested struct (P.inner.Needed), mutual: ok, {results.length} enum results"
 
+/-! ## §4 Per-leaf constraints are discovered, not hardcoded
+
+The class attached to a struct-param leaf is determined by *how the leaf is
+used*, exactly as constraint propagation (#42) does for plain `Sort` type
+params — not fixed to the producer's own class. In particular a leaf that is
+*compared by equality* needs `[DecidableEq leaf]`, and a leaf that is only
+*generated* must NOT be saddled with a spurious `DecidableEq`.
+
+`Pair` carries two leaf-typed fields `a b : P.Key`; `Distinct` accepts a pair
+iff `a ≠ b`. Deriving `∃ p, Distinct P p` schedules an unconstrained generation
+of `a` and `b` (→ `[Arbitrary P.Key]`) and an `Eq`/`Ne` check on them
+(→ `[DecidableEq P.Key]`). Both binders are required: with `Key = Nat` (which has
+both instances) it derives and runs; the `≠` check would fail to compile without
+the discovered `DecidableEq`. `Spare` is the `Empty` poison field, confirming no
+binder is emitted for the unused leaf. -/
+
+structure KeyConfig where
+  Key : Type
+  Spare : Type
+
+inductive Pair (P : KeyConfig) where
+  | mk (a b : P.Key) : Pair P
+
+inductive Distinct (P : KeyConfig) : Pair P → Prop where
+  | mk : a ≠ b → Distinct P (.mk a b)
+
+abbrev KC : KeyConfig := ⟨Nat, Empty⟩
+
+#guard_msgs(drop info, drop warning) in
+derive_generator (fun (P : KeyConfig) => ∃ p : Pair P, Distinct P p)
+
+#guard_msgs(drop info) in
+#eval show IO Unit from do
+  -- The point is that this instance *synthesizes* — it requires both
+  -- `[Arbitrary P.Key]` and the discovered `[DecidableEq P.Key]`; the `a ≠ b`
+  -- check would not compile without the latter. We also assert soundness on any
+  -- sample we manage to draw (generation is rejection-based, so a size that
+  -- exhausts backtracking is tolerated, not a failure).
+  let mut sound := 0
+  for s in List.range 12 do
+    let r ← (Gen.run (ArbitrarySizedSuchThat.arbitrarySizedST
+      (fun p => Distinct KC p) 6) (s * 5 + 1) |>.toBaseIO)
+    match r with
+    | .ok (.mk a b) =>
+      if a == b then
+        throw (IO.userError "§4 unsound: Distinct generator produced equal components")
+      sound := sound + 1
+    | .error _ => pure ()  -- backtracking exhausted at this seed; fine
+  IO.println s!"§4 per-leaf constraints (Arbitrary + discovered DecidableEq on P.Key): {sound} sound samples"
+
 end StructParamBinderTest

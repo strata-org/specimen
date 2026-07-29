@@ -733,70 +733,140 @@ partial def collectStructProjChains (structParamNames : Std.HashSet Name)
     args.foldlM (fun acc arg => (· ++ acc) <$> collectStructProjChains structParamNames arg) []
   | _ => return []
 
-/-- Recursively discover the `Type`-valued leaf projections *reachable from* a
-    projection whose value has type `ty` and whose surface syntax is `syn`.
-    A `Type u` leaf yields `#[syn]`; a structure-typed value recurses into each
-    field's projection (`sName ++ field` applied to `syn`). For a value of type
-    `NodeInfo` reached as `ExprParams.info P`, this yields
-    `NodeInfo.Metadata (ExprParams.info P)`. -/
-partial def structLeavesFromType (ty : Expr) (syn : TSyntax `term) :
-    TermElabM (Array (TSyntax `term)) := do
-  if ty.isSort then return #[syn]
+/-- A `Type`-valued leaf of a structure parameter, represented *independently of
+    the parameter's identifier* so it can be compared and re-rendered across specs
+    (each `derive_mutual` spec freshens the parameter's name differently). It is:
+    the root structure type (`rootStruct`, e.g. `ExprParams`) and the projection
+    functions applied to reach the leaf, outermost-first (`projPath`, e.g.
+    `[NodeInfo.Metadata, ExprParams.info]` for `NodeInfo.Metadata (ExprParams.info P)`;
+    `[]` denotes the bare parameter itself when its type is already a `Type`). -/
+structure StructLeaf where
+  rootStruct : Name
+  projPath : List Name
+  deriving BEq, Repr
+
+/-- Render a `StructLeaf` as surface syntax rooted at a given parameter identifier:
+    fold the projection path over `paramIdent`, outermost projection last applied. -/
+def StructLeaf.toSyntax (leaf : StructLeaf) (paramIdent : Ident) : TermElabM (TSyntax `term) := do
+  let rec go : List Name → TermElabM (TSyntax `term)
+    | [] => pure paramIdent
+    | f :: rest => do let inner ← go rest; `($(mkIdent f) $inner)
+  go leaf.projPath
+
+/-- Recursively discover the `Type`-valued leaves *reachable from* a value of type
+    `ty` reached via `path` (the projections already applied, outermost-first) from
+    a parameter of structure type `rootStruct`. A `Type u` value is itself a leaf;
+    a structure-typed value recurses through each field's projection. -/
+partial def structLeavesFromType (rootStruct : Name) (ty : Expr) (path : List Name) :
+    TermElabM (Array StructLeaf) := do
+  if ty.isSort then return #[{ rootStruct, projPath := path }]
   let env ← getEnv
   let some sName := ty.constName? | return #[]
   let some sInfo := getStructureInfo? env sName | return #[]
-  let mut result : Array (TSyntax `term) := #[]
+  let mut result : Array StructLeaf := #[]
   for field in sInfo.fieldNames do
     let projName := sName ++ field
     let projType ← forallTelescopeReducing (← inferType (mkConst projName))
       (fun _ body => pure body)
-    let projSyn ← `($(mkIdent projName) $syn)
-    result := result ++ (← structLeavesFromType projType projSyn)
+    result := result ++ (← structLeavesFromType rootStruct projType (projName :: path))
   return result
 
 /-- Resolve a struct-param projection chain (as a `ConstructorExpr`) to the Lean
-    type of the value it denotes together with its surface syntax. The chain root
-    must be one of `structParams`; each `.FuncApp projName [base]` step is a
-    structure projection whose codomain is read from `projName`'s signature.
-    Returns `none` if `ce` is not a projection chain rooted at a known struct param
-    (e.g. it is an arbitrary function application). -/
+    type of the value it denotes together with its root structure type and the
+    projection path taken (outermost-first). The chain root must be one of
+    `structParams`; each `.FuncApp projName [base]` step is a structure projection
+    whose codomain is read from `projName`'s signature. Returns `none` if `ce` is
+    not a projection chain rooted at a known struct param. -/
 partial def resolveChainType (structParams : Array (Name × Expr)) (ce : ConstructorExpr) :
-    TermElabM (Option (Expr × TSyntax `term)) := do
+    TermElabM (Option (Expr × Name × List Name)) := do
   match ce with
   | .Unknown n =>
     match structParams.find? (fun (pn, _) => pn == n) with
-    | some (_, pty) => return some (pty, mkIdent n)
+    | some (_, pty) =>
+      match pty.constName? with
+      | some rootStruct => return some (pty, rootStruct, [])
+      | none => return none
     | none => return none
   | .FuncApp projName [base] =>
     if ← Lean.isProjectionFn projName then
       match ← resolveChainType structParams base with
-      | some (_, baseSyn) =>
+      | some (_, rootStruct, basePath) =>
         let projType ← forallTelescopeReducing (← inferType (mkConst projName))
           (fun _ body => pure body)
-        let projSyn ← `($(mkIdent projName) $baseSyn)
-        return some (projType, projSyn)
+        return some (projType, rootStruct, projName :: basePath)
       | none => return none
     else return none
   | _ => return none
 
-/-- Compute struct-param leaf binders needed by a spec's schedule steps.
-    For each `Unconstrained` step whose source is a projection chain (or contains one),
-    determines the `Type`-valued leaves that need instance binders.
+/-- Collect the `Type`-valued struct-param leaves reachable from the projection
+    chains contained in `args`. For `[List (Params.Label P)]` this returns the leaf
+    for `Params.Label P`; for a direct type argument `P.info` it returns the leaves
+    of `NodeInfo` reached through `ExprParams.info`, etc. -/
+private def leafsInArgs (structParams : Array (Name × Expr))
+    (structParamNames : Std.HashSet Name) (args : List ConstructorExpr) :
+    TermElabM (Array StructLeaf) := do
+  let chains ← args.foldlM (fun acc arg =>
+    (· ++ acc) <$> collectStructProjChains structParamNames arg) []
+  let mut result : Array StructLeaf := #[]
+  for chain in chains do
+    if let some (chainTy, rootStruct, chainPath) ← resolveChainType structParams chain then
+      result := result ++ (← structLeavesFromType rootStruct chainTy chainPath)
+  return result
 
-    Returns an array of `(className, leafSyntax)` pairs — e.g.
-    `(``Plausible.Arbitrary, `(NodeInfo.Metadata (ExprParams.info P)))`.
+/-- Like `leafsInArgs`, but only for *proper* projection chains — those with at
+    least one field projection applied (`.FuncApp projName [..]`), i.e. `P.A` or
+    `P.info.Metadata`, never the bare parameter `.Unknown P`. Expanding a bare `P`
+    would walk *all* of the structure's fields (the blind field-walk), so this is
+    used where an output type may legitimately mention `P` inside a compound
+    (e.g. `TaggedTree P`) whose own dependency already carries the right binders. -/
+private def leafProjsInArgs (structParams : Array (Name × Expr))
+    (structParamNames : Std.HashSet Name) (args : List ConstructorExpr) :
+    TermElabM (Array StructLeaf) := do
+  let chains ← args.foldlM (fun acc arg =>
+    (· ++ acc) <$> collectStructProjChains structParamNames arg) []
+  let mut result : Array StructLeaf := #[]
+  for chain in chains do
+    match chain with
+    | .Unknown _ => pure ()  -- bare parameter: skip (not a leaf projection)
+    | _ =>
+      if let some (chainTy, rootStruct, chainPath) ← resolveChainType structParams chain then
+        result := result ++ (← structLeavesFromType rootStruct chainTy chainPath)
+  return result
 
-    `structParams` is `(paramName, paramType)` for non-Sort, non-output params.
-    The function discovers which leaves actually appear in schedule steps (directly as
-    a proj-chain step, or wrapped in a compound type like `List (P.Label)`). -/
+/-- Compute the instance binders a spec's schedule needs for the `Type`-valued
+    *leaves* of its structure parameters (e.g. `[Arbitrary P.info.Metadata]`).
+
+    This mirrors `computeSpecConstraints` (#42), which discovers the constraints a
+    spec needs on its plain `Sort` type parameters — but applied at the granularity
+    of an individual projection leaf, since each leaf gets its own binder. Like
+    #42, the class attached to a leaf is *discovered from how the leaf is used*,
+    not hardcoded, so a leaf gets only the classes it strictly needs:
+
+    * an `Unconstrained` step that generates a value of a leaf type (directly, or
+      inside a compound type like `List P.Label`) demands the producer's
+      unconstrained class — `Arbitrary` for generators, `Enum` for enumerators;
+    * an `Eq`/`Ne` `Check` over a leaf type demands `DecidableEq` on that leaf
+      (equality on a type always needs decidable equality — the one constraint we
+      know statically, exactly as #42 special-cases it for plain type params).
+
+    Returns `(className, leaf)` pairs, deduplicated. Leaves are represented as
+    identifier-agnostic `StructLeaf`s so they can be compared and re-rendered per
+    spec (see `propagateStructLeafBinders`). A leaf that appears in no step gets no
+    binder; a leaf used only for generation never picks up a spurious `DecidableEq`,
+    and vice versa.
+
+    `structParams` is `(paramName, paramType)` for non-Sort, non-output params. -/
 def computeStructLeafBinders (allSteps : List ScheduleStep)
     (structParams : Array (Name × Expr))
-    : TermElabM (Array (Name × TSyntax `term)) := do
+    : TermElabM (Array (Name × StructLeaf)) := do
   if structParams.isEmpty then return #[]
   let structParamNames : Std.HashSet Name :=
     structParams.foldl (fun s (n, _) => s.insert n) {}
-  -- Walk all schedule steps and collect which leaves are needed
-  let mut needed : Array (Name × TSyntax `term) := #[]
+  -- Walk all schedule steps and collect (class, leaf) binders demanded by each.
+  let mut needed : Array (Name × StructLeaf) := #[]
+  let pushEntry := fun (needed : Array (Name × StructLeaf)) (cls : Name) (leaf : StructLeaf) =>
+    if needed.any (fun p => p.1 == cls && p.2 == leaf) then needed
+    else needed.push (cls, leaf)
   for step in allSteps do
     match step with
     | .Unconstrained _ (.NonRec (indName, args)) ps =>
@@ -807,12 +877,9 @@ def computeStructLeafBinders (allSteps : List ScheduleStep)
       let fullCE := ConstructorExpr.FuncApp indName args
       if ← isStructProjChain structParamNames fullCE then
         -- Direct leaf: the type being generated IS a projection of the struct param.
-        -- Emit a binder for it directly.
-        let argTerms ← args.toArray.mapM (monadLift <| constructorExprToTSyntaxTerm ·)
-        let leafSyn ← `($(mkIdent indName) $argTerms:term*)
-        let entry := (tcName, leafSyn)
-        unless needed.any (fun p => p.1 == entry.1 && p.2.raw == entry.2.raw) do
-          needed := needed.push entry
+        -- Emit a producer-class binder for it directly.
+        if let some (_, rootStruct, path) ← resolveChainType structParams fullCE then
+          needed := pushEntry needed tcName { rootStruct, projPath := path }
       else
         -- Compound type case (e.g. `List (Params.Label P)`): an argument contains a
         -- proj chain but the overall type is not itself a leaf. Use the same synthesis
@@ -857,20 +924,57 @@ def computeStructLeafBinders (allSteps : List ScheduleStep)
             -- Emit binders only for the leaves reachable from the projection chains
             -- that actually appear in this step (not every leaf of every struct
             -- param) — so an unused field never drags in a spurious binder.
-            for chain in chains do
-              if let some (chainTy, chainSyn) ← resolveChainType structParams chain then
-                for leaf in (← structLeavesFromType chainTy chainSyn) do
-                  let entry := (tcName, leaf)
-                  unless needed.any (fun p => p.1 == entry.1 && p.2.raw == entry.2.raw) do
-                    needed := needed.push entry
+            for leaf in (← leafsInArgs structParams structParamNames args) do
+              needed := pushEntry needed tcName leaf
+    | .Check (.NonRec (indName, args)) _ =>
+      -- Equality/disequality over a struct-param leaf demands `DecidableEq` on
+      -- that leaf, mirroring the Eq/Ne rule in `computeSpecConstraints`. The
+      -- compared type rides along as the relation's (implicit) type argument, so
+      -- it is picked up as a projection chain in `args` just like any other.
+      if indName == ``Eq || indName == ``Ne then
+        for leaf in (← leafsInArgs structParams structParamNames args) do
+          needed := pushEntry needed ``DecidableEq leaf
+    | .SuchThat varsTys _ ps =>
+      -- A `SuchThat` step draws a value satisfying a relation via a *constrained*
+      -- producer dependency. When such an output is itself a struct-param leaf
+      -- (e.g. finding a witness `x : P.A`), that dependency's producer requires
+      -- the leaf's *unconstrained* class in scope — `Enum` for enumerators,
+      -- `Arbitrary` for generators — so the enclosing instance must carry it.
+      -- (This is what lets a checker that must enumerate a leaf-typed witness get
+      -- its `[Enum P.A]` binder, and thus propagate to any generator depending on
+      -- that checker.)
+      --
+      -- Only *proper* leaf projections count: an output whose type merely mentions
+      -- the bare parameter `P` inside a compound (e.g. producing `TaggedTree P`) is
+      -- handled by that dependency's own constraints — we must not expand `P` into
+      -- all its fields here (that would be the blind field-walk, dragging in unused
+      -- leaves), so `leafProjsInArgs` skips bare-parameter chains.
+      let tcName := match ps with
+        | .Generator => ``Plausible.Arbitrary
+        | .Enumerator => ``Enum
+      let outputTypeCEs := varsTys.filterMap Prod.snd
+      for leaf in (← leafProjsInArgs structParams structParamNames outputTypeCEs) do
+        needed := pushEntry needed tcName leaf
     | _ => pure ()
   return needed
 
-/-- Convert struct leaf binder specs to actual bracketed binder syntax.
-    Each `(className, leafSyn)` becomes `[className leafSyn]`. -/
-def structLeafBindersToSyntax (binders : Array (Name × TSyntax `term))
+/-- Convert struct leaf binder specs to bracketed binder syntax, rendering each
+    leaf rooted at the identifier of *this spec's* struct parameter of the matching
+    structure type. `structParams` maps this spec's parameter names to their types;
+    a leaf is rendered against the parameter whose type is the leaf's `rootStruct`.
+    (This re-rooting is what makes an inherited dependency's leaf refer to the
+    dependant's own parameter, so the binder and the conclusion agree.) Leaves whose
+    root structure has no matching parameter here are dropped. -/
+def structLeafBindersToSyntax (binders : Array (Name × StructLeaf))
+    (structParams : Array (Name × Expr))
     : TermElabM (TSyntaxArray `Lean.Parser.Term.bracketedBinder) := do
-  let result ← binders.mapM fun (cls, syn) =>
+  -- Resolve each leaf to (class, rendered-syntax), dropping leaves with no matching
+  -- parameter here, then build the binders (mirrors the original mapM + `.mk`).
+  let mut clsSyns : Array (Name × TSyntax `term) := #[]
+  for (cls, leaf) in binders do
+    if let some (paramName, _) := structParams.find? (fun (_, ty) => ty.constName? == some leaf.rootStruct) then
+      clsSyns := clsSyns.push (cls, ← leaf.toSyntax (mkIdent paramName))
+  let result ← clsSyns.mapM fun (cls, syn) =>
     `(Lean.Elab.Deriving.instBinderF| [$(mkIdent cls):ident $syn])
   return TSyntaxArray.mk result
 
@@ -1093,7 +1197,7 @@ def deriveConstrainedProducer
             sp := sp.push (freshUnknowns[i]!, argTypes[i]!)
         sp
       let leafBinderSpecs ← computeStructLeafBinders allScheduleSteps structParams
-      let structLeafBinders ← structLeafBindersToSyntax leafBinderSpecs
+      let structLeafBinders ← structLeafBindersToSyntax leafBinderSpecs structParams
 
       return (baseProducers, inductiveProducers, freshenedOutputNames, Lean.mkIdent <$> freshUnknowns, localCtx, structLeafBinders))
 
@@ -1418,12 +1522,109 @@ def propagateConstraints (components : List (List SpecKey))
         result := result.insert key cs
   return result
 
+/-- Union of two `(class, leaf)` binder-spec arrays, deduplicated by
+    `(class, leaf-syntax)`. Used to merge struct-leaf binders across specs. -/
+def unionLeafBinders (a b : Array (Name × StructLeaf)) : Array (Name × StructLeaf) := Id.run do
+  let mut result := a
+  for entry in b do
+    unless result.any (fun p => p.1 == entry.1 && p.2 == entry.2) do
+      result := result.push entry
+  return result
+
+/-- Compute a spec's *own* struct-param leaf binders (ignoring dependencies): the
+    `(class, leaf)` binders demanded directly by its own schedule steps. Mirrors
+    the `structParams` computation in `compileInductiveSchedule`. -/
+def computeOwnStructLeafBinders (indSched : InductiveSchedule)
+    : TermElabM (Array (Name × StructLeaf)) := do
+  let key := indSched.key
+  let indInfo ← getConstInfoInduct key.inductiveName
+  let indLevels := indInfo.levelParams.map (Level.param ·)
+  let numArgs := (← getComponentsOfArrowType indInfo.type).size - 1
+  let argNames := (List.range numArgs).map (fun i => indSched.argNames.getD i (Name.mkSimple s!"arg_{i}"))
+  let argNameTypes : Array (Name × Expr) := (Array.range numArgs).map (fun i => (argNames.getD i `x, mkSort .zero))
+  withLocalDeclsDND argNameTypes fun allFVars => do
+    let liveTypes ← getCorrectTypes allFVars key.inductiveName indLevels
+    let structParams : Array (Name × Expr) := Id.run do
+      let mut sp := #[]
+      for i in [:liveTypes.size] do
+        if i ∉ key.outputIndices && !liveTypes[i]!.isSort then
+          sp := sp.push (argNames.getD i `x, liveTypes[i]!)
+      sp
+    let allSteps := (indSched.baseSchedules ++ indSched.recSchedules).flatMap (fun (_, (steps, _)) => steps)
+    computeStructLeafBinders allSteps structParams
+
+/-- Bottom-up propagation of struct-param leaf binders across specs, the leaf-level
+    analogue of `propagateConstraints`. A spec's binders are its own (from
+    `computeOwnStructLeafBinders`) unioned with those of every relation/checker
+    dependency it uses — so, e.g., a generator that checks `¬ HasWitness` inherits
+    the `[Enum P.A]` binder that `HasWitness`'s checker needs to enumerate a
+    leaf-typed witness. All specs in a `derive_mutual` share the same structure
+    parameter, so a dependency's leaf syntax (`P.A`) is valid verbatim in the
+    dependant. Components are topological (deps first); mutual SCCs iterate to a
+    fixed point. -/
+def propagateStructLeafBinders (components : List (List SpecKey))
+    (memo : Std.HashMap SpecKey MemoEntry) : TermElabM (Std.HashMap SpecKey (Array (Name × StructLeaf))) := do
+  -- The relation/checker dep keys a spec references (same filter as `computeSpecSCC`).
+  let depKeysOf (indSched : InductiveSchedule) : List SpecKey :=
+    let allScheds := indSched.baseSchedules ++ indSched.recSchedules
+    let deps := allScheds.flatMap (fun (_, (steps, _)) => collectNonRecDeps steps)
+    let relDeps := deps.filter (fun d => d.kind == .relation || d.kind == .checker)
+    (relDeps.map (fun d => SpecKey.mk d.inductiveName d.outputIndices d.deriveSort)).eraseDups
+  let mut result : Std.HashMap SpecKey (Array (Name × StructLeaf)) := {}
+  for comp in components do
+    if comp.length == 1 then
+      let key := comp.head!
+      match memo[key]? with
+      | some (.done indSched) =>
+        if indSched.alreadyExists then
+          result := result.insert key #[]
+        else
+          let mut binders ← computeOwnStructLeafBinders indSched
+          for depKey in depKeysOf indSched do
+            if let some depBinders := result[depKey]? then
+              binders := unionLeafBinders binders depBinders
+          result := result.insert key binders
+      | _ => result := result.insert key #[]
+    else
+      -- Mutual block: fixed-point iteration (binders can only grow → converges).
+      let mut sibMap : Std.HashMap SpecKey (Array (Name × StructLeaf)) := {}
+      let mut ownMap : Std.HashMap SpecKey (Array (Name × StructLeaf)) := {}
+      for key in comp do
+        sibMap := sibMap.insert key #[]
+        match memo[key]? with
+        | some (.done indSched) =>
+          if !indSched.alreadyExists then
+            ownMap := ownMap.insert key (← computeOwnStructLeafBinders indSched)
+        | _ => pure ()
+      let mut changed := true
+      while changed do
+        changed := false
+        for key in comp do
+          match memo[key]? with
+          | some (.done indSched) =>
+            if indSched.alreadyExists then continue
+            let mut binders := ownMap[key]?.getD #[]
+            for depKey in depKeysOf indSched do
+              -- Dep may be a sibling (this SCC) or an earlier component.
+              if let some depBinders := sibMap[depKey]? then
+                binders := unionLeafBinders binders depBinders
+              if let some depBinders := result[depKey]? then
+                binders := unionLeafBinders binders depBinders
+            if binders.size != (sibMap[key]?.getD #[]).size then
+              changed := true
+              sibMap := sibMap.insert key binders
+          | _ => pure ()
+      for (key, bs) in sibMap.toList do
+        result := result.insert key bs
+  return result
+
 /-- Compiles an InductiveSchedule from the memo into (def, instance) commands.
     Uses the pre-derived schedules directly (no re-derivation).
     `siblings` is the list of specs in the same mutual block (for rewriting to Source.MutRec). -/
 def compileInductiveSchedule (indSched : InductiveSchedule)
     (globalName : Name) (siblings : List (Name × List Nat × Name × DeriveSort))
     (requiredConstraints : Option (Array Name) := none)
+    (propagatedLeafBinders : Option (Array (Name × StructLeaf)) := none)
     : TermElabM (TSyntax `command × TSyntax `command) := do
   let key := indSched.key
   let indInfo ← getConstInfoInduct key.inductiveName
@@ -1531,16 +1732,22 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
     let mut paramInfo : Array (Name × Expr × TSyntax `term) := #[]
     for i in [:liveTypes.size] do
       paramInfo := paramInfo.push (argNames.getD i `x, liveTypes[i]!, liveTypesSyntax[i]!)
-    -- Compute struct-param leaf binders from the schedule (demand-driven)
+    -- Struct-param leaf binders. Prefer the SCC-propagated set (which also carries
+    -- binders inherited from dependency specs — e.g. an `[Enum P.A]` a checker
+    -- needs to enumerate a leaf-typed witness, propagated up to a dependant
+    -- generator); fall back to this spec's own binders when none was supplied.
     let structParams : Array (Name × Expr) := Id.run do
       let mut sp := #[]
       for i in [:liveTypes.size] do
         if i ∉ key.outputIndices && !liveTypes[i]!.isSort then
           sp := sp.push (argNames.getD i `x, liveTypes[i]!)
       sp
-    let allSteps := (indSched.baseSchedules ++ indSched.recSchedules).flatMap (fun (_, (steps, _)) => steps)
-    let leafBinderSpecs ← computeStructLeafBinders allSteps structParams
-    let structLeafBinders ← structLeafBindersToSyntax leafBinderSpecs
+    let leafBinderSpecs ← match propagatedLeafBinders with
+      | some bs => pure bs
+      | none => do
+        let allSteps := (indSched.baseSchedules ++ indSched.recSchedules).flatMap (fun (_, (steps, _)) => steps)
+        computeStructLeafBinders allSteps structParams
+    let structLeafBinders ← structLeafBindersToSyntax leafBinderSpecs structParams
     mkConstrainedProducerMutualPieces
       baseProducers inductiveProducers
       key.inductiveName indLevels freshArgIdents freshenedOutputNames
@@ -1999,7 +2206,7 @@ def deriveConstrainedProducerParts
             sp := sp.push (freshUnknowns[i]!, argTypes[i]!)
         sp
       let leafBinderSpecs ← computeStructLeafBinders allScheduleSteps structParams
-      let structLeafBinders ← structLeafBindersToSyntax leafBinderSpecs
+      let structLeafBinders ← structLeafBindersToSyntax leafBinderSpecs structParams
       return (baseProducers, inductiveProducers, freshenedOutputNames, Lean.mkIdent <$> freshUnknowns, localCtx, structLeafBinders))
   return (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, outputTypes, localCtx, inductiveName, inductiveLevels, producerSort, structLeafBinders)
 
@@ -2288,6 +2495,9 @@ def elabDeriveMutual : CommandElab := fun stx => do
           | _ => pure ()
         -- Propagate constraints and compile all specs (before HTML so generated code can be shown)
         let constraintMap ← liftTermElabM <| propagateConstraints components finalMemo
+        -- Propagate struct-param leaf binders across specs (so a dependant inherits,
+        -- e.g., the `[Enum P.A]` its checker dependency needs to enumerate a witness).
+        let leafBinderMap ← liftTermElabM <| propagateStructLeafBinders components finalMemo
         -- Compute type param indices per spec and detect instance-param constraints (for display)
         let mut typeParamIdxMap : Std.HashMap SpecKey (Array Nat) := {}
         let mut displayConstraintMap := constraintMap
@@ -2455,8 +2665,9 @@ def elabDeriveMutual : CommandElab := fun stx => do
               if indSched.alreadyExists then continue
               try
                 let specConstraints := constraintMap[key]?
+                let specLeafBinders := leafBinderMap[key]?
                 let (defCmd, instCmd) ← liftTermElabM <|
-                  compileInductiveSchedule indSched globalName compSiblings specConstraints
+                  compileInductiveSchedule indSched globalName compSiblings specConstraints specLeafBinders
                 defCmds := defCmds.push defCmd
                 instCmds := instCmds.push instCmd
                 let defStr ← liftTermElabM <| try

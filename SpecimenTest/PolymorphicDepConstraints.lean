@@ -1,5 +1,8 @@
 import Specimen.DeriveConstrainedProducer
 import Specimen.DeriveChecker
+import Specimen.DeriveEnum
+import Specimen.Enumerators
+import Specimen.EnumeratorCombinators
 
 /-!
 # Regression test for issue #38: missing typeclass constraints for polymorphic dependencies
@@ -116,3 +119,90 @@ set_option specimen.multiOutput true in
 derive_mutual
   checker (fun c n => HasColor c n),
   generator (fun n => ∃ c, HasColor c n)
+
+-- ============================================================
+-- Test 6: Enum propagates transitively through a checker that enumerates α
+--
+-- Chain: generator (NoWitness) --checks--> ¬HasWitness
+--        HasWitness checker --enumerates a witness x : α--> needs [Enum α]
+-- so [Enum α] must propagate all the way up to the NoWitness generator.
+-- (The negation is essential: `¬ HasWitness` can only be *checked*, not inverted,
+-- which is what forces the generator to depend on HasWitness's checker.)
+-- ============================================================
+
+inductive Witnessed {α : Type} : α → Nat → Prop where
+  | mk : ∀ (x : α), Witnessed x 0
+
+-- Deciding `HasWitness n` means searching for a witness `x : α` — the checker must
+-- enumerate α, so it requires [Enum α].
+inductive HasWitness {α : Type} : Nat → Prop where
+  | mk : ∀ (x : α) n, Witnessed x n → HasWitness n
+
+-- Generating `∃ n, NoWitness n` must *check* `¬ HasWitness n`, pulling in
+-- HasWitness's checker and hence its [Enum α] constraint.
+inductive NoWitness {α : Type} : Nat → Prop where
+  | mk : ∀ n, ¬ HasWitness (α := α) n → NoWitness n
+
+set_option specimen.autoDeriveDeps true in
+set_option specimen.multiOutput true in
+#guard_msgs(drop info) in
+derive_mutual
+  checker   (fun α x n => @Witnessed α x n),
+  checker   (fun α n => @HasWitness α n),
+  generator (fun α => ∃ n, @NoWitness α n)
+
+-- The checker for HasWitness enumerates α, so it needs [Enum α].
+example [Enum α] [DecidableEq α] : DecOpt (@HasWitness α 0) := inferInstance
+
+-- The generator for NoWitness must have propagated [Enum α] up through the
+-- `¬ HasWitness` check — plus [Arbitrary α] (generate the witnesses when
+-- exploring) and [DecidableEq α] (checker default).
+example [Plausible.Arbitrary α] [Enum α] [DecidableEq α] :
+    ArbitrarySizedSuchThat Nat (fun n => @NoWitness α n) := inferInstance
+
+-- And it resolves at a concrete type carrying Enum + DecidableEq.
+example : ArbitrarySizedSuchThat Nat (fun n => @NoWitness Bool n) := inferInstance
+
+-- ============================================================
+-- Test 7: The Test 6 chain, but the shared type A lives inside a STRUCTURE
+-- parameter P (as `P.A`). The [Enum P.A] a checker needs to enumerate a
+-- leaf-typed witness must still propagate — across specs — up to the generator,
+-- re-rooted onto each spec's own copy of the parameter.
+-- ============================================================
+
+structure Cfg where
+  A : Type
+  Spare : Type   -- unused: must never acquire a spurious constraint
+
+inductive RS (P : Cfg) : P.A → Nat → Prop where
+  | mk : ∀ (x : P.A), RS P x 0
+
+-- Deciding `HasWitnessS P n` enumerates a witness `x : P.A` ⇒ checker needs [Enum P.A].
+inductive HasWitnessS (P : Cfg) : Nat → Prop where
+  | mk : ∀ (x : P.A) n, RS P x n → HasWitnessS P n
+
+-- Generating `∃ n, NoWitnessS P n` must *check* `¬ HasWitnessS P n`, so [Enum P.A]
+-- propagates from the checker up to this generator.
+inductive NoWitnessS (P : Cfg) : Nat → Prop where
+  | mk : ∀ n, ¬ HasWitnessS P n → NoWitnessS P n
+
+set_option specimen.autoDeriveDeps true in
+set_option specimen.multiOutput true in
+#guard_msgs(drop info) in
+derive_mutual
+  checker   (fun (P : Cfg) x n => @RS P x n),
+  checker   (fun (P : Cfg) n => @HasWitnessS P n),
+  generator (fun (P : Cfg) => ∃ n, @NoWitnessS P n)
+
+-- The struct-param leaf `P.A` gets exactly the discovered constraints:
+-- the checker enumerates it ⇒ [Enum P.A].
+example [Enum P.A] [DecidableEq P.A] : DecOpt (@HasWitnessS P 0) := inferInstance
+
+-- ...and the generator inherits [Enum P.A] transitively through `¬ HasWitnessS`.
+example [Plausible.Arbitrary P.A] [Enum P.A] [DecidableEq P.A] :
+    ArbitrarySizedSuchThat Nat (fun n => @NoWitnessS P n) := inferInstance
+
+-- Concrete instantiation: A = Bool (has the instances), Spare = Empty (no
+-- instances) — resolving proves no spurious constraint attached to the unused
+-- `Spare` field.
+example : ArbitrarySizedSuchThat Nat (fun n => @NoWitnessS ⟨Bool, Empty⟩ n) := inferInstance
