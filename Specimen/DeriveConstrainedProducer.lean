@@ -706,6 +706,174 @@ def getProducerScheduleForInductiveConstructor
   getScheduleForInductiveRelationConstructor inductiveName ctorName inputNames deriveSort (some outputNamesTypesIndices) unknowns localCtx recFnName depMemo memoRef deriveDep
 
 
+/-- Returns `true` if `ce` is a projection chain rooted at a struct param, i.e.:
+    - `.Unknown P` where `P ∈ structParamNames`, or
+    - `.FuncApp projName [base]` where `projName` is a structure projection and
+      `base` is itself a projection chain.
+    This distinguishes genuine field accesses (e.g. `P.info.Metadata`) from arbitrary
+    function applications that happen to reference a struct param. -/
+partial def isStructProjChain (structParamNames : Std.HashSet Name) (ce : ConstructorExpr) :
+    MetaM Bool := do
+  match ce with
+  | .Unknown n => return structParamNames.contains n
+  | .FuncApp name [base] => do
+    if ← Lean.isProjectionFn name then
+      isStructProjChain structParamNames base
+    else
+      return false
+  | _ => return false
+
+/-- Collect all projection-chain sub-expressions within a `ConstructorExpr` that are rooted at
+    a struct param. For `List (Params.Label P)`, returns `[.FuncApp Params.Label [.Unknown P]]`. -/
+partial def collectStructProjChains (structParamNames : Std.HashSet Name)
+    (ce : ConstructorExpr) : MetaM (List ConstructorExpr) := do
+  if ← isStructProjChain structParamNames ce then return [ce]
+  match ce with
+  | .Ctor _ args | .TyCtor _ args | .FuncApp _ args =>
+    args.foldlM (fun acc arg => (· ++ acc) <$> collectStructProjChains structParamNames arg) []
+  | _ => return []
+
+/-- Recursively discover the `Type`-valued leaf projections *reachable from* a
+    projection whose value has type `ty` and whose surface syntax is `syn`.
+    A `Type u` leaf yields `#[syn]`; a structure-typed value recurses into each
+    field's projection (`sName ++ field` applied to `syn`). For a value of type
+    `NodeInfo` reached as `ExprParams.info P`, this yields
+    `NodeInfo.Metadata (ExprParams.info P)`. -/
+partial def structLeavesFromType (ty : Expr) (syn : TSyntax `term) :
+    TermElabM (Array (TSyntax `term)) := do
+  if ty.isSort then return #[syn]
+  let env ← getEnv
+  let some sName := ty.constName? | return #[]
+  let some sInfo := getStructureInfo? env sName | return #[]
+  let mut result : Array (TSyntax `term) := #[]
+  for field in sInfo.fieldNames do
+    let projName := sName ++ field
+    let projType ← forallTelescopeReducing (← inferType (mkConst projName))
+      (fun _ body => pure body)
+    let projSyn ← `($(mkIdent projName) $syn)
+    result := result ++ (← structLeavesFromType projType projSyn)
+  return result
+
+/-- Resolve a struct-param projection chain (as a `ConstructorExpr`) to the Lean
+    type of the value it denotes together with its surface syntax. The chain root
+    must be one of `structParams`; each `.FuncApp projName [base]` step is a
+    structure projection whose codomain is read from `projName`'s signature.
+    Returns `none` if `ce` is not a projection chain rooted at a known struct param
+    (e.g. it is an arbitrary function application). -/
+partial def resolveChainType (structParams : Array (Name × Expr)) (ce : ConstructorExpr) :
+    TermElabM (Option (Expr × TSyntax `term)) := do
+  match ce with
+  | .Unknown n =>
+    match structParams.find? (fun (pn, _) => pn == n) with
+    | some (_, pty) => return some (pty, mkIdent n)
+    | none => return none
+  | .FuncApp projName [base] =>
+    if ← Lean.isProjectionFn projName then
+      match ← resolveChainType structParams base with
+      | some (_, baseSyn) =>
+        let projType ← forallTelescopeReducing (← inferType (mkConst projName))
+          (fun _ body => pure body)
+        let projSyn ← `($(mkIdent projName) $baseSyn)
+        return some (projType, projSyn)
+      | none => return none
+    else return none
+  | _ => return none
+
+/-- Compute struct-param leaf binders needed by a spec's schedule steps.
+    For each `Unconstrained` step whose source is a projection chain (or contains one),
+    determines the `Type`-valued leaves that need instance binders.
+
+    Returns an array of `(className, leafSyntax)` pairs — e.g.
+    `(``Plausible.Arbitrary, `(NodeInfo.Metadata (ExprParams.info P)))`.
+
+    `structParams` is `(paramName, paramType)` for non-Sort, non-output params.
+    The function discovers which leaves actually appear in schedule steps (directly as
+    a proj-chain step, or wrapped in a compound type like `List (P.Label)`). -/
+def computeStructLeafBinders (allSteps : List ScheduleStep)
+    (structParams : Array (Name × Expr))
+    : TermElabM (Array (Name × TSyntax `term)) := do
+  if structParams.isEmpty then return #[]
+  let structParamNames : Std.HashSet Name :=
+    structParams.foldl (fun s (n, _) => s.insert n) {}
+  -- Walk all schedule steps and collect which leaves are needed
+  let mut needed : Array (Name × TSyntax `term) := #[]
+  for step in allSteps do
+    match step with
+    | .Unconstrained _ (.NonRec (indName, args)) ps =>
+      let tcName := match ps with
+        | .Generator => ``Plausible.Arbitrary
+        | .Enumerator => ``Enum
+      -- Check if the full source (indName applied to args) is itself a proj chain
+      let fullCE := ConstructorExpr.FuncApp indName args
+      if ← isStructProjChain structParamNames fullCE then
+        -- Direct leaf: the type being generated IS a projection of the struct param.
+        -- Emit a binder for it directly.
+        let argTerms ← args.toArray.mapM (monadLift <| constructorExprToTSyntaxTerm ·)
+        let leafSyn ← `($(mkIdent indName) $argTerms:term*)
+        let entry := (tcName, leafSyn)
+        unless needed.any (fun p => p.1 == entry.1 && p.2.raw == entry.2.raw) do
+          needed := needed.push entry
+      else
+        -- Compound type case (e.g. `List (Params.Label P)`): an argument contains a
+        -- proj chain but the overall type is not itself a leaf. Use the same synthesis
+        -- approach as for Sort-typed params: open the type constructor's telescope,
+        -- introduce fvars with [Arbitrary/Enum/DecidableEq] for Sort-typed positions,
+        -- and attempt synthesis. If it succeeds, the struct leaves are needed.
+        let chains ← args.foldlM (fun acc arg =>
+          (· ++ acc) <$> collectStructProjChains structParamNames arg) []
+        if !chains.isEmpty then
+          -- Attempt synthesis to confirm that having leaf instances suffices
+          let succeeded ← Meta.withNewMCtxDepth do
+            let some indInfo ← (try pure (some (← getConstInfoInduct indName)) catch _ => pure none)
+              | pure true  -- non-inductive (e.g. a def) — conservatively assume needed
+            let indLevels ← indInfo.levelParams.mapM (fun _ => do
+              let lv ← Meta.mkFreshLevelMVar; pure (.succ lv))
+            let argTypes' ← getComponentsOfArrowType indInfo.type
+            let argTypes' := argTypes'.pop
+            let rec buildSynth (idx : Nat) (t : Expr) (fvars : Array Expr) : TermElabM Bool :=
+              if idx >= argTypes'.size then do
+                let body := mkAppN (.const indName indLevels) fvars
+                let instTy ← try Meta.mkAppM tcName #[body] catch _ => return false
+                let result ← try Meta.synthInstance? instTy catch _ => pure none
+                return result.isSome
+              else do
+                let argTy := (← inferType t).bindingDomain!
+                let name := Name.mkSimple s!"arg_{idx}"
+                let bi := if argTy.isSort then BinderInfo.implicit else .default
+                withLocalDecl name bi argTy fun fv => do
+                  if argTy.isSort then
+                    let arbTy ← Meta.mkAppM ``Plausible.Arbitrary #[fv]
+                    let enumTy ← Meta.mkAppM ``Enum #[fv]
+                    let decEqTy ← Meta.mkAppM ``DecidableEq #[fv]
+                    withLocalDecl (Name.mkSimple s!"inst_arb_{idx}") .instImplicit arbTy fun _ =>
+                    withLocalDecl (Name.mkSimple s!"inst_enum_{idx}") .instImplicit enumTy fun _ =>
+                    withLocalDecl (Name.mkSimple s!"inst_deceq_{idx}") .instImplicit decEqTy fun _ =>
+                      buildSynth (idx + 1) (.app t fv) (fvars.push fv)
+                  else
+                    buildSynth (idx + 1) (.app t fv) (fvars.push fv)
+            try buildSynth 0 (.const indName indLevels) #[]
+            catch _ => pure true  -- on error, conservatively assume needed
+          if succeeded then
+            -- Emit binders only for the leaves reachable from the projection chains
+            -- that actually appear in this step (not every leaf of every struct
+            -- param) — so an unused field never drags in a spurious binder.
+            for chain in chains do
+              if let some (chainTy, chainSyn) ← resolveChainType structParams chain then
+                for leaf in (← structLeavesFromType chainTy chainSyn) do
+                  let entry := (tcName, leaf)
+                  unless needed.any (fun p => p.1 == entry.1 && p.2.raw == entry.2.raw) do
+                    needed := needed.push entry
+    | _ => pure ()
+  return needed
+
+/-- Convert struct leaf binder specs to actual bracketed binder syntax.
+    Each `(className, leafSyn)` becomes `[className leafSyn]`. -/
+def structLeafBindersToSyntax (binders : Array (Name × TSyntax `term))
+    : TermElabM (TSyntaxArray `Lean.Parser.Term.bracketedBinder) := do
+  let result ← binders.mapM fun (cls, syn) =>
+    `(Lean.Elab.Deriving.instBinderF| [$(mkIdent cls):ident $syn])
+  return TSyntaxArray.mk result
+
 /-- Produces an instance of a typeclass for a constrained producer (either `ArbitrarySizedSuchThat` or `EnumSizedSuchThat`).
     The arguments to this function are:
 
@@ -771,7 +939,7 @@ def deriveConstrainedProducer
   -- Then, derive `baseProducers` & `inductiveProducers` (the code for the sub-producers
   -- that are invoked when `size = 0` and `size > 0` respectively),
   -- and obtain freshened versions of the output variables / arguments (`freshenedOutputNames`, `freshArgIdents`)
-  let (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, localCtx) ←
+  let (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, localCtx, structLeafBinders) ←
   -- Freshen argument names to avoid capture, then derive schedules per constructor
     withLocalDeclsDND argNamesTypes (fun _ => do
       let mut localCtx ← getLCtx
@@ -802,6 +970,10 @@ def deriveConstrainedProducer
 
       let mut nonRecursiveProducers := #[]
       let mut recursiveProducers := #[]
+      -- Accumulate every constructor's schedule steps so we can compute the
+      -- demand-driven struct-param leaf binders (see `computeStructLeafBinders`),
+      -- mirroring the mutual-def path in `compileInductiveSchedule`.
+      let mut allScheduleSteps : List ScheduleStep := []
 
       let freshFuelPrimeName := localCtx.getUnusedName `fuel'
       let freshSizePrimeName := localCtx.getUnusedName `size'
@@ -859,6 +1031,7 @@ def deriveConstrainedProducer
         match resultOption with
         | some result =>
           let schedule := result.schedule
+          allScheduleSteps := allScheduleSteps ++ schedule.fst
           let (subProducer, instances) ← StateT.run (s := #[]) (do
             let mexp ← MExp.scheduleToMExp schedule (.MId `size) (.MId `initSize) outputType (fuelPrimeName := freshFuelPrimeName) (sizePrimeName := freshSizePrimeName) (targetInductive := inductiveName)
             MExp.mexpToTSyntax mexp deriveSort)
@@ -907,12 +1080,27 @@ def deriveConstrainedProducer
       let baseProducers ← `([$nonRecursiveProducers,*])
       let inductiveProducers ← `([$nonRecursiveProducers,*, $recursiveProducers,*])
 
-      return (baseProducers, inductiveProducers, freshenedOutputNames, Lean.mkIdent <$> freshUnknowns, localCtx))
+      -- Compute the demand-driven struct-param leaf binders (e.g.
+      -- `[Arbitrary P.info.Metadata]`) from the accumulated schedule steps, so a
+      -- struct-parameterized output type works on this single-instance path too
+      -- (mirrors the mutual-def path in `compileInductiveSchedule`). The struct
+      -- params are the non-output, non-sort arguments, named by their freshened
+      -- names so the emitted binders match the instance's parameters.
+      let structParams : Array (Name × Expr) := Id.run do
+        let mut sp := #[]
+        for i in [:argTypes.size] do
+          if i ∉ outputIdxs && !argTypes[i]!.isSort then
+            sp := sp.push (freshUnknowns[i]!, argTypes[i]!)
+        sp
+      let leafBinderSpecs ← computeStructLeafBinders allScheduleSteps structParams
+      let structLeafBinders ← structLeafBindersToSyntax leafBinderSpecs
+
+      return (baseProducers, inductiveProducers, freshenedOutputNames, Lean.mkIdent <$> freshUnknowns, localCtx, structLeafBinders))
 
   -- Create an instance of the appropriate producer typeclass
   mkConstrainedProducerTypeClassInstance baseProducers inductiveProducers
     constrainingInductive inductiveLevels freshArgIdents freshenedOutputNames.toList
-    outputTypes.toList producerSort localCtx
+    outputTypes.toList producerSort localCtx structLeafBinders
 
 /-- Compile a schedule to a weighted sub-producer term. Handles the common pattern of:
     schedule → MExp → TSyntax, then wrapping with the weight function for the backtracking
@@ -961,150 +1149,6 @@ def extractTypeParamRefs (typeParams : Std.HashSet Name) : ConstructorExpr → S
   | .Ctor _ args | .TyCtor _ args | .FuncApp _ args =>
     args.foldl (fun acc a => acc.union (extractTypeParamRefs typeParams a)) {}
   | .Lit _ | .CSort _ | .Hole => {}
-
-/-- Returns `true` if `ce` is a projection chain rooted at a struct param, i.e.:
-    - `.Unknown P` where `P ∈ structParamNames`, or
-    - `.FuncApp projName [base]` where `projName` is a structure projection and
-      `base` is itself a projection chain.
-    This distinguishes genuine field accesses (e.g. `P.info.Metadata`) from arbitrary
-    function applications that happen to reference a struct param. -/
-partial def isStructProjChain (structParamNames : Std.HashSet Name) (ce : ConstructorExpr) :
-    MetaM Bool := do
-  match ce with
-  | .Unknown n => return structParamNames.contains n
-  | .FuncApp name [base] => do
-    if ← Lean.isProjectionFn name then
-      isStructProjChain structParamNames base
-    else
-      return false
-  | _ => return false
-
-/-- Collect all projection-chain sub-expressions within a `ConstructorExpr` that are rooted at
-    a struct param. For `List (Params.Label P)`, returns `[.FuncApp Params.Label [.Unknown P]]`. -/
-partial def collectStructProjChains (structParamNames : Std.HashSet Name)
-    (ce : ConstructorExpr) : MetaM (List ConstructorExpr) := do
-  if ← isStructProjChain structParamNames ce then return [ce]
-  match ce with
-  | .Ctor _ args | .TyCtor _ args | .FuncApp _ args =>
-    args.foldlM (fun acc arg => (· ++ acc) <$> collectStructProjChains structParamNames arg) []
-  | _ => return []
-
-/-- Recursively discover `Type`-valued leaf projections of a structure-typed parameter.
-    For `(P, ExprParams)`, returns syntax for leaves like `ExprParams.VarId P` and
-    `NodeInfo.Metadata (ExprParams.info P)`. Used to know which projection-typed instance
-    binders to put in scope during synthesis. -/
-partial def discoverStructLeaves (paramName : Name) (paramType : Expr) :
-    TermElabM (Array (TSyntax `term)) := do
-  let baseSyn : TSyntax `term := mkIdent paramName
-  go paramType baseSyn
-where
-  go (ty : Expr) (syn : TSyntax `term) : TermElabM (Array (TSyntax `term)) := do
-    if ty.isSort then return #[syn]
-    let env ← getEnv
-    let some sName := ty.constName? | return #[]
-    let some sInfo := getStructureInfo? env sName | return #[]
-    let mut result : Array (TSyntax `term) := #[]
-    for field in sInfo.fieldNames do
-      let projName := sName ++ field
-      let projType ← forallTelescopeReducing (← inferType (mkConst projName))
-        (fun _ body => pure body)
-      let projSyn ← `($(mkIdent projName) $syn)
-      result := result ++ (← go projType projSyn)
-    return result
-
-/-- Compute struct-param leaf binders needed by a spec's schedule steps.
-    For each `Unconstrained` step whose source is a projection chain (or contains one),
-    determines the `Type`-valued leaves that need instance binders.
-
-    Returns an array of `(className, leafSyntax)` pairs — e.g.
-    `(``Plausible.Arbitrary, `(NodeInfo.Metadata (ExprParams.info P)))`.
-
-    `structParams` is `(paramName, paramType)` for non-Sort, non-output params.
-    The function discovers which leaves actually appear in schedule steps (directly as
-    a proj-chain step, or wrapped in a compound type like `List (P.Label)`). -/
-def computeStructLeafBinders (allSteps : List ScheduleStep)
-    (structParams : Array (Name × Expr))
-    : TermElabM (Array (Name × TSyntax `term)) := do
-  if structParams.isEmpty then return #[]
-  let structParamNames : Std.HashSet Name :=
-    structParams.foldl (fun s (n, _) => s.insert n) {}
-  -- Discover all Type-valued leaves for each struct param (for synthesis scope)
-  let mut allLeaves : Array (TSyntax `term) := #[]
-  for (paramName, paramType) in structParams do
-    allLeaves := allLeaves ++ (← discoverStructLeaves paramName paramType)
-  -- Walk all schedule steps and collect which leaves are needed
-  let mut needed : Array (Name × TSyntax `term) := #[]
-  for step in allSteps do
-    match step with
-    | .Unconstrained _ (.NonRec (indName, args)) ps =>
-      let tcName := match ps with
-        | .Generator => ``Plausible.Arbitrary
-        | .Enumerator => ``Enum
-      -- Check if the full source (indName applied to args) is itself a proj chain
-      let fullCE := ConstructorExpr.FuncApp indName args
-      if ← isStructProjChain structParamNames fullCE then
-        -- Direct leaf: the type being generated IS a projection of the struct param.
-        -- Emit a binder for it directly.
-        let argTerms ← args.toArray.mapM (monadLift <| constructorExprToTSyntaxTerm ·)
-        let leafSyn ← `($(mkIdent indName) $argTerms:term*)
-        let entry := (tcName, leafSyn)
-        unless needed.any (fun p => p.1 == entry.1 && p.2.raw == entry.2.raw) do
-          needed := needed.push entry
-      else
-        -- Compound type case (e.g. `List (Params.Label P)`): an argument contains a
-        -- proj chain but the overall type is not itself a leaf. Use the same synthesis
-        -- approach as for Sort-typed params: open the type constructor's telescope,
-        -- introduce fvars with [Arbitrary/Enum/DecidableEq] for Sort-typed positions,
-        -- and attempt synthesis. If it succeeds, the struct leaves are needed.
-        let chains ← args.foldlM (fun acc arg =>
-          (· ++ acc) <$> collectStructProjChains structParamNames arg) []
-        if !chains.isEmpty then
-          -- Attempt synthesis to confirm that having leaf instances suffices
-          let succeeded ← Meta.withNewMCtxDepth do
-            let some indInfo ← (try pure (some (← getConstInfoInduct indName)) catch _ => pure none)
-              | pure true  -- non-inductive (e.g. a def) — conservatively assume needed
-            let indLevels ← indInfo.levelParams.mapM (fun _ => do
-              let lv ← Meta.mkFreshLevelMVar; pure (.succ lv))
-            let argTypes' ← getComponentsOfArrowType indInfo.type
-            let argTypes' := argTypes'.pop
-            let rec buildSynth (idx : Nat) (t : Expr) (fvars : Array Expr) : TermElabM Bool :=
-              if idx >= argTypes'.size then do
-                let body := mkAppN (.const indName indLevels) fvars
-                let instTy ← try Meta.mkAppM tcName #[body] catch _ => return false
-                let result ← try Meta.synthInstance? instTy catch _ => pure none
-                return result.isSome
-              else do
-                let argTy := (← inferType t).bindingDomain!
-                let name := Name.mkSimple s!"arg_{idx}"
-                let bi := if argTy.isSort then BinderInfo.implicit else .default
-                withLocalDecl name bi argTy fun fv => do
-                  if argTy.isSort then
-                    let arbTy ← Meta.mkAppM ``Plausible.Arbitrary #[fv]
-                    let enumTy ← Meta.mkAppM ``Enum #[fv]
-                    let decEqTy ← Meta.mkAppM ``DecidableEq #[fv]
-                    withLocalDecl (Name.mkSimple s!"inst_arb_{idx}") .instImplicit arbTy fun _ =>
-                    withLocalDecl (Name.mkSimple s!"inst_enum_{idx}") .instImplicit enumTy fun _ =>
-                    withLocalDecl (Name.mkSimple s!"inst_deceq_{idx}") .instImplicit decEqTy fun _ =>
-                      buildSynth (idx + 1) (.app t fv) (fvars.push fv)
-                  else
-                    buildSynth (idx + 1) (.app t fv) (fvars.push fv)
-            try buildSynth 0 (.const indName indLevels) #[]
-            catch _ => pure true  -- on error, conservatively assume needed
-          if succeeded then
-            for leaf in allLeaves do
-              let entry := (tcName, leaf)
-              unless needed.any (fun p => p.1 == entry.1 && p.2.raw == entry.2.raw) do
-                needed := needed.push entry
-    | _ => pure ()
-  return needed
-
-/-- Convert struct leaf binder specs to actual bracketed binder syntax.
-    Each `(className, leafSyn)` becomes `[className leafSyn]`. -/
-def structLeafBindersToSyntax (binders : Array (Name × TSyntax `term))
-    : TermElabM (TSyntaxArray `Lean.Parser.Term.bracketedBinder) := do
-  let result ← binders.mapM fun (cls, syn) =>
-    `(Lean.Elab.Deriving.instBinderF| [$(mkIdent cls):ident $syn])
-  return TSyntaxArray.mk result
 
 /-- Synthesize `[tcName type]` for a compound type and extract what constraints the
     instance requires on Sort-typed params. Used for external deps (already in env). -/
@@ -1825,7 +1869,7 @@ def deriveConstrainedProducerParts
   (constrArgs : Array Expr) (deriveSort : DeriveSort)
   (scheduleRewriter : List ScheduleStep → List ScheduleStep := id)
   (recFnNameOverride : Option Name := none) :
-  TermElabM (TSyntax `term × TSyntax `term × Array Name × TSyntaxArray `term × Array Expr × LocalContext × Name × List Level × ProducerSort) := do
+  TermElabM (TSyntax `term × TSyntax `term × Array Name × TSyntaxArray `term × Array Expr × LocalContext × Name × List Level × ProducerSort × TSyntaxArray `Lean.Parser.Term.bracketedBinder) := do
   let producerSort := convertDeriveSortToProducerSort deriveSort
   -- Identify which argument positions are outputs (to be generated)
   let inductiveName := constrainingInductive
@@ -1854,7 +1898,7 @@ def deriveConstrainedProducerParts
       let u ← Meta.mkFreshLevelMVar
       let v ← Meta.mkFreshLevelMVar
       pure (Lean.mkApp2 (Lean.mkConst ``Prod [u, v]) t rest)) outputTypes.toList
-  let (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, localCtx) ←
+  let (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, localCtx, structLeafBinders) ←
   -- Freshen argument names to avoid capture, then derive schedules per constructor
     withLocalDeclsDND argNamesTypes (fun _ => do
       let mut localCtx ← getLCtx
@@ -1871,6 +1915,9 @@ def deriveConstrainedProducerParts
           (freshenedOutputNames[i]!, outputTypes[i]!, outputIdxs[i]!))
       let mut nonRecursiveProducers := #[]
       let mut recursiveProducers := #[]
+      -- Accumulate every constructor's (rewritten) schedule steps for the
+      -- demand-driven struct-param leaf binders (see `computeStructLeafBinders`).
+      let mut allScheduleSteps : List ScheduleStep := []
       let freshFuelPrimeName := localCtx.getUnusedName `fuel'
       let freshSizePrimeName := localCtx.getUnusedName `size'
       let freshSize' := mkIdent freshSizePrimeName
@@ -1907,6 +1954,7 @@ def deriveConstrainedProducerParts
           let (scheduleSteps, scheduleSort) := result.schedule
           let rewrittenSteps := scheduleRewriter scheduleSteps
           let schedule := (rewrittenSteps, scheduleSort)
+          allScheduleSteps := allScheduleSteps ++ rewrittenSteps
           let (subProducer, requiredInsts) ← StateT.run (s := #[]) (do
             let mexp ← MExp.scheduleToMExp schedule (.MId `size) (.MId `initSize) _outputType (fuelPrimeName := freshFuelPrimeName) (sizePrimeName := freshSizePrimeName) (targetInductive := inductiveName)
             MExp.mexpToTSyntax mexp deriveSort)
@@ -1942,8 +1990,18 @@ def deriveConstrainedProducerParts
         throwError "Cannot derive constrained producer for '{inductiveName}': all constructors are recursive (no finite base case)"
       let baseProducers ← `([$nonRecursiveProducers,*])
       let inductiveProducers ← `([$nonRecursiveProducers,*, $recursiveProducers,*])
-      return (baseProducers, inductiveProducers, freshenedOutputNames, Lean.mkIdent <$> freshUnknowns, localCtx))
-  return (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, outputTypes, localCtx, inductiveName, inductiveLevels, producerSort)
+      -- Demand-driven struct-param leaf binders (e.g. `[Arbitrary P.info.Metadata]`),
+      -- computed from the accumulated schedule steps (see `computeStructLeafBinders`).
+      let structParams : Array (Name × Expr) := Id.run do
+        let mut sp := #[]
+        for i in [:argTypes.size] do
+          if i ∉ outputIdxs && !argTypes[i]!.isSort then
+            sp := sp.push (freshUnknowns[i]!, argTypes[i]!)
+        sp
+      let leafBinderSpecs ← computeStructLeafBinders allScheduleSteps structParams
+      let structLeafBinders ← structLeafBindersToSyntax leafBinderSpecs
+      return (baseProducers, inductiveProducers, freshenedOutputNames, Lean.mkIdent <$> freshUnknowns, localCtx, structLeafBinders))
+  return (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, outputTypes, localCtx, inductiveName, inductiveLevels, producerSort, structLeafBinders)
 
 
 private def deriveArbitrarySuchThatInstance'
@@ -2136,10 +2194,10 @@ def deriveFromScheduleDep (dep : ScheduleDep) (scheduleRewriter : List ScheduleS
     let deriveSort := dep.deriveSort
     let parts ← deriveConstrainedProducerParts inputFVars outputFVars outputTypes.toArray
       dep.inductiveName indLevels allFVars deriveSort scheduleRewriter recFnNameOverride
-    let (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, outTypes, localCtx, _, _, producerSort) := parts
+    let (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, outTypes, localCtx, _, _, producerSort, structLeafBinders) := parts
     mkConstrainedProducerTypeClassInstance baseProducers inductiveProducers
       dep.inductiveName indLevels freshArgIdents freshenedOutputNames.toList
-      outTypes.toList producerSort localCtx
+      outTypes.toList producerSort localCtx structLeafBinders
 
 @[command_elab mutual_deriver]
 def elabDeriveMutual : CommandElab := fun stx => do
@@ -2878,10 +2936,11 @@ def elabDeriveMutual : CommandElab := fun stx => do
             let e ← elabTerm termStx .none
             withParsedDerivingArgs e fun args outVars outTypes indName indLevels indArgs => do
               let parts ← deriveConstrainedProducerParts args outVars outTypes indName indLevels indArgs .Generator rewriter (some globalName)
-              let (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, outputTypes, localCtx, _, inductiveLevels, producerSort) := parts
+              let (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, outputTypes, localCtx, _, inductiveLevels, producerSort, structLeafBinders) := parts
               mkConstrainedProducerMutualPieces baseProducers inductiveProducers
                 indName inductiveLevels freshArgIdents freshenedOutputNames.toList
                 outputTypes.toList producerSort localCtx globalName .Generator
+                (structLeafBinders := structLeafBinders)
           defCmds := defCmds.push defCmd
           instCmds := instCmds.push instCmd
         let mutualCmd ← `(command| mutual $defCmds* end)
