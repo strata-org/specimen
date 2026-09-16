@@ -1414,34 +1414,39 @@ partial def searchBestScheduleM (ctorName : Name) (vars : List TypedVar)
     -- Use minTreePruningM to find the best ordering for this component
     let componentDone ← IO.mkRef false
     let componentBestRef ← IO.mkRef (none : Option (List (PreScheduleStep HypothesisExpr Name) × List Name × Std.HashSet Name × Score))
-    let componentWorst := bundle.worstScore
     let envSnapshot := accEnv
     let envSetSnapshot := accEnvSet
 
+    -- `none` is a bound that never prunes. A concrete seed can prune every leaf, since
+    -- additive score types (`DefaultScore.checks`) can exceed any finite constant.
     let _ ← SearchTree.minTreePruningM tree (scoreComponentOrdering envSnapshot envSetSnapshot)
-      bundle.isBetter componentWorst componentDone
+      bundle.isBetter (none : Option Score) componentDone
       fun (ordering, score) currentBest => do
-        let c ← countRef.get
-        countRef.set (c + 1)
-        if c + 1 > limit then
-          done.set true
-          componentDone.set true
-          return currentBest
-        -- Process this ordering through mode choices
+        -- Record before checking the limit: bailing first would leave `componentBestRef`
+        -- unset and drop this component's hypotheses.
         let (compSched, compEnv, compEnvSet) ← processOrdering ordering envSnapshot envSetSnapshot
-        -- Track best for this component
         match ← componentBestRef.get with
         | none =>
           componentBestRef.set (some (compSched, compEnv, compEnvSet, score))
         | some (_, _, _, prevScore) =>
           if bundle.isBetter score prevScore then
             componentBestRef.set (some (compSched, compEnv, compEnvSet, score))
-        -- Return the score for pruning decisions
-        return if bundle.isBetter score currentBest then score else currentBest
+        let c ← countRef.get
+        countRef.set (c + 1)
+        if c + 1 > limit then
+          done.set true
+          componentDone.set true
+          return currentBest
+        return match currentBest with
+          | some cb => if bundle.isBetter score cb then some score else currentBest
+          | none => some score
 
-    -- Use the best ordering found for this component
+    -- Every yield records a best, so `none` means the tree produced no leaf at all.
     match ← componentBestRef.get with
-    | none => pure ()
+    | none =>
+      throwError "searchBestScheduleM: no schedule for a component of \
+        {key.inductiveName} (ctor {ctorName}, outputIndices {key.outputIndices}, \
+        deriveSort {repr key.deriveSort}) — the SCC search tree yielded no leaf."
     | some (compSched, compEnv, compEnvSet, _) =>
       accSched := accSched ++ compSched
       accEnv := compEnv
