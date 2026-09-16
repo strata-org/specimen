@@ -48,6 +48,11 @@ initialize Scoring.registerWeightModifier `nameCompareModifier nameCompareModifi
 namespace Baseline
 set_option specimen.richOutput false in
 set_option specimen.textOutput 3 in
+-- Pinned, not defaulted: this test needs a weight function whose body is *size-dependent* so that
+-- partial evaluation has a `size` expression to fold. The default `qualityCtorWeight` maps badness
+-- to a constant and ignores size, which leaves precompute nothing to do and makes the timing
+-- comparison below a coin flip.
+set_option specimen.weightFn "Scoring.balancedCtorWeight" in
 set_option specimen.weightModifier "nameCompareModifier" in
 set_option specimen.precomputeWeights false in
 set_option specimen.autoDeriveDeps true in
@@ -59,14 +64,15 @@ end Baseline
 -- Version B: same modifier, weights partially evaluated at elaboration time (precompute on).
 -- Each per-constructor weight folds to a constant / small size-expression:
 --   `here`  → 33   (the whole name match + balanced computation collapses to a literal)
---   `there` → (if size' = 0 then 0 else max 1 size' * 4) + 3
+--   `there` → (if size' = 0 then 0 else max 1 size' * 3) + 3
 namespace Precomputed
 set_option specimen.richOutput false in
 set_option specimen.textOutput 3 in
+set_option specimen.weightFn "Scoring.balancedCtorWeight" in
 set_option specimen.weightModifier "nameCompareModifier" in
 set_option specimen.precomputeWeights true in
 set_option specimen.autoDeriveDeps true in
-/-- [(33, return a_1), ((if size' = 0 then 0 else max 1 size' * 4) + 3, do -/
+/-- [(33, return a_1), ((if size' = 0 then 0 else max 1 size' * 3) + 3, do -/
 #guard_msgs (substring := true, whitespace := lax) in
 scoped derive_mutual (fun (lo hi : Nat) => ∃ n, PrecompBetween lo hi n)
 end Precomputed

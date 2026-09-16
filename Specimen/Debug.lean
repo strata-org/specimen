@@ -11,7 +11,7 @@ register_option specimen.debug : Bool := {
 
 /-- When true, the scheduler produces maximally many outputs per hypothesis step -/
 register_option specimen.multiOutput : Bool := {
-  defValue := false
+  defValue := true
   descr := "allow multi-output production steps in derived generators"
 }
 
@@ -24,7 +24,7 @@ register_option specimen.fuel : Nat := {
 /-- When true, derive_mutual automatically derives dependencies for other inductives
     referenced in the specs' constructors before emitting the mutual block. -/
 register_option specimen.autoDeriveDeps : Bool := {
-  defValue := false
+  defValue := true
   descr := "automatically derive dependency instances in derive_mutual"
 }
 
@@ -69,7 +69,7 @@ register_option specimen.silent : Bool := {
     rather than a full weight-function call. Reduction needs the weight and modifier arguments
     to be kernel-reducible; any failure falls back to the un-reduced call. -/
 register_option specimen.precomputeWeights : Bool := {
-  defValue := false
+  defValue := true
   descr := "partially evaluate constructor weight functions under the size binder at elaboration time"
 }
 

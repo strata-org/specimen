@@ -8,6 +8,10 @@ import Plausible.Attr
 
 set_option guard_msgs.diff true
 
+-- These relations bind several existentials in one hypothesis (`foo (a b : α) : a = b → …`),
+-- so multi-output scheduling asks for a joint `(α × α)` producer instance that nothing derives.
+-- This file tests dependent-argument handling, not multi-output, so pin the option off.
+set_option specimen.multiOutput false
 
 inductive HasDep {α : Type} (_ : List α) : Nat → Prop where
 | foo (a b : α) : a = b → HasDep _ 0
