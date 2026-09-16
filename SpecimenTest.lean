@@ -114,4 +114,7 @@ import SpecimenTest.WeightPrecomputeTest
 -- `specimen.silent` output-suppression option tests
 import SpecimenTest.SilentOptionTest
 
+-- `specimen_test` command / `specimen` tactic
+import SpecimenTest.TacticTest
+
 

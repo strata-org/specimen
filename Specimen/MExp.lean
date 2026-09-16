@@ -294,8 +294,8 @@ mutual
       -- for simplicity, but in the future we may want to distinguish them
       match deriveSort with
       | .Generator | .Enumerator => `($failFn $genericFailure)
+      | .Theorem => `(return ($(mkIdent ``Except.error) $genericFailure))
       | .Checker => `($(mkIdent ``Except.ok) $(mkIdent ``false))
-      | .Theorem => throwError "compiling MExps for Theorem DeriveSorts not implemented"
     | .MRet e => do
       let e' ← mexpToTSyntax e deriveSort
       `(return $e')
@@ -305,6 +305,7 @@ mutual
       let k1 ← mexpToTSyntax k deriveSort
       match deriveSort, monadSort with
       | .Generator, .Gen
+      | .Theorem, .Gen
       | .Enumerator, .Enumerator
       | .Enumerator, .OptionTEnumerator =>
         -- If there are multiple variables that are bound to the result
@@ -323,6 +324,13 @@ mutual
         -- match on its result
         let trueCase ← `(Term.matchAltExpr| | $(mkIdent ``Except.ok) $(mkIdent ``true) => $k1)
         let wildCardCase ← `(Term.matchAltExpr| | _ => $failFn $genericFailure)
+        let cases := #[trueCase, wildCardCase]
+        `(match $m1:term with $cases:matchAlt*)
+      | .Theorem, .Checker => do
+        -- For theorem mode: return the error as a value rather than throwing,
+        -- so the RNG state is not reset on discard
+        let trueCase ← `(Term.matchAltExpr| | $(mkIdent ``Except.ok) $(mkIdent ``true) => $k1)
+        let wildCardCase ← `(Term.matchAltExpr| | _ => return ($(mkIdent ``Except.error) $genericFailure))
         let cases := #[trueCase, wildCardCase]
         `(match $m1:term with $cases:matchAlt*)
       | .Checker, .Checker =>
@@ -354,7 +362,6 @@ mutual
             -- we call `EnumeratorCombinators.enumeratingOpt` a la QuickChick
             `($enumeratingOptFn $m1:term (fun $args:term => $k1:term) $fuelForEnumerator:term)
           | .(_) => throwError "Unreachable pattern match: Checkers can only invoke enumerators in this branch"
-      | .Theorem, _ => throwError "Theorem DeriveSort not implemented yet"
       | _, _ => throwError m!"Invalid monadic bind for deriveSort {repr deriveSort}"
     | .MMatch explicit scrutinee cases => do
       -- Compile the scrutinee, the LHS & RHS of each case separately
@@ -497,13 +504,14 @@ def scheduleToMExp (schedule : Schedule) (mfuel : MExp) (defFuel : MExp) (recTyp
       | outputs => MExp.MRet (tupleOfList (fun e1 e2 => .MApp .allowImplicit (.MConst ``Prod.mk) [e1, e2]) outputs outputs[0]?)
     | .CheckerSchedule => okTrue
     | .TheoremSchedule conclusion typeClassUsed =>
-      -- Create a pattern-match on the result of hte checker
-      -- on the conclusion, returning `.ok true` or `.ok false` accordingly
+      -- Create a pattern-match on the result of the checker
+      -- on the conclusion, returning `.ok true` or `.ok false` accordingly.
+      -- Use MRet to wrap in the Gen monad (since the theorem body is monadic).
       let conclusionMExp := hypothesisExprToMExp conclusion
       let scrutinee :=
         if typeClassUsed then decOptChecker conclusionMExp mfuel
         else conclusionMExp
-      matchExceptBool scrutinee okTrue okFalse
+      matchExceptBool scrutinee (.MRet okTrue) (.MRet okFalse)
   -- Fold over the `scheduleSteps` and convert each of them to a functional `MExp`
   -- Note that the fold composes the `MExp`, and we use `foldr` since
   -- we want the `epilogue` to be the base-case of the fold
