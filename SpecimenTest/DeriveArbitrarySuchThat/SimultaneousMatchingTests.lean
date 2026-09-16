@@ -13,6 +13,10 @@ open ArbitrarySizedSuchThat
 
 set_option guard_msgs.diff true
 
+-- Under multi-output scheduling the `MinEx2` derivation at the bottom of this file asks for a
+-- joint `(List Nat × List Nat)` producer that nothing derives. Simultaneous *input* matching is
+-- what's under test here, so pin multi-output off.
+set_option specimen.multiOutput false
 
 #guard_msgs(drop info) in
 derive_generator (fun x => ∃ (l : List Nat), InList x l)

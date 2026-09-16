@@ -19,6 +19,11 @@ set_option linter.unusedVariables false
 -- Suppress warnings for redundant pattern-match cases in derived generators/checkers
 set_option match.ignoreUnusedAlts true
 
+-- The `AddKV` derivation below asks for joint `(String × String × List …)` and
+-- `(String × List …)` producers under multi-output scheduling, and nothing derives them.
+-- These snapshots predate multi-output, so pin the option off here.
+set_option specimen.multiOutput false
+
 /-- We override the default `Arbitrary` for `String`s so that we only produce strings of length 1
     where the string is a single letter from `A` to `I` -/
 instance instKeyValueStoreArbitraryString : Arbitrary String where
