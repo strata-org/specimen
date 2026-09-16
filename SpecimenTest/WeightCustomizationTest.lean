@@ -57,7 +57,7 @@ derive_mutual
 -- ============================================================
 
 def heavyBaseWeight (_ctorName : Name) (_outputIndices : List Nat) (_deriveSort : DeriveSort)
-    (_scoreBadness : Float) (isRec : Bool) (size : Nat) (_numBase _numRec : Nat) : Nat :=
+    (_scoreBadness : Nat) (isRec : Bool) (size : Nat) (_numBase _numRec : Nat) (_numRecCalls : Nat) : Nat :=
   if isRec then (if size == 0 then 0 else 1) else 20
 
 initialize Scoring.registerWeightFn `heavyBaseWeight heavyBaseWeight ``heavyBaseWeight
@@ -73,8 +73,8 @@ derive_mutual
 -- ============================================================
 
 def tripleRecModifier (baseWeight : Nat) (_ctorName : Name) (_outputIndices : List Nat)
-    (_deriveSort : DeriveSort) (_scoreBadness : Float) (isRec : Bool) (_size : Nat)
-    (_numBase _numRec : Nat) : Nat :=
+    (_deriveSort : DeriveSort) (_scoreBadness : Nat) (isRec : Bool) (_size : Nat)
+    (_numBase _numRec : Nat) (_numRecCalls : Nat) : Nat :=
   if isRec then baseWeight * 3 else baseWeight
 
 #eval Scoring.registerWeightModifier `tripleRecModifier tripleRecModifier ``tripleRecModifier
