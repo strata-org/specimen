@@ -261,6 +261,40 @@ derive_mutual
 
 The modifier composes with whatever `specimen.weightFn` is active — you don't need to know or reimplement the base weight logic. This is the lightest-weight way to nudge the distribution for specific constructors.
 
+**6. `specimen_test` / `specimen` — property testing a statement**
+
+Everything above derives *producers* for a relation. `specimen_test` instead takes a whole proposition and looks for a counterexample, the way QuickChick's `quickchick` does. The statement is treated as a virtual constructor whose variables are all outputs: the hypotheses become a schedule that generates witnesses satisfying them, and the conclusion is checked against each witness.
+
+```lean
+-- As a command, on a closed proposition:
+specimen_test (∀ n : Nat, Even n → Even (n + 2))
+
+-- As a tactic, on the current goal:
+example : ∀ n : Nat, Even n → Even (n + 2) := by
+  specimen
+```
+
+The tactic closes the goal over its local hypotheses, tests it, and leaves the goal open — it is a diagnostic, not a proof. Derived generators and checkers live in the environment only for the duration of the test.
+
+A counterexample is reported as an error naming each variable and its value, after shrinking:
+
+```
+error: Found counter-example!
+  n : Nat := 0
+(0 tests passed, 0 discarded, 1 shrinks)
+```
+
+Both forms accept an optional size configuration, in any order:
+
+```lean
+specimen_test (min := 5, max := 200, tests := 500) (∀ n, P n → Q n)
+example : ∀ n, P n → Q n := by specimen (max := 20)
+```
+
+Generation size ramps linearly from `min` to `max` across the run, so the defaults `min := 1`, `max := 100`, `tests := 100` try each size once. Shrinking is on by default and controlled by `specimen.shrink`, `specimen.shrinkBreadth` and `specimen.shrinkDepth`.
+
+A hypothesis whose generator dead-ends is counted as a discard rather than a failure, so the reported total distinguishes "no counterexample found" from "could not generate valid inputs" — worth checking when a heavily-constrained property passes suspiciously fast.
+
 ## Repo overview
 
 **Building & compiling**:
@@ -288,9 +322,13 @@ The modifier composes with whatever `specimen.weightFn` is active — you don't 
 - [`DeriveSchedules.lean`](./Specimen/DeriveSchedules.lean): Algorithm for deriving generator schedules
 - [`SearchTree.lean`](./Specimen/SearchTree.lean): Dependency-aware hypothesis ordering via lazy search tree with branch-and-bound pruning
 
+**Property testing a statement**:
+- [`Tactic.lean`](./Specimen/Tactic.lean): The `specimen_test` command and `specimen` tactic — schedules a proposition as a virtual constructor, compiles a test loop, and shrinks counterexamples
+- [`TheoremChecker.lean`](./Specimen/TheoremChecker.lean): Runtime helpers referenced by the code `specimen_test` emits
+
 **Schedule scoring & quality analysis**:
 - [`Score.lean`](./Specimen/Score.lean): Type-erased score values used by the modular scoring framework
-- [`Scoring.lean`](./Specimen/Scoring.lean): Modular scoring framework with pluggable strategies (DefaultScore, WorstLeafScore, DensityScore) for evaluating schedule quality
+- [`Scoring.lean`](./Specimen/Scoring.lean): Modular scoring framework with pluggable strategies (BudgetAwareScore, SourceQualityScore, the graded/density family, DefaultScore) for evaluating schedule quality, plus the constructor weight functions and modifiers
 - [`PatternCoverage.lean`](./Specimen/PatternCoverage.lean): Pattern coverage trie that partitions the input space of an inductive relation, identifies weak spots, and annotates leaves with constructor coverage
 
 **Derivers for unconstrained producers**:

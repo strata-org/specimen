@@ -73,6 +73,26 @@ register_option specimen.precomputeWeights : Bool := {
   descr := "partially evaluate constructor weight functions under the size binder at elaboration time"
 }
 
+/-- Whether the `specimen`/`specimen_test` shrinker attempts to minimize counterexamples. -/
+register_option specimen.shrink : Bool := {
+  defValue := true
+  descr := "enable counterexample shrinking in specimen_test / specimen"
+}
+
+/-- How many shrink candidates to consider per step. Caps each variable's `Shrinkable.shrink`
+    list, and so the jointly-constrained cartesian products built from them, bounding both
+    candidate generation and the `DecOpt` re-checks. Lower is faster but less thorough. -/
+register_option specimen.shrinkBreadth : Nat := {
+  defValue := 8
+  descr := "max shrink candidates considered per variable/step (bounds cartesian products)"
+}
+
+/-- Maximum number of greedy shrink steps (descent depth) per attempt. -/
+register_option specimen.shrinkDepth : Nat := {
+  defValue := 100
+  descr := "max greedy shrink steps (descent depth) per counterexample"
+}
+
 /-- Global flag for enabling/disabling debug messages -/
 def globalDebugFlag : Bool := false
 
