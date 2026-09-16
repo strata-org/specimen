@@ -93,6 +93,14 @@ register_option specimen.shrinkDepth : Nat := {
   descr := "max greedy shrink steps (descent depth) per counterexample"
 }
 
+/-- When true, `derive_mutual` logs where its time went: a per-phase breakdown (schedule
+    search, SCC condensation, constraints, codegen, widget/text, Lean's elaboration of the
+    emitted block) plus a codegen-versus-pretty-printing split. Diagnostic only. -/
+register_option specimen.reportPhaseTimers : Bool := {
+  defValue := false
+  descr := "log per-phase timings for derive_mutual"
+}
+
 /-- Global flag for enabling/disabling debug messages -/
 def globalDebugFlag : Bool := false
 
