@@ -60,11 +60,8 @@ Similarly, to return the elements produced from a derived enumerator, users can 
 - True mutual recursion (multiple specs compiled into a shared `mutual` block)
 - Quality scoring and schedule search with branch-and-bound optimization
 
-**Syntax**:
+**Syntax** (`autoDeriveDeps` and `multiOutput` are on by default; set them `false` to opt out):
 ```lean
-set_option specimen.autoDeriveDeps true
-set_option specimen.multiOutput true
-
 -- Derive a constrained generator (default sort is `generator`)
 derive_mutual
   (fun n => ∃ (t : BinaryTree), balancedTree n t)
@@ -87,7 +84,7 @@ derive_mutual
   (∃ (Γ : List type) (e : term) (τ : type), typing Γ e τ)
 ```
 
-Each entry can be prefixed with `generator` (default), `enumerator`, or `checker`. When `specimen.autoDeriveDeps` is `true`, Specimen automatically discovers and derives instances for sub-relations referenced in the constructors. When `specimen.multiOutput` is `true`, the scheduler can produce multiple existential outputs in a single hypothesis step.
+Each entry can be prefixed with `generator` (default), `enumerator`, or `checker`. While `specimen.autoDeriveDeps` is `true` (the default), Specimen automatically discovers and derives instances for sub-relations referenced in the constructors. While `specimen.multiOutput` is `true` (the default), the scheduler can produce multiple existential outputs in a single hypothesis step; set it `false` for relations where no joint producer instance exists for the tupled outputs.
 
 To sample from a generator derived via `derive_mutual`:
 ```lean
@@ -129,57 +126,70 @@ derive_checker (fun n t => balanced n t)
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `specimen.autoDeriveDeps` | `false` | Automatically derive dependency instances for sub-relations in `derive_mutual` |
-| `specimen.multiOutput` | `false` | Allow multi-output production steps (multiple `∃` vars generated per hypothesis) |
-| `specimen.scoreType` | `"Scoring.DefaultScore"` | Scoring strategy for schedule quality evaluation (see below) |
-| `specimen.weightFn` | `"Scoring.balancedCtorWeight"` | Weight function for constructor frequency in derived generators (see below) |
+| `specimen.autoDeriveDeps` | `true` | Automatically derive dependency instances for sub-relations in `derive_mutual` |
+| `specimen.multiOutput` | `true` | Allow multi-output production steps (multiple `∃` vars generated per hypothesis) |
+| `specimen.scoreType` | `"Scoring.BudgetAwareScore"` | Scoring strategy for schedule quality evaluation (see below) |
+| `specimen.weightFn` | `"Scoring.qualityCtorWeight"` | Weight function for constructor frequency in derived generators (see below) |
 | `specimen.weightModifier` | `""` | Optional modifier layered on top of the weight function (see below) |
+| `specimen.precomputeWeights` | `true` | Partially evaluate weight expressions under the `size` binder at elaboration time |
 | `specimen.fuel` | `10000` | Fuel (termination budget) for derived generators/enumerators/checkers |
 | `specimen.richOutput` | `true` | Emit rich HTML widget output in the Lean infoview |
 | `specimen.textOutput` | `0` | Plain-text output verbosity (0=off, 1=summary, 2=problems, 3=full) |
 | `specimen.silent` | `false` | Suppress all informational derivation output (`Try this:` suggestions and `derive_mutual` widgets/text). Instances are still installed |
 | `specimen.searchLimit` | `200000` | Max hypothesis orderings to evaluate per constructor during schedule search |
+| `specimen.reportParallelCeiling` | `false` | Log the parallelism ceiling (total vs critical-path self-time) after `derive_mutual` |
+| `specimen.shrink` | `true` | Enable counterexample shrinking in `specimen_test` / `specimen` |
+| `specimen.shrinkBreadth` | `8` | Max shrink candidates considered per variable/step |
+| `specimen.shrinkDepth` | `100` | Max greedy shrink steps per counterexample |
 
 **Scoring strategies** control how Specimen evaluates and selects among candidate schedules during derivation. The `specimen.scoreType` option selects the active strategy:
 
 | Strategy | Option value | Description |
 |----------|-------------|-------------|
-| Default | `"Scoring.DefaultScore"` | Sum of (checks, length, unconstrained) — the original heuristic. Minimizes total checking work. |
-| Worst-leaf | `"Scoring.WorstLeafScore"` | Takes the max (not sum) across coverage-trie leaves — penalizes worst-case input paths. |
+| Budget-aware | `"Scoring.BudgetAwareScore"` | **Default.** Input-aware grading plus call locality: self-recursion shares the size budget (cheap), while a call to a different mode of the same relation invokes a separate instance (expensive, may cascade). |
+| Source-quality | `"Scoring.SourceQualityScore"` | Tracks per-variable provenance across steps — `SuchThat`-produced vars carry their dep's density, `Unconstrained` vars carry maximum penalty. |
+| Input-aware graded | `"Scoring.InputAwareGradedScore"` | Graded uniform density plus a penalty for checks whose generated variables overlap the inputs (generate-then-verify patterns). |
+| Bounded graded | `"Scoring.BoundedGradedScore"` | Refines graded uniform density with a bounded metric. |
+| Graded uniform density | `"Scoring.GradedUniformDensityScore"` | Uniform density with two-axis check severity. |
+| Uniform density | `"Scoring.UniformDensityScore"` | Density analysis without checker inversion. |
 | Density | `"Scoring.DensityScore"` | Categorical density classification (Total/Partial/Backtracking/Checking) from Section 4 of *Testing Theorems, Fully Automatically*. Prefers schedules that avoid backtracking. |
+| Worst-leaf | `"Scoring.WorstLeafScore"` | Takes the max (not sum) across coverage-trie leaves — penalizes worst-case input paths. |
+| Default | `"Scoring.DefaultScore"` | Sum of (checks, length, unconstrained) — the original heuristic. Minimizes total checking work. Deliberately blind to sub-relation cost, so it is a structural baseline rather than a recommended production setting. |
+| Dep-aware default | `"Scoring.DepAwareDefaultScore"` | `DefaultScore` plus transitive sub-relation cost folded in from the memo. Sensitive to dependency cost, but the metric grows geometrically with dependency depth and is therefore unbounded. |
 
-For example, to use the density scoring strategy from the *Testing Theorems* paper:
+For example, to pin the density scoring strategy from the *Testing Theorems* paper:
 ```lean
 set_option specimen.scoreType "Scoring.DensityScore"
 derive_mutual
   (fun lo hi => ∃ (t : BinaryTree), BST lo hi t)
 ```
 
-See [`ScheduleQualityRegressionTest.lean`](./SpecimenTest/ScheduleQualityRegressionTest.lean) for a comparison of all three strategies on the same relation.
+See [`ScheduleQualityRegressionTest.lean`](./SpecimenTest/ScheduleQualityRegressionTest.lean) for a comparison of strategies on the same relation.
 
 **Weight functions** control how often each constructor is chosen at runtime by the backtracking combinator. The `specimen.weightFn` option selects the active weight function. A weight function has the signature:
 
 ```
-CtorWeightFn := Name → List Nat → DeriveSort → Float → Bool → Nat → Nat → Nat → Nat
+CtorWeightFn := Name → List Nat → DeriveSort → Nat → Bool → Nat → Nat → Nat → Nat → Nat
 ```
 
-Arguments: `(ctorName, outputIndices, deriveSort, scoreBadness, isRec, size, numBase, numRec) → weight`
+Arguments: `(ctorName, outputIndices, deriveSort, scoreBadness, isRec, size, numBase, numRec, numRecCalls) → weight`
 - `ctorName`: the fully qualified name of the constructor (e.g. `` `List.cons ``).
 - `outputIndices`: the output position indices for this derivation.
 - `deriveSort`: whether we are deriving a `Generator`, `Enumerator`, `Checker`, or `Theorem`.
-- `scoreBadness`: a [0,1] float from the scorer indicating schedule quality for this constructor (0 = best, 1 = worst). Computed at elaboration time and baked in as a literal.
+- `scoreBadness`: schedule quality for this constructor as a per-mille `Nat` in `0..1000` (0 = best, 1000 = worst). Computed at elaboration time and baked in as a `Nat` literal (rather than a `Float`) so the weight application reduces cleanly. Bucket boundaries that were `0.25 / 0.5 / 0.75` in float terms are `250 / 500 / 750` here.
 - `isRec`: whether this constructor is recursive.
 - `size`: the current generation size parameter (decreases as the generator recurses deeper).
 - `numBase` / `numRec`: counts of base vs recursive constructors for this inductive.
+- `numRecCalls`: the number of size-consuming (recursive / same-inductive) calls made in this constructor's schedule (e.g. a binary-tree `node` ctor has 2). Computed at elaboration time and baked in as a literal — useful for penalizing high-fan-out constructors.
 
 The return value is a `Nat` weight — the backtracking combinator picks constructors proportionally to their weights. The `ctorName`, `outputIndices`, and `deriveSort` arguments enable per-constructor and per-mode weight overrides without needing to write a separate weight function for each type.
 
 | Weight function | Option value | Description |
 |----------------|-------------|-------------|
-| Balanced | `"Scoring.balancedCtorWeight"` | Controls aggregate P(recursive) with quality bias. Base ctors get a 4x boost. Good default for inductives with many recursive constructors. |
+| Quality-only | `"Scoring.qualityCtorWeight"` | **Default.** No structural bias — maps badness to 1–4, ignores size/recursion. Relies on budget splitting for termination. |
+| Balanced | `"Scoring.balancedCtorWeight"` | Controls aggregate P(recursive) with quality bias. Base ctors get a 4x boost. Good for inductives with many recursive constructors. |
 | Size-proportional | `"Scoring.sizeProportionalCtorWeight"` | `base=1, rec=size+1`. The strategy used by QuickChick. |
 | Score-aware | `"Scoring.scoreAwareCtorWeight"` | Boosts good constructors (low badness 1–4) and applies size-based penalty to recursive ones. |
-| Quality-only | `"Scoring.qualityCtorWeight"` | No structural bias — maps badness to 1–4, ignores size/recursion. Use with budget splitting for termination. |
 | Flat | `"Scoring.flatCtorWeight"` | Every constructor gets weight 1. Ignores everything. |
 | Default | `"Scoring.defaultCtorWeight"` | `base=1, rec=numBase*size/numRec`. Ignores score. |
 
