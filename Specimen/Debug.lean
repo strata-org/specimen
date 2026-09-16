@@ -64,6 +64,15 @@ register_option specimen.silent : Bool := {
   descr := "suppress all informational derivation output (Try this: suggestions, derive_mutual widgets/text)"
 }
 
+/-- When true, each constructor's weight function is reduced under the runtime `size` binder
+    at elaboration time, so the generated code carries a small residual expression in `size`
+    rather than a full weight-function call. Reduction needs the weight and modifier arguments
+    to be kernel-reducible; any failure falls back to the un-reduced call. -/
+register_option specimen.precomputeWeights : Bool := {
+  defValue := false
+  descr := "partially evaluate constructor weight functions under the size binder at elaboration time"
+}
+
 /-- Global flag for enabling/disabling debug messages -/
 def globalDebugFlag : Bool := false
 

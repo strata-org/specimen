@@ -198,7 +198,7 @@ import Specimen
 open Scoring Schedules in
 -- Custom weight function: heavily favor base cases
 def myCtorWeight (ctorName : Name) (outputIndices : List Nat) (deriveSort : DeriveSort)
-    (scoreBadness : Float) (isRec : Bool) (size : Nat) (numBase numRec : Nat) : Nat :=
+    (scoreBadness : Nat) (isRec : Bool) (size : Nat) (numBase numRec : Nat) (numRecCalls : Nat) : Nat :=
   if isRec then
     if size == 0 then 0
     else max 1 (size / (max 1 numRec * 4))
@@ -215,13 +215,13 @@ derive_mutual
 ```lean
 open Scoring Schedules in
 def myTargetedWeight (ctorName : Name) (outputIndices : List Nat) (deriveSort : DeriveSort)
-    (scoreBadness : Float) (isRec : Bool) (size : Nat) (numBase numRec : Nat) : Nat :=
+    (scoreBadness : Nat) (isRec : Bool) (size : Nat) (numBase numRec : Nat) (numRecCalls : Nat) : Nat :=
   -- Give a specific constructor a constant low weight
   if ctorName == ``MyType.ExpensiveCtor then 1
   -- Boost another constructor
   else if ctorName == ``MyType.PreferredCtor then 8
   -- Fall back to the default balanced strategy for everything else
-  else balancedCtorWeight ctorName outputIndices deriveSort scoreBadness isRec size numBase numRec
+  else balancedCtorWeight ctorName outputIndices deriveSort scoreBadness isRec size numBase numRec numRecCalls
 ```
 
 The `set_option ... in` scoping means different derivations in the same file can use different weight functions. After changing the weight function, rederive and recompile your file to produce a generator reflecting the new weights.
@@ -229,8 +229,8 @@ The `set_option ... in` scoping means different derivations in the same file can
 **Weight modifiers.** Instead of replacing the entire weight function, you can layer a modifier on top. A `CtorWeightModifier` receives the base weight (already computed by the active weight function) as its first argument and can transform it — multiply, cap, override, or pass through:
 
 ```
-CtorWeightModifier := Nat → Name → List Nat → DeriveSort → Float → Bool → Nat → Nat → Nat → Nat
-                      (baseWeight, ctorName, outputIndices, deriveSort, scoreBadness, isRec, size, numBase, numRec) → finalWeight
+CtorWeightModifier := Nat → Name → List Nat → DeriveSort → Nat → Bool → Nat → Nat → Nat → Nat → Nat
+                      (baseWeight, ctorName, outputIndices, deriveSort, scoreBadness, isRec, size, numBase, numRec, numRecCalls) → finalWeight
 ```
 
 Example — triple the weight for a preferred constructor, halve an expensive one, leave everything else alone:
@@ -238,8 +238,8 @@ Example — triple the weight for a preferred constructor, halve an expensive on
 ```lean
 open Scoring Schedules in
 def myModifier (baseWeight : Nat) (ctorName : Name) (_outputIndices : List Nat)
-    (_deriveSort : DeriveSort) (_scoreBadness : Float) (_isRec : Bool)
-    (_size : Nat) (_numBase _numRec : Nat) : Nat :=
+    (_deriveSort : DeriveSort) (_scoreBadness : Nat) (_isRec : Bool)
+    (_size : Nat) (_numBase _numRec : Nat) (_numRecCalls : Nat) : Nat :=
   if ctorName == ``MyType.PreferredCtor then baseWeight * 3
   else if ctorName == ``MyType.ExpensiveCtor then baseWeight / 2
   else baseWeight

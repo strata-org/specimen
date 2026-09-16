@@ -688,6 +688,46 @@ def getProducerScheduleForInductiveConstructor
   getScheduleForInductiveRelationConstructor inductiveName ctorName inputNames deriveSort (some outputNamesTypesIndices) unknowns localCtx recFnName depMemo memoRef deriveDep
 
 
+/-- When `specimen.precomputeWeights` is set, partially evaluate a constructor weight
+    expression under the runtime `size` binder. `finalWeight` is a term mentioning the
+    runtime size variable `sizePrimeName` and, otherwise, only literals baked in at
+    elaboration time (the weight/modifier function, ctor name, output indices, derive
+    sort, per-mille badness `Nat`, `isRec`, and the base/rec/rec-call counts).
+
+    We elaborate it with `size` bound to a fresh free variable named `sizePrimeName`,
+    then `simp` it — unfolding the weight/modifier definitions (`unfoldNames`) and
+    running the default simprocs with `decide := true`, which folds away everything that
+    doesn't depend on `size` (quality buckets, name matches, count arithmetic — all closed
+    `Nat`/`Name` literals now that badness is a `Nat`) while preserving `if`/`match`
+    surface structure (unlike `Meta.reduce`, which normalizes a symbolic `if size == 0`
+    into a raw `Bool.rec` that fails to delaborate). We delaborate the residual back to a
+    term. The `size` variable survives only where the original expression used it
+    (delaborated to the same `sizePrimeName` ident, which the surrounding generated code
+    binds); constructors that don't depend on `size` (e.g. base ctors, whose weight uses
+    size `0`) fold to a literal with no `size` reference. The residual is definitionally
+    equal to the input, so it is always well-typed; on the option being off, remaining
+    metavariables, or any elaboration/simp/delaboration failure we return the original
+    term unchanged. -/
+private def precomputeWeight (finalWeight : TSyntax `term) (sizePrimeName : Name)
+    (unfoldNames : List Name) : TermElabM (TSyntax `term) := do
+  unless Lean.Option.get (← getOptions) specimen.precomputeWeights do
+    return finalWeight
+  try
+    withLocalDeclD sizePrimeName (mkConst ``Nat) fun _ => do
+      let e ← Term.elabTermEnsuringType finalWeight (some (mkConst ``Nat))
+      Term.synthesizeSyntheticMVarsNoPostponing
+      let e ← instantiateMVars e
+      if e.hasMVar then return finalWeight
+      let mut thms : SimpTheorems ← getSimpTheorems
+      for n in unfoldNames do
+        thms ← thms.addDeclToUnfold n
+      let ctx ← Simp.mkContext (config := { decide := true }) (simpTheorems := #[thms])
+        (congrTheorems := ← getSimpCongrTheorems)
+      let (r, _) ← simp e ctx (simprocs := #[← Simp.getSimprocs])
+      PrettyPrinter.delab r.expr
+  catch _ =>
+    return finalWeight
+
 /-- Produces an instance of a typeclass for a constrained producer (either `ArbitrarySizedSuchThat` or `EnumSizedSuchThat`).
     The arguments to this function are:
 
@@ -849,15 +889,19 @@ def deriveConstrainedProducer
 
           let isRecursive ← isConstructorRecursive inductiveName ctorName
           let ctorNameLit := Lean.quote ctorName
+          -- Number of size-consuming (recursive / same-inductive) calls in this schedule.
+          let numRecCallsLit := Syntax.mkNumLit (toString (Schedules.countSizeConsumingCalls inductiveName schedule.1))
 
           if isRecursive then
             let subProducerTerm ←
               match producerSort with
               | .Generator =>
-                let baseWeight ← `($weightFnIdent $ctorNameLit $outputIndicesLit $deriveSortLit 0.0 true $freshSize' $numBaseLit $numRecLit)
+                let baseWeight ← `($weightFnIdent $ctorNameLit $outputIndicesLit $deriveSortLit 0 true $freshSize' $numBaseLit $numRecLit $numRecCallsLit)
                 let finalWeight ← match modifierIdent with
                   | none => pure baseWeight
-                  | some modIdent => `($modIdent $baseWeight $ctorNameLit $outputIndicesLit $deriveSortLit 0.0 true $freshSize' $numBaseLit $numRecLit)
+                  | some modIdent => `($modIdent $baseWeight $ctorNameLit $outputIndicesLit $deriveSortLit 0 true $freshSize' $numBaseLit $numRecLit $numRecCallsLit)
+                let finalWeight ← precomputeWeight finalWeight freshSizePrimeName
+                  (weightFnIdent.getId :: (modifierIdent.map (·.getId)).toList)
                 `( ($finalWeight, $subProducer) )
               | .Enumerator => pure subProducer
             recursiveProducers := recursiveProducers.push subProducerTerm
@@ -865,10 +909,12 @@ def deriveConstrainedProducer
             let subGeneratorTerm ←
               match producerSort with
               | .Generator =>
-                let baseWeight ← `($weightFnIdent $ctorNameLit $outputIndicesLit $deriveSortLit 0.0 false 0 $numBaseLit $numRecLit)
+                let baseWeight ← `($weightFnIdent $ctorNameLit $outputIndicesLit $deriveSortLit 0 false 0 $numBaseLit $numRecLit $numRecCallsLit)
                 let finalWeight ← match modifierIdent with
                   | none => pure baseWeight
-                  | some modIdent => `($modIdent $baseWeight $ctorNameLit $outputIndicesLit $deriveSortLit 0.0 false 0 $numBaseLit $numRecLit)
+                  | some modIdent => `($modIdent $baseWeight $ctorNameLit $outputIndicesLit $deriveSortLit 0 false 0 $numBaseLit $numRecLit $numRecCallsLit)
+                let finalWeight ← precomputeWeight finalWeight freshSizePrimeName
+                  (weightFnIdent.getId :: (modifierIdent.map (·.getId)).toList)
                 `( ($finalWeight, $subProducer) )
               | .Enumerator => pure subProducer
             nonRecursiveProducers := nonRecursiveProducers.push subGeneratorTerm
@@ -911,9 +957,13 @@ private def compileWeightedProducer
     let mexp ← MExp.scheduleToMExp schedule (.MId `size) (.MId `initSize) outputType
       (fuelPrimeName := fuelPrimeName) (sizePrimeName := sizePrimeName) (targetInductive := targetInductive)
     MExp.mexpToTSyntax mexp deriveSort)
-  let badnessLit := Syntax.mkScientificLit (toString badness)
+  -- Bake badness as a per-mille `Nat` literal (host-side conversion) so the emitted
+  -- weight application reduces in the kernel; see `Scoring.scaleBadness`.
+  let badnessLit := Syntax.mkNumLit (toString (Scoring.scaleBadness badness))
   let ctorNameLit := Lean.quote ctorName
   let outputIndicesLit := Lean.quote outputIndices
+  -- Number of size-consuming (recursive / same-inductive) calls in this schedule.
+  let numRecCallsLit := Syntax.mkNumLit (toString (Schedules.countSizeConsumingCalls targetInductive schedule.1))
   let deriveSortLit ← match deriveSort with
     | .Generator => `(Schedules.DeriveSort.Generator)
     | .Enumerator => `(Schedules.DeriveSort.Enumerator)
@@ -923,16 +973,18 @@ private def compileWeightedProducer
   | .Generator =>
     let baseWeight ←
       if isRecursive then
-        `($weightFnIdent $ctorNameLit $outputIndicesLit $deriveSortLit $badnessLit true $freshSize' $numBaseLit $numRecLit)
+        `($weightFnIdent $ctorNameLit $outputIndicesLit $deriveSortLit $badnessLit true $freshSize' $numBaseLit $numRecLit $numRecCallsLit)
       else
-        `($weightFnIdent $ctorNameLit $outputIndicesLit $deriveSortLit $badnessLit false 0 $numBaseLit $numRecLit)
+        `($weightFnIdent $ctorNameLit $outputIndicesLit $deriveSortLit $badnessLit false 0 $numBaseLit $numRecLit $numRecCallsLit)
     let finalWeight ← match modifierIdent with
       | none => pure baseWeight
       | some modIdent =>
         if isRecursive then
-          `($modIdent $baseWeight $ctorNameLit $outputIndicesLit $deriveSortLit $badnessLit true $freshSize' $numBaseLit $numRecLit)
+          `($modIdent $baseWeight $ctorNameLit $outputIndicesLit $deriveSortLit $badnessLit true $freshSize' $numBaseLit $numRecLit $numRecCallsLit)
         else
-          `($modIdent $baseWeight $ctorNameLit $outputIndicesLit $deriveSortLit $badnessLit false 0 $numBaseLit $numRecLit)
+          `($modIdent $baseWeight $ctorNameLit $outputIndicesLit $deriveSortLit $badnessLit false 0 $numBaseLit $numRecLit $numRecCallsLit)
+    let finalWeight ← precomputeWeight finalWeight sizePrimeName
+      (weightFnIdent.getId :: (modifierIdent.map (·.getId)).toList)
     `( ($finalWeight, $subProducer) )
   | .Enumerator => pure subProducer
   | .Checker | .Theorem => `(fun (_ : Unit) => $subProducer)
@@ -1746,23 +1798,29 @@ def deriveConstrainedProducerParts
             trace[plausible.deriving.arbitrary] m!"[{repr deriveSort}] {inductiveName} (outputs: {outputIdxsStr}) constructor {ctorName} requires: {requiredInsts}"
           let isRecursive ← (isConstructorRecursive inductiveName ctorName) <||> pure (scheduleUsesMutualCall rewrittenSteps)
           let ctorNameLit := Lean.quote ctorName
+          -- Number of size-consuming (recursive / same-inductive) calls in this schedule.
+          let numRecCallsLit := Syntax.mkNumLit (toString (Schedules.countSizeConsumingCalls inductiveName schedule.1))
           if isRecursive then
             let subProducerTerm ← match producerSort with
               | .Generator =>
-                let baseWeight ← `($weightFnIdent $ctorNameLit $outputIndicesLit $deriveSortLit 0.0 true $freshSize' $numBaseLit $numRecLit)
+                let baseWeight ← `($weightFnIdent $ctorNameLit $outputIndicesLit $deriveSortLit 0 true $freshSize' $numBaseLit $numRecLit $numRecCallsLit)
                 let finalWeight ← match modifierIdent with
                   | none => pure baseWeight
-                  | some modIdent => `($modIdent $baseWeight $ctorNameLit $outputIndicesLit $deriveSortLit 0.0 true $freshSize' $numBaseLit $numRecLit)
+                  | some modIdent => `($modIdent $baseWeight $ctorNameLit $outputIndicesLit $deriveSortLit 0 true $freshSize' $numBaseLit $numRecLit $numRecCallsLit)
+                let finalWeight ← precomputeWeight finalWeight freshSizePrimeName
+                  (weightFnIdent.getId :: (modifierIdent.map (·.getId)).toList)
                 `( ($finalWeight, $subProducer) )
               | .Enumerator => pure subProducer
             recursiveProducers := recursiveProducers.push subProducerTerm
           else
             let subGeneratorTerm ← match producerSort with
               | .Generator =>
-                let baseWeight ← `($weightFnIdent $ctorNameLit $outputIndicesLit $deriveSortLit 0.0 false 0 $numBaseLit $numRecLit)
+                let baseWeight ← `($weightFnIdent $ctorNameLit $outputIndicesLit $deriveSortLit 0 false 0 $numBaseLit $numRecLit $numRecCallsLit)
                 let finalWeight ← match modifierIdent with
                   | none => pure baseWeight
-                  | some modIdent => `($modIdent $baseWeight $ctorNameLit $outputIndicesLit $deriveSortLit 0.0 false 0 $numBaseLit $numRecLit)
+                  | some modIdent => `($modIdent $baseWeight $ctorNameLit $outputIndicesLit $deriveSortLit 0 false 0 $numBaseLit $numRecLit $numRecCallsLit)
+                let finalWeight ← precomputeWeight finalWeight freshSizePrimeName
+                  (weightFnIdent.getId :: (modifierIdent.map (·.getId)).toList)
                 `( ($finalWeight, $subProducer) )
               | .Enumerator => pure subProducer
             nonRecursiveProducers := nonRecursiveProducers.push subGeneratorTerm
