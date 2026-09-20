@@ -30,6 +30,10 @@ derive_generator (fun Γ x => ∃ (τ : type), lookup Γ x τ)
 #guard_msgs(drop info) in
 derive_generator (fun G e => ∃ (t : type), typing G e t)
 -- set_option trace.plausible.deriving.results true
+-- Multi-output scheduling asks for a joint `ArbitrarySizedSuchThat (term × type)` for the
+-- application rule. The `derive_mutual` form above gets it from auto-derive; bare
+-- `derive_generator` has no such mechanism, so pin the option off for this one.
+set_option specimen.multiOutput false in
 #guard_msgs(drop info) in
 #time derive_generator (fun G t => ∃ (e : term), typing G e t)
 

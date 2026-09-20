@@ -144,5 +144,8 @@ derive_enumerator (fun Γ x => ∃ (τ : type), lookup Γ x τ)
 #guard_msgs(drop info) in
 derive_enumerator (fun Γ e => ∃ (τ : type), typing Γ e τ)
 
+-- Multi-output scheduling asks for a joint `EnumSizedSuchThat (term × type)` for the application
+-- rule, which nothing derives; `derive_enumerator` has no auto-derive to supply it.
+set_option specimen.multiOutput false in
 #guard_msgs(drop info) in
 derive_enumerator (fun Γ τ => ∃ (e : term), typing Γ e τ)
