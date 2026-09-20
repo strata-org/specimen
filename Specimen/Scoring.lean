@@ -44,20 +44,37 @@ open Lean Meta Schedules
 -- Weight function type and registry
 ----------------------------------------------
 
+/-- Scale a `[0,1]` badness `Float` to a per-mille `Nat` (0..1000) at elaboration time.
+    We bake weight-function arguments in as `Nat` literals rather than `Float`s so the
+    emitted weight application reduces in the kernel (`Float` comparisons are opaque
+    `@[extern]` primitives and never reduce; `Nat` is GMP-accelerated). The conversion
+    runs host-side in the elaborator, so the `Float` never enters the generated term —
+    only the resulting `Nat` literal does. The `min/max` clamp is defensive (every
+    `Scorable.badness` already returns a value in `[0,1]`), and `Float.toUInt64` maps
+    NaN/negatives to 0 and clamps, making this total. -/
+def scaleBadness (b : Float) : Nat :=
+  (min 1.0 (max 0.0 b) * 1000.0).round.toUInt64.toNat
+
 /-- A weight function computes the runtime frequency weight for a constructor.
     The backtracking combinator picks constructors proportionally to their weights.
 
-    Arguments: (ctorName, outputIndices, deriveSort, scoreBadness, isRec, size, numBase, numRec).
+    Arguments: (ctorName, outputIndices, deriveSort, scoreBadness, isRec, size, numBase, numRec, numRecCalls).
     - ctorName: the fully qualified name of the constructor (e.g. `List.cons)
     - outputIndices: the output position indices for this derivation
     - deriveSort: whether we are deriving a Generator, Enumerator, Checker, or Theorem
-    - scoreBadness: per-constructor quality from the active scorer (0.0 = best, 1.0 = worst).
-      Computed at elaboration time from the schedule search and baked in as a literal.
+    - scoreBadness: per-constructor quality from the active scorer as a per-mille `Nat`
+      in 0..1000 (0 = best, 1000 = worst). Computed at elaboration time from the schedule
+      search (via `scaleBadness`) and baked in as a `Nat` literal so the weight application
+      reduces in the kernel.
     - isRec: whether this constructor is recursive (has a hypothesis referring back to
       the inductive being derived)
     - size: current generation size parameter (decreases as the generator recurses deeper;
       at size=0, most functions return weight 0 or 1 for recursive ctors to force base cases)
     - numBase/numRec: counts of base vs recursive constructors for this inductive
+    - numRecCalls: the number of size-consuming (recursive / same-inductive) calls made in
+      this constructor's schedule (e.g. a binary-tree `node` ctor has 2). Computed at
+      elaboration time via `Schedules.countSizeConsumingCalls` and baked in as a literal.
+      Useful for penalizing constructors that spawn many recursive children (fan-out).
 
     Returns: a Nat weight. Higher weight = chosen more often.
 
@@ -66,11 +83,11 @@ open Lean Meta Schedules
     outputIndices, and deriveSort arguments to override weights for particular constructors
     or modes while falling back to a default for others. See README.md for an example. Use
     `set_option specimen.weightFn "yourFnName" in` to scope it to a specific derivation. -/
-abbrev CtorWeightFn := Name → List Nat → DeriveSort → Float → Bool → Nat → Nat → Nat → Nat
+abbrev CtorWeightFn := Name → List Nat → DeriveSort → Nat → Bool → Nat → Nat → Nat → Nat → Nat
 
 /-- Ignores score; base=1, recursive=numBase*size/numRec. -/
 def defaultCtorWeight (_ctorName : Name) (_outputIndices : List Nat) (_deriveSort : DeriveSort)
-    (_scoreBadness : Float) (isRec : Bool) (size : Nat) (numBase numRec : Nat) : Nat :=
+    (_scoreBadness : Nat) (isRec : Bool) (size : Nat) (numBase numRec : Nat) (_numRecCalls : Nat) : Nat :=
   if isRec then
     if size == 0 then 1
     else max 1 (numBase * size / max 1 numRec)
@@ -79,21 +96,21 @@ def defaultCtorWeight (_ctorName : Name) (_outputIndices : List Nat) (_deriveSor
 /-- Size-proportional weight: base=1, recursive=size+1. Ignores score.
     (This is the strategy used by QuickChick.) -/
 def sizeProportionalCtorWeight (_ctorName : Name) (_outputIndices : List Nat) (_deriveSort : DeriveSort)
-    (_scoreBadness : Float) (isRec : Bool) (size : Nat) (_numBase _numRec : Nat) : Nat :=
+    (_scoreBadness : Nat) (isRec : Bool) (size : Nat) (_numBase _numRec : Nat) (_numRecCalls : Nat) : Nat :=
   if isRec then size + 1 else 1
 
 /-- Flat weight: every constructor gets weight 1. Ignores everything. -/
 def flatCtorWeight (_ctorName : Name) (_outputIndices : List Nat) (_deriveSort : DeriveSort)
-    (_scoreBadness : Float) (_isRec : Bool) (_size : Nat) (_numBase _numRec : Nat) : Nat := 1
+    (_scoreBadness : Nat) (_isRec : Bool) (_size : Nat) (_numBase _numRec : Nat) (_numRecCalls : Nat) : Nat := 1
 
 /-- Score-aware weight: boosts good constructors (low badness) and deprioritizes
     recursive ones. Quality maps to 1–4, recursive ctors get an additional size-based
     penalty so base cases are preferred at small sizes. -/
 def scoreAwareCtorWeight (_ctorName : Name) (_outputIndices : List Nat) (_deriveSort : DeriveSort)
-    (scoreBadness : Float) (isRec : Bool) (size : Nat) (numBase numRec : Nat) : Nat :=
-  let quality := if scoreBadness < 0.25 then 4
-    else if scoreBadness < 0.5 then 3
-    else if scoreBadness < 0.75 then 2
+    (scoreBadness : Nat) (isRec : Bool) (size : Nat) (numBase numRec : Nat) (_numRecCalls : Nat) : Nat :=
+  let quality := if scoreBadness < 250 then 4
+    else if scoreBadness < 500 then 3
+    else if scoreBadness < 750 then 2
     else 1
   if isRec then
     if size == 0 then 1
@@ -105,10 +122,10 @@ def scoreAwareCtorWeight (_ctorName : Name) (_outputIndices : List Nat) (_derive
     size across all recursive ctors (so total rec weight ≈ size * quality).
     Base ctors get a 4x boost so they stay relevant even with many rec branches. -/
 def balancedCtorWeight (_ctorName : Name) (_outputIndices : List Nat) (_deriveSort : DeriveSort)
-    (scoreBadness : Float) (isRec : Bool) (size : Nat) (_numBase numRec : Nat) : Nat :=
-  let quality := if scoreBadness < 0.25 then 4
-    else if scoreBadness < 0.5 then 3
-    else if scoreBadness < 0.75 then 2
+    (scoreBadness : Nat) (isRec : Bool) (size : Nat) (_numBase numRec : Nat) (_numRecCalls : Nat) : Nat :=
+  let quality := if scoreBadness < 250 then 4
+    else if scoreBadness < 500 then 3
+    else if scoreBadness < 750 then 2
     else 1
   if isRec then
     if size == 0 then 0
@@ -117,10 +134,10 @@ def balancedCtorWeight (_ctorName : Name) (_outputIndices : List Nat) (_deriveSo
 
 /-- Quality-only weight: no structural bias, budget splitting handles termination. -/
 def qualityCtorWeight (_ctorName : Name) (_outputIndices : List Nat) (_deriveSort : DeriveSort)
-    (scoreBadness : Float) (_isRec : Bool) (_size : Nat) (_numBase _numRec : Nat) : Nat :=
-  if scoreBadness < 0.25 then 4
-  else if scoreBadness < 0.5 then 3
-  else if scoreBadness < 0.75 then 2
+    (scoreBadness : Nat) (_isRec : Bool) (_size : Nat) (_numBase _numRec : Nat) (_numRecCalls : Nat) : Nat :=
+  if scoreBadness < 250 then 4
+  else if scoreBadness < 500 then 3
+  else if scoreBadness < 750 then 2
   else 1
 
 structure WeightFnEntry where
@@ -152,13 +169,15 @@ initialize registerWeightFn `Scoring.qualityCtorWeight qualityCtorWeight ``quali
 
     Return the final weight. To pass through unchanged, just return `baseWeight`.
     To override for specific constructors, match on `ctorName`. To scale, multiply
-    `baseWeight`. -/
-abbrev CtorWeightModifier := Nat → Name → List Nat → DeriveSort → Float → Bool → Nat → Nat → Nat → Nat
+    `baseWeight`. The trailing `numRecCalls` argument mirrors `CtorWeightFn`: it is the
+    number of size-consuming (recursive / same-inductive) calls in this constructor's
+    schedule. -/
+abbrev CtorWeightModifier := Nat → Name → List Nat → DeriveSort → Nat → Bool → Nat → Nat → Nat → Nat → Nat
 
 /-- Identity modifier: returns the base weight unchanged. -/
 def idWeightModifier (baseWeight : Nat) (_ctorName : Name) (_outputIndices : List Nat)
-    (_deriveSort : DeriveSort) (_scoreBadness : Float) (_isRec : Bool) (_size : Nat)
-    (_numBase _numRec : Nat) : Nat :=
+    (_deriveSort : DeriveSort) (_scoreBadness : Nat) (_isRec : Bool) (_size : Nat)
+    (_numBase _numRec : Nat) (_numRecCalls : Nat) : Nat :=
   baseWeight
 
 structure WeightModifierEntry where

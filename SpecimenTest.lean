@@ -29,6 +29,7 @@ import SpecimenTest.DeriveArbitrarySuchThat.DependentOutputTypeTest
 import SpecimenTest.DeriveArbitrarySuchThat.InstanceParameterTest
 import SpecimenTest.DeriveArbitrarySuchThat.NEqGenerator
 import SpecimenTest.DeriveArbitrarySuchThat.MissingNonRecursiveConstructorTest
+import SpecimenTest.DeriveArbitrarySuchThat.ForwardRefListGenerator
 
 -- Tests for `deriving Arbitrary`
 import SpecimenTest.DeriveArbitrary.DeriveTreeGenerator
@@ -108,6 +109,7 @@ import SpecimenTest.ScheduleQualityRegressionTest
 
 -- Weight function / modifier customization tests
 import SpecimenTest.WeightCustomizationTest
+import SpecimenTest.WeightPrecomputeTest
 
 -- `specimen.silent` output-suppression option tests
 import SpecimenTest.SilentOptionTest
