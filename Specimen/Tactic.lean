@@ -254,7 +254,12 @@ unsafe def elabSpecimenTest : CommandElab := fun stx => do
       let testExpr ← buildTestExpr varNames varTypes checkerIdent shrinksIdent diagIdent
         minSize maxSize numTests richOutput seed (configuredSeed == 0)
 
-      let e ← liftTermElabM <| Term.elabTerm testExpr none
+      -- Synthesize pending instance/default metavariables and instantiate before evaluating: `evalExpr`
+      -- rejects a term with metavariables, and since Lean v4.34 `elabTerm` leaves them postponed.
+      let e ← liftTermElabM do
+        let e ← Term.elabTerm testExpr none
+        Term.synthesizeSyntheticMVarsNoPostponing
+        instantiateMVars e
       let expectedType ← liftTermElabM <| inferType e
       let action ← liftTermElabM <| unsafe Lean.Meta.evalExpr
         (IO (String × Nat × List (String × List (String × String × String)))) expectedType e
