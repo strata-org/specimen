@@ -171,3 +171,6 @@ import SpecimenTest.Interp.InstanceLeavesTest
 -- …and follow blame from a measured rejection to the premises that could be reordered, including up into
 -- the caller when the inputs are what decided it
 import SpecimenTest.Interp.BlameTest
+-- …and diagnose a constructor that rarely succeeds: localize its failing step, trace a blind choice to the
+-- premise that made it, and try the anchor move and size floor the diagnosis names
+import SpecimenTest.Interp.DiagnoseTest
