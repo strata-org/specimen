@@ -308,6 +308,43 @@ partial def classifyAppArgs (e : Expr) : MetaM (List ConstructorExpr) := do
 
 end
 
+/-- Whether a constant denotes a **type** rather than a function that produces a value. -/
+def isTypeValuedConst (f : Name) : MetaM Bool := do
+  let some info := (← getEnv).find? f | return false
+  Meta.forallTelescopeReducing info.type fun _ result => return result.isSort
+
+/-- Reclassifies an application of a *type* as a `TyCtor` rather than a `FuncApp`.
+
+    `exprToConstructorExpr` reports any constant application it does not recognise as a constructor as a
+    `FuncApp`. That is right for `f x` and wrong for a type, and the difference is load-bearing:
+    `isTypeLevel` counts a `TyCtor` as carrying no runtime value, so `valueArgs` drops it, while a
+    `FuncApp` is a value-level argument that something has to produce.
+
+    Cedar's `Attr` is the case that matters. It is `abbrev Attr := String`, so `Map.mk`'s first *type*
+    argument reifies as `FuncApp Attr []`; `hasFuncApp` then sees a function application in the
+    conclusion, and `CtorSpec.linearize` lifts a **type** argument into a fresh *value* variable with an
+    `unk_2 = Attr` premise. Nothing can generate a value for a type, so every plan that pre-generates it
+    is unrunnable — which was the entirety of `Lub.record`'s plan space, three spurious variables and
+    three spurious equality premises deep. Classifying it correctly means no fresh variable is minted at
+    all, and the conclusion stays matchable.
+
+    **The compile-time deriver had the same bug, and it cost more there.** `containsFunctionCall`
+    recurses into constructor arguments, so `MapNotContainsKey a (Map.mk Attr _ rty)` looked like it
+    contained a function call; the map argument was forced to be bound first, and `rty` was generated
+    *unconstrained* — a random attribute list — instead of being produced by `MapNotContainsKey` and
+    destructured. On Cedar's `HasType` that affected every premise over a `Map`/`Set` keyed by `Attr`,
+    and was the largest single class of disagreement between the interpreter's lowering of the deriver's
+    own premise order and the schedule the deriver emitted. Applied inside `exprToHypothesisExpr` so the
+    two sides share one classification. -/
+partial def retypeTypeApps (e : ConstructorExpr) : MetaM ConstructorExpr := do
+  match e with
+  | .FuncApp f args =>
+    let args' ← args.mapM retypeTypeApps
+    if ← isTypeValuedConst f then return .TyCtor f args' else return .FuncApp f args'
+  | .Ctor c args => return .Ctor c (← args.mapM retypeTypeApps)
+  | .TyCtor c args => return .TyCtor c (← args.mapM retypeTypeApps)
+  | other => return other
+
 /-- Converts an `Expr` to a `HypothesisExpr` if it is a variable or application of type constructor or function to constructor expressions else throws.
   We also pass in the current constructor name, as a poor person's location info.
  -/
@@ -320,7 +357,7 @@ def exprToHypothesisExpr (ctor : Name) (e : Expr) : MetaM HypothesisExpr := do
     let env ← getEnv
     if env.isConstructor ctorName then throwError m!"exprToHypothesisExpr: In constructor {ctor}\nExpr {e} cannot have head term {ctorName} which is a constructor. Must be a function or inductive"
     let constructorArgs ← args.mapM exprToConstructorExpr
-    return (ctorName, constructorArgs.toList)
+    return (ctorName, ← constructorArgs.toList.mapM retypeTypeApps)
   else if e.isFVar then
     let name ← e.fvarId!.getUserName
     return (name, [])

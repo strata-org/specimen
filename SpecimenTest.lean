@@ -126,6 +126,8 @@ import SpecimenTest.SeededRunTest
 import SpecimenTest.InputFreeDeriveMutualTest
 -- `n + k` indices are matched as `Nat.succ` patterns, not solved by enumeration
 import SpecimenTest.ArithIndexTest
+-- …and a type abbreviation used as a type argument is a type, not a function call
+import SpecimenTest.TypeAbbrevArgTest
 
 -- `specimen_test` command / `specimen` tactic
 import SpecimenTest.TacticTest
