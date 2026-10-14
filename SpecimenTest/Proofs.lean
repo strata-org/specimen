@@ -8,3 +8,13 @@ import Specimen.Correctness.GenInterpSPMF
 import Specimen.Correctness.EvGenSPMF
 -- `Producer` is shared across kinds, and the kinds stay distinct
 import SpecimenTest.Correctness.ProducerKindSharing
+-- The derived STLC producers proved sound and complete, directly against the emitted code
+-- (each runs its own `derive_mutual`, namespaced so flag-on builds cannot collide)
+import SpecimenTest.Correctness.StlcMeasures
+import SpecimenTest.Correctness.StlcGeneratorSoundness
+import SpecimenTest.Correctness.StlcCompleteness
+-- …and the same results through the generic interpreter, bridged to the emitted definitions
+import SpecimenTest.Correctness.DerivedGeneratorViaInterp
+import SpecimenTest.Correctness.TypingBridge
+-- …and the three-valued verdict discipline: an inconclusive premise never becomes a refutation
+import SpecimenTest.Correctness.VerdictFidelity
