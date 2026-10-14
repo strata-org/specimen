@@ -188,3 +188,5 @@ import SpecimenTest.PolymorphicDepConstraints
 
 -- Soundness and completeness proofs for derived producers (Computing Correctly with Inductive Relations)
 import Specimen.Correctness
+-- …and the checker `derive_checker` really emits, proved sound through the generic two-counter theory
+import SpecimenTest.Correctness.DerivedCheckerSoundness
