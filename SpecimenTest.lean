@@ -185,3 +185,6 @@ import SpecimenTest.BasaltEmissionTest
 import SpecimenTest.BasaltNotImportedTest
 -- Constraint propagation for polymorphic dependencies (issue #38)
 import SpecimenTest.PolymorphicDepConstraints
+
+-- Soundness and completeness proofs for derived producers (Computing Correctly with Inductive Relations)
+import Specimen.Correctness
