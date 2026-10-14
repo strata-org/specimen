@@ -12,8 +12,9 @@ name = "SpecimenTest"
 
 [[lean_lib]]
 name = "Specimen"
-# `Specimen.Interp` is opt-in, not imported by `Specimen`, so it is a root of its own.
-roots = ["Specimen", "Specimen.Interp"]
+# `Specimen.Interp` and `Specimen.Basalt` are opt-in, not imported by `Specimen`, so they are roots of
+# their own.
+roots = ["Specimen", "Specimen.Interp", "Specimen.Basalt"]
 
 [[require]]
 name = "batteries"
