@@ -395,10 +395,6 @@ def traverse [Applicative F] (f : α → F β) : List α → F (List β)
   | x :: xs => List.cons <$> f x <*> traverse f xs
 
 
-/-- Converts a list of options to an optional list
-    (akin to Haskell's `sequence`) -/
-def sequence (xs : List (Option α)) : Option (List α) := traverse id xs
-
 /-- Helper function for splitting a list of triples into a triple of lists -/
 def splitThreeLists (abcs : List (α × β × γ)) : List α × List β × List γ :=
   match abcs with
