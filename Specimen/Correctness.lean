@@ -5,6 +5,7 @@ import Specimen.Correctness.CheckerInterp
 import Specimen.Correctness.ProducerInterp
 import Specimen.Correctness.GenAxioms
 import Specimen.Correctness.GenInterp
+import Specimen.Correctness.EvSlice
 
 /-!
 # `Specimen.Correctness`
@@ -23,6 +24,8 @@ Modules:
 * `GenInterp` — the same for generators at the real `Plausible.Gen`: soundness, with no axioms.
 * `GenAxioms` — two QuickChick-style support laws for `Plausible.Gen`, postulated; see the file for why
   they are an idealization and which results use them.
+* `EvSlice` — evenness end to end: checker, enumerator and generator proved sound and complete, and
+  `Ev` reflected as a `RelSpec`.
 
 Not imported by `Specimen`: the development is built by the test library.
 -/
