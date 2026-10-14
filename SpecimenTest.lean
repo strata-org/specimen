@@ -163,3 +163,8 @@ import SpecimenTest.Interp.FromCompiledTest
 -- …and certify that the compiled start really runs what the deriver emitted, with a comparator that can
 -- call two equivalent schedules different but never two different ones the same
 import SpecimenTest.Interp.ScheduleEquivTest
+-- …and keep the interpreter's hand-registered leaves in step with the instances Lean can synthesise,
+-- since drifting either way makes a plan measurable here and unemittable there
+import SpecimenTest.Interp.CorrespondenceTest
+-- …and resolve leaves from the instances in scope, so the interpreter measures the compiled generator
+import SpecimenTest.Interp.InstanceLeavesTest
