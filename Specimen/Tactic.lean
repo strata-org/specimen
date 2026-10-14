@@ -211,7 +211,14 @@ unsafe def elabSpecimenTest : CommandElab := fun stx => do
       let defName ← liftTermElabM (Lean.Core.mkFreshUserName `specimen_theorem_checker)
       let varNames := varNamesTypes.map Prod.fst
       let varTypes := varNamesTypes.map Prod.snd
-      let defCmd ← withScope (fun scope => { scope with opts := scope.opts.set `specimen.multiOutput true }) do
+      -- The theorem checker is a Plausible-shaped harness: it runs in `Plausible.Gen` and reports
+      -- through `Plausible.Testable`. So it must look sub-producers up through
+      -- `ArbitrarySizedSuchThat`, not `BacktrackGenFor`, even when the *generators* it calls were
+      -- emitted against Basalt — `Specimen.BasaltBridge`'s blanket instance is what joins the two.
+      -- Without this override the harness emits `BacktrackGenFor.gen …` into a `Plausible.Gen`
+      -- position and fails to typecheck.
+      let defCmd ← withScope (fun scope => { scope with
+          opts := (scope.opts.set `specimen.multiOutput true).set `specimen.emitBasalt false }) do
         liftTermElabM <| compileTheoremDef steps sort (mkSort .zero) defName varNames varTypes
       let theoremCodeStr ← liftTermElabM <| try
         let fmt ← Lean.PrettyPrinter.ppCommand defCmd
