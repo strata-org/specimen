@@ -45,3 +45,25 @@ rev = "106ff4fafc74ef4ac99d81dbf3ab399118f497a5"
 name = "basalt"
 git = "https://github.com/hgoldstein95/basalt"
 rev = "a6a783526afd1642792dda1863705dd37113160e"
+
+# Benchmarks, in `bench/`. `lake build Bench` compiles them; nothing runs them by default. Each has an
+# executable for timing compiled code. See bench/README.md.
+[[lean_lib]]
+name = "Bench"
+srcDir = "bench"
+globs = ["Bench.+"]
+
+[[lean_exe]]
+name = "bench-same-discipline"
+srcDir = "bench"
+root = "Bench.GradedVsDerivedSameDiscipline"
+
+[[lean_exe]]
+name = "bench-concat-ablation"
+srcDir = "bench"
+root = "Bench.GradedVsDerivedConcatAblation"
+
+[[lean_exe]]
+name = "bench-lazy-levels"
+srcDir = "bench"
+root = "Bench.GradedLazyLevelBenchmark"
