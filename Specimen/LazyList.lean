@@ -40,15 +40,19 @@ def fromList (l : List α) : LazyList α :=
 instance [Repr α] : Repr (LazyList α) where
   reprPrec l _ := repr l.toList
 
-/-- Retrieves a prefix of the `LazyList` (only the thunks in the prefix are evaluated) -/
+/-- Retrieves a prefix of the `LazyList` (only the thunks in the prefix are evaluated).
+
+    `acc` is built up by prepending, so both base cases must reverse it — otherwise the "prefix"
+    comes back in reverse order, disagreeing with `toList` (see `toListAux`) and inverting the
+    small-elements-first ordering that makes an enumeration useful for minimal counterexamples. -/
 def take (n : Nat) (l : LazyList α) : List α := go n l []
   where
   go n l acc :=
   match n with
-  | .zero => acc
+  | .zero => acc.reverse
   | .succ n' =>
     match l with
-    | .lnil => acc
+    | .lnil => acc.reverse
     | .lcons x xs => go n' xs.get (x :: acc)
 
 /-- Get the first element of the list, if there is one. otherwise return `.none`. -/
@@ -185,8 +189,8 @@ instance [Monad m] : ForIn m (LazyList α) α where
           | .yield b' =>
             go l'.get b' f
 
--- Test that take 3 only evaluates first 3 elements
-/--info: First 3: [item2, item1, item0]-/
+-- Test that take 3 only evaluates first 3 elements, and returns them in order
+/--info: First 3: [item0, item1, item2]-/
 #guard_msgs in
 #eval do
   let result : LazyList String :=
