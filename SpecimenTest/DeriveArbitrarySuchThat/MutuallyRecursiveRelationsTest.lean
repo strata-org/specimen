@@ -29,6 +29,10 @@ end
 instance : ArbitrarySizedSuchThat Nat (fun n => Odd n) where
   arbitrarySizedST (_ : Nat) := return 1
 
+-- The same producer for `specimen.emitBasalt`, which looks producers up through `BacktrackGenFor`.
+instance : BacktrackGenFor Nat (fun n => Odd n) where
+  gen (_ : Nat) := pure 1
+
 #guard_msgs(drop info) in
 derive_generator ∃ (n : Nat), Even n
 

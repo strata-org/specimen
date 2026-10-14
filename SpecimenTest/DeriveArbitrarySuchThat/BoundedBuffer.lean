@@ -91,6 +91,34 @@ instance instArbitraryString : Arbitrary String where
 -- generates a command freely and then checks `¬ CanStep`.
 deriving instance Arbitrary for BBCmd
 
+/-! ### The same producers for the Basalt path
+
+Under `specimen.emitBasalt` the derived generators look sub-producers up through `BacktrackGenFor` and
+unconstrained values through `Basalt.ArbitraryFueled`, so each hand-written instance above needs a
+twin. Flag off, the instances above win (the bridge from `BacktrackGenFor` is low priority), so the
+Plausible path still exercises them. -/
+
+/-- The nine-letter pool, for the Basalt path. Basalt's own `Arbitrary String` draws random printable
+ASCII, so keys would almost never collide. -/
+local instance instBoundedBufferBasaltArbitraryString : Basalt.ArbitraryFueled String where
+  arbitraryFueled _ := do
+    let i ← chooseNat 0 8
+    pure (["A", "B", "C", "D", "E", "F", "G", "H", "I"].getD i "A")
+
+instance (c : Nat) : BacktrackGenFor (List String) (fun s => WithinCapacity s c) where
+  gen _ := do
+    let n ← chooseNat 0 c
+    (List.range n).mapM fun _ =>
+      BacktrackGen.liftGen (Basalt.ArbitraryFueled.arbitraryFueled (α := String) 0)
+
+/-- `atLeast`, for the Basalt path. -/
+instance atLeastBasalt (n : Nat) : BacktrackGenFor Nat (fun b => n ≤ b) where
+  gen size := do
+    let slack ← chooseNat 0 size
+    pure (n + slack)
+
+deriving instance Basalt.ArbitraryFueled for BBCmd
+
 #guard_msgs(drop info, drop warning) in
 derive_mutual
   (fun i => ∃ t s, SafeBBTrace i t s),

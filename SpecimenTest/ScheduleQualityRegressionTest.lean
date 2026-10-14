@@ -20,6 +20,10 @@ hypotheses alongside recursive hypotheses produced bad schedules.
 
 open Plausible
 
+-- Pinned to the Plausible emission path. The snapshots below assert the text of the emitted code
+-- (`instArbitrarySizedSuchThat…`, `Plausible.Gen (List Nat)`), while what this file tests, the quality of the
+-- schedule the search finds, does not depend on which generator algebra is targeted.
+set_option specimen.emitBasalt false
 -- `Plausible.Gen` is spelled out below: Basalt's root-level `Gen` is in scope through the imports, and
 -- a bare `Gen` is ambiguous under `open Plausible`.
 

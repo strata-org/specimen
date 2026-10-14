@@ -21,6 +21,12 @@ inductive MyContains {α : Type} : α → List α → Prop where
 inductive NotIn {α : Type} : α → List α → Prop where
   | mk : ∀ x xs, ¬ MyContains x xs → NotIn x xs
 
+-- Pinned to the Plausible emission path. The `inferInstance` checks below assert which classes the
+-- deriver demands, spelled `ArbitrarySizedSuchThat α` with a `[Plausible.Arbitrary α]` binder; under
+-- `specimen.emitBasalt` they are `BacktrackGenFor α` and `[Basalt.ArbitraryFueled α]`, and the
+-- constraint propagation under test is the same.
+set_option specimen.emitBasalt false
+
 set_option specimen.autoDeriveDeps true in
 set_option specimen.multiOutput true in
 #guard_msgs(drop info) in

@@ -9,6 +9,10 @@ linter.missingDocs = false
 
 [[lean_lib]]
 name = "SpecimenTest"
+# To build the whole test library against Basalt, uncomment. It has to be library-wide, since a module
+# compiled with the flag off cannot serve one compiled with it on, and `weak.` is required for the modules
+# that never import the option. See Docs/Specimen-Basalt-port.md.
+# leanOptions = { weak.specimen.emitBasalt = true }
 
 [[lean_lib]]
 name = "Specimen"

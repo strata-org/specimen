@@ -22,6 +22,11 @@ final test checks that both generators agree over many deterministic seeds.
 
 open Plausible Scoring Schedules
 
+-- Pinned to the Plausible emission path. The snapshots below assert the text of the emitted code,
+-- while what this file tests, compile-time folding of constructor weights, does not depend on which
+-- generator algebra is targeted.
+set_option specimen.emitBasalt false
+
 inductive PrecompBetween : Nat → Nat → Nat → Prop where
   | here : ∀ lo hi, PrecompBetween lo hi lo
   | there : ∀ lo hi n, PrecompBetween (lo + 1) hi n → PrecompBetween lo hi n
