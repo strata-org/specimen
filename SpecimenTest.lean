@@ -206,3 +206,7 @@ import SpecimenTest.BasaltPort.GradedCarrierComparison
 import SpecimenTest.BasaltPort.GradedStlcAdequacy
 import SpecimenTest.BasaltPort.GradedStlcLazyAdequacy
 import SpecimenTest.BasaltPort.GradedStlcChunkedAdequacy
+-- …and adequacy proved once over rules-as-data, equal to the hand-written STLC result and instantiated at
+-- relations transcribed from Cedar (leaf premises, a recursive one, and a mutual family)
+import SpecimenTest.BasaltPort.GradedRuleAdequacy
+import SpecimenTest.BasaltPort.GradedCedarRuleAdequacy
