@@ -122,6 +122,8 @@ import SpecimenTest.AndOptTest
 import SpecimenTest.DispatchInputsTest
 -- …and seeded generator runs are reproducible
 import SpecimenTest.SeededRunTest
+-- `derive_mutual` on a relation with no inputs: the second weight-emission path
+import SpecimenTest.InputFreeDeriveMutualTest
 
 -- `specimen_test` command / `specimen` tactic
 import SpecimenTest.TacticTest

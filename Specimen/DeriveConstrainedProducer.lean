@@ -1872,8 +1872,10 @@ def deriveConstrainedProducerParts
             trace[plausible.deriving.arbitrary] m!"[{repr deriveSort}] {inductiveName} (outputs: {outputIdxsStr}) constructor {ctorName} requires: {requiredInsts}"
           let isRecursive ← (isConstructorRecursive inductiveName ctorName) <||> pure (scheduleUsesMutualCall rewrittenSteps)
           let ctorNameLit := Lean.quote ctorName
-          -- Number of size-consuming (recursive / same-inductive) calls in this schedule.
-          let numRecCallsLit := Syntax.mkNumLit (toString (Schedules.countSizeConsumingCalls inductiveName schedule.1))
+          -- Number of size-consuming calls, counted on the *rewritten* steps as `compileWeightedProducer`
+          -- does: the mutual rewrite is what turns sibling calls into the recursive calls being counted.
+          let numRecCallsLit :=
+            Syntax.mkNumLit (toString (Schedules.countSizeConsumingCalls inductiveName rewrittenSteps))
           if isRecursive then
             let subProducerTerm ← match producerSort with
               | .Generator =>
