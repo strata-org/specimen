@@ -3,6 +3,14 @@ open Lean
 
 initialize registerTraceClass `plausible.deriving.results
 
+/-- Reports each pinned premise order as the deriver consumes it.
+
+    Pinning is silent on both outcomes that matter: a pin that matches changes the schedule with no
+    other visible sign, and a pin whose `SpecKey` does not match any mode the derivation mints is
+    simply never found. The two are indistinguishable from the output otherwise — so a pin that
+    silently does nothing reads exactly like a pin that worked. -/
+initialize registerTraceClass `specimen.pinnedOrders
+
 /-- Reports every constructor `deriveBestInductiveSchedule` leaves out of a mode, with the reason.
 
     A constructor is dropped in two ways — no schedule found, or an exception while deriving one — and

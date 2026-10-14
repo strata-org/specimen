@@ -154,3 +154,12 @@ import SpecimenTest.Interp.CheckEnumTest
 -- …and never mistake interpreter misconfiguration for a discard: `backtrack` absorbing it hid a rule
 -- that could never run
 import SpecimenTest.Interp.InternalErrorTest
+-- …and transfer a measured premise order back to the compile-time deriver, which only works if the two
+-- lowerings agree step for step
+import SpecimenTest.Interp.PinnedOrderTest
+-- …and start learning from the deriver's own branch-and-bound choice, so what learning changes reads as
+-- a diff against static
+import SpecimenTest.Interp.FromCompiledTest
+-- …and certify that the compiled start really runs what the deriver emitted, with a comparator that can
+-- call two equivalent schedules different but never two different ones the same
+import SpecimenTest.Interp.ScheduleEquivTest

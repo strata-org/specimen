@@ -482,6 +482,14 @@ def getScheduleForInductiveRelationConstructor
     -- Enter the updated `LocalContext` containing the fresh variable that was created when rewriting the conclusion
     withLCtx' updatedLocalCtx (do
       let hypothesisExprs := (← monadLift (updatedHypotheses.toList.mapM (exprToHypothesisExpr ctorName))).toArray
+      -- Where `linearizeAndFlatten`'s non-linearity equalities sit: straight after the declared premises,
+      -- before the function-call equalities. Told apart by their right-hand side — `fresh = original`
+      -- has a variable there, `fresh = f x` an application. Pinned and recorded premise orders are in
+      -- the interpreter's basis, which has no premise for these (see `searchBestScheduleM`).
+      let nonlinearBlock : Nat × Nat :=
+        let tail := (updatedHypotheses.toList.drop hypotheses.size)
+        let isNl := fun (e : Expr) => e.isAppOfArity ``Eq 3 && (e.getArg! 2).isFVar
+        (hypotheses.size, (tail.takeWhile isNl).length)
 
       trace[plausible.deriving.arbitrary] m!"Hypotheses to be ordered as HypothesisExprs: {updatedHypotheses}"
 
@@ -617,7 +625,7 @@ def getScheduleForInductiveRelationConstructor
             (recCall := recCall) (fixedVars := fixedVars) (recFnName := recFnName)
             (multiOutput := multiOutput) (bundle := bundle) (memo := ref)
             (key := key) (limit := limit) (deriveDep := deriveDep)
-            (delegableMap := delegableMap)
+            (delegableMap := delegableMap) (nonlinearBlock := nonlinearBlock)
           match result with
           | some (steps, score, count) => pure (steps, score, count)
           | none => throwError m!"Unable to compute any possible schedules (monadic path)"
