@@ -3,6 +3,8 @@ import Specimen.Interp.Env
 import Specimen.Interp.Gen
 import Specimen.Interp.Validate
 import Specimen.Interp.CheckEnum
+import Specimen.Interp.Bridge
+import Specimen.Interp.Deriving
 
 /-!
 # Interpreting schedules at runtime

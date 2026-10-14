@@ -136,3 +136,7 @@ import SpecimenTest.DroppedCtorsTraceTest
 import SpecimenTest.TacticTest
 
 
+
+-- Runtime schedule interpreter: derive the `Val` bridge, so the interpreter can be pointed at a real
+-- project's own types
+import SpecimenTest.Interp.DerivingTest
