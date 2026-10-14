@@ -135,16 +135,24 @@ def concat (l : LazyList (LazyList α)) : LazyList α :=
 /-- Round-robin concatenation of lazy enumerations: lazily takes one element from the back of each lazy enumeration in turn
     until there are no more to go, then starts at the head of the enumeration of enumerations. -/
 partial def roundRobinConcat (l : LazyList (LazyList α)) : LazyList α :=
-  let rec go (current : LazyList (LazyList α)) (queue : List (LazyList α)) : LazyList α :=
+  -- The queue of partly-consumed enumerations is `front ++ back.reverse`: pop from `front`, push onto
+  -- `back`, and reverse `back` only when `front` runs out. Same order as a single list with `queue ++ [x]`,
+  -- but each push is O(1) instead of a walk of the whole queue — which made combining `n` enumerations
+  -- quadratic. Measured on the derived STLC enumerator at goal `Fun Nat Nat`, budget 9: 403 s with the
+  -- single-list queue (`SpecimenTest/GradedVsDerivedSameDiscipline.lean`).
+  let rec go (current : LazyList (LazyList α)) (front back : List (LazyList α)) : LazyList α :=
     match current with
     | lnil =>
-      match queue with
-      | [] => lnil
-      | q :: qs => go (lcons q ⟨fun _ => lnil⟩) qs
-    | lcons lnil rest => go rest.get queue
+      match front with
+      | q :: qs => go (lcons q ⟨fun _ => lnil⟩) qs back
+      | [] =>
+        match back with
+        | [] => lnil
+        | _ => go lnil back.reverse []
+    | lcons lnil rest => go rest.get front back
     | lcons (lcons a as) rest =>
-      lcons a ⟨fun _ => go rest.get (queue ++ [as.get])⟩
-  go l []
+      lcons a ⟨fun _ => go rest.get front (as.get :: back)⟩
+  go l [] []
 
 /-- Bind for `LazyList`s is just `concatMap` (same as the list monad) -/
 partial def bindLazyList (l : LazyList α) (f : α → LazyList β) : LazyList β :=
@@ -203,3 +211,9 @@ instance [Monad m] : ForIn m (LazyList α) α where
   pure ()
 
 end LazyList
+
+-- Round-robin order on an uneven input, including an empty enumeration: one element from each in turn,
+-- the partly-consumed ones re-queued in order. Pins the order the two-list queue must keep.
+/-- info: [1, 4, 5, 2, 6, 3] -/
+#guard_msgs in
+#eval (LazyList.roundRobinConcat (LazyList.fromList ([[1, 2, 3], [4], [], [5, 6]].map LazyList.fromList))).toList
