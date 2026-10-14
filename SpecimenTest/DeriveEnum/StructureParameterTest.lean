@@ -23,7 +23,7 @@ deriving instance Enum for Bar
 #guard_msgs(drop info) in
 #synth EnumSized (Bar ⟨Bool, Nat⟩)
 
-/-- info: [Bar.mk true 0, Bar.mk false 0] -/
+/-- info: [Bar.mk false 0, Bar.mk true 0] -/
 #guard_msgs in
 #eval (runEnum (α := Bar ⟨Bool, Nat⟩) 0)
 
