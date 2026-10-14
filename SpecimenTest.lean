@@ -201,3 +201,8 @@ import SpecimenTest.BasaltPort.GradedStlcTest
 import SpecimenTest.BasaltPort.GradedArityStressTest
 import SpecimenTest.BasaltPort.GradedDeadEndStressTest
 import SpecimenTest.BasaltPort.GradedCarrierComparison
+-- …and the graded STLC enumeration is exactly `typing` (sound, and complete given covering leaves), on the
+-- strict, lazy and chunked carriers
+import SpecimenTest.BasaltPort.GradedStlcAdequacy
+import SpecimenTest.BasaltPort.GradedStlcLazyAdequacy
+import SpecimenTest.BasaltPort.GradedStlcChunkedAdequacy
