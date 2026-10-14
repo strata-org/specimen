@@ -6,6 +6,7 @@ import Specimen.ArbitrarySizedSuchThat
 import Specimen.DeriveConstrainedProducer
 import Specimen.DeriveArbitrary
 import Specimen.DeriveEnum
+import Specimen.Basalt
 
 /-! # Deriving a Specimen generator for well-typed Strata `LExpr`s
 

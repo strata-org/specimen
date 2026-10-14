@@ -8,6 +8,7 @@
 import Specimen.DeriveConstrainedProducer
 import Plausible.Gen
 import Specimen.ArbitrarySizedSuchThat
+import Specimen.Basalt
 
 open Plausible
 

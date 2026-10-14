@@ -20,6 +20,9 @@ hypotheses alongside recursive hypotheses produced bad schedules.
 
 open Plausible
 
+-- `Plausible.Gen` is spelled out below: Basalt's root-level `Gen` is in scope through the imports, and
+-- a bare `Gen` is ambiguous under `open Plausible`.
+
 set_option guard_msgs.diff true
 set_option linter.unusedVariables false
 set_option match.ignoreUnusedAlts true
@@ -56,9 +59,9 @@ derive_checker (fun xs n => MemNat xs n)
 derive_generator (fun n => ∃ xs, MemNat xs n)
 
 /--
-info: def instArbitrarySizedSuchThatListNatMemNat.aux_arb : Nat → Nat → Nat → Nat → Gen (List Nat) :=
+info: def instArbitrarySizedSuchThatListNatMemNat.aux_arb : Nat → Nat → Nat → Nat → Plausible.Gen (List Nat) :=
 fun fuel initSize size n_1 =>
-  Nat.brecOn (motive := fun fuel => Nat → Gen (List Nat)) fuel
+  Nat.brecOn (motive := fun fuel => Nat → Plausible.Gen (List Nat)) fuel
     (instArbitrarySizedSuchThatListNatMemNat.aux_arb._f initSize n_1) size
 -/
 #guard_msgs in
@@ -97,7 +100,7 @@ private def sizeBucket (d : Nat) : Nat :=
 
 /-- Sample a generator `trials` times, measuring success rate, unique count,
     size distribution, and wall-clock time. -/
-private def sampleQuality (gen : Nat → Gen α) (measure : α → Nat) (eq : α → α → Bool)
+private def sampleQuality (gen : Nat → Plausible.Gen α) (measure : α → Nat) (eq : α → α → Bool)
     (trials : Nat := 200) (size : Nat := 3) : IO QualityStats := do
   let startNs ← IO.monoNanosNow
   let mut stats := emptyStats trials
@@ -223,7 +226,7 @@ derive_mutual (fun lo hi => ∃ t, BST_SourceQuality lo hi t)
 
 #guard_msgs(drop info) in
 #eval do
-  let sample (gen : Nat → Gen BinaryTree) (name : String) : IO Unit := do
+  let sample (gen : Nat → Plausible.Gen BinaryTree) (name : String) : IO Unit := do
     let stats ← sampleQuality gen treeNodeCount
       (fun a b => toString (repr a) == toString (repr b)) 200 100
     IO.println (ppStats name stats)

@@ -4,6 +4,7 @@ import Specimen.DeriveChecker
 import Specimen.DeriveConstrainedProducer
 import Specimen.GeneratorCombinators
 import Specimen.EnumeratorCombinators
+import Specimen.Basalt
 
 open Plausible
 

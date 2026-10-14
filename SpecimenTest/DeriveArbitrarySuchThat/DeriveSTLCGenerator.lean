@@ -5,6 +5,7 @@ import Specimen.ArbitrarySizedSuchThat
 import SpecimenTest.DeriveArbitrary.DeriveSTLCTermTypeGenerators
 import SpecimenTest.DeriveDecOpt.DeriveSTLCChecker
 import Specimen.DeriveConstrainedProducer
+import Specimen.Basalt
 
 /-! Snapshot test: derived constrained generator for well-typed STLC terms. -/
 

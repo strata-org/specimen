@@ -4,6 +4,7 @@ import Specimen.DecOpt
 import Specimen.ArbitrarySizedSuchThat
 import Specimen.DeriveConstrainedProducer
 import Specimen.DeriveArbitrary
+import Specimen.Basalt
 
 /-! Tests for *delegated producers*.
 

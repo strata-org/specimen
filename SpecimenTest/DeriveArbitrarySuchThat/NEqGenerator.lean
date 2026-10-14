@@ -5,6 +5,7 @@ import Specimen.DeriveConstrainedProducer
 import Specimen.DeriveChecker
 import SpecimenTest.CommonDefinitions.BinaryTree
 import Plausible.Attr
+import Specimen.Basalt
 
 /-! Tests for `derive_generator` on inductive relations using disequality (`≠`) constraints. -/
 

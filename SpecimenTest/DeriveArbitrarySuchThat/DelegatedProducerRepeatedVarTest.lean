@@ -3,6 +3,7 @@ import Plausible.Gen
 import Specimen.ArbitrarySizedSuchThat
 import Specimen.DeriveConstrainedProducer
 import Specimen.DeriveArbitrary
+import Specimen.Basalt
 
 /-! # Delegated producers and *repeated variables* in the equality premise.
 

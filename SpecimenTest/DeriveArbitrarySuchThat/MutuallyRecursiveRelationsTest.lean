@@ -2,6 +2,7 @@ import Plausible.Arbitrary
 import Specimen.ArbitrarySizedSuchThat
 import Specimen.DeriveConstrainedProducer
 import Plausible.Gen
+import Specimen.Basalt
 
 /-! Tests for `derive_generator` on mutually recursive inductive relations (`Even`/`Odd`). -/
 

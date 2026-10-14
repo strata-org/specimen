@@ -6,6 +6,7 @@ import Specimen.DeriveChecker
 import Specimen.DeriveConstrainedProducer
 import Specimen.EnumeratorCombinators
 import SpecimenTest.CommonDefinitions.BinaryTree
+import Specimen.Basalt
 
 /-! Test: `set_option specimen.silent true` suppresses all informational
     derivation output — the `Try this:` suggestions from the single-derive

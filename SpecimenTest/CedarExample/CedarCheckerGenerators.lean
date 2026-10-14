@@ -8,6 +8,7 @@ import Specimen.DeriveChecker
 import Specimen.DeriveConstrainedProducer
 import Specimen.DeriveEnum
 import Plausible.Attr
+import Specimen.Basalt
 
 /-! Derived checkers and generators for Cedar term typing, schema well-formedness, and related relations. -/
 

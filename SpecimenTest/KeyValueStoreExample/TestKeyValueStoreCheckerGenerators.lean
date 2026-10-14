@@ -7,6 +7,7 @@ import Specimen.DeriveConstrainedProducer
 import Specimen.EnumeratorCombinators
 import Specimen.GeneratorCombinators
 import Plausible.Attr
+import Specimen.Basalt
 
 /-! Derived checkers and generators for the key-value store inductive relations defined in `KeyValueStore.lean`. -/
 

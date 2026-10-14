@@ -1,4 +1,5 @@
 import Specimen
+import Specimen.Basalt
 
 /-!
 # `specimen.dispatchInputs`: a derived generator skips constructors its inputs cannot match

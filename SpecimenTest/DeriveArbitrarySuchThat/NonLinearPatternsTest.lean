@@ -3,6 +3,7 @@ import Specimen.DecOpt
 import Specimen.ArbitrarySizedSuchThat
 import Specimen.DeriveConstrainedProducer
 import SpecimenTest.CommonDefinitions.BinaryTree
+import Specimen.Basalt
 
 /-! Tests for `derive_generator` on inductive relations with non-linear (repeated variable) patterns. -/
 

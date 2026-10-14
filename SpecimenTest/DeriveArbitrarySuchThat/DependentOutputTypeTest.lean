@@ -1,6 +1,7 @@
 import Specimen.DeriveConstrainedProducer
 import Specimen.DeriveArbitrary
 import Plausible.Arbitrary
+import Specimen.Basalt
 
 open Plausible
 

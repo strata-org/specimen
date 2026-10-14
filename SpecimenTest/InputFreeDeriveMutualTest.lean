@@ -1,4 +1,5 @@
 import Specimen
+import Specimen.Basalt
 
 /-!
 # Regression: `derive_mutual` on relations with **no inputs**

@@ -2,6 +2,7 @@ import Specimen
 import Plausible
 import SpecimenTest.CommonDefinitions.STLCDefinitions
 import Specimen.Scoring
+import Specimen.Basalt
 
 open Specimen.Tactic
 open Plausible
