@@ -142,8 +142,11 @@ derive_checker (fun n t => balanced n t)
 | `specimen.shrink` | `true` | Enable counterexample shrinking in `specimen_test` / `specimen` |
 | `specimen.shrinkBreadth` | `8` | Max shrink candidates considered per variable/step |
 | `specimen.shrinkDepth` | `100` | Max greedy shrink steps per counterexample |
+| `specimen.emitBasalt` | `false` | Emit derived generators against Basalt's `BacktrackGen` algebra instead of Plausible's `Gen` (requires `import Specimen.Basalt`; see below) |
 
 Deriving decisions can be traced: `set_option trace.specimen.droppedCtors true` reports the constructors a mode was derived without (no schedule found, or unsatisfiable inputs), which otherwise vanish silently from the derived producer.
+
+With `set_option specimen.emitBasalt true` (library-wide: `-Dweak.specimen.emitBasalt=true`), derived generators target [Basalt](https://github.com/hgoldstein95/basalt)'s `BacktrackGen` algebra, whose semantics carry the correctness proofs: failure is a value (`refute`/`exhaust`) rather than an exception, and the worker is polymorphic in the underlying `Gen`. The emitting file must `import Specimen.Basalt` (opt-in, like the interpreter). The port, the emitted shapes, and the pitfalls are described in [Docs/Specimen-Basalt-port.md](./Docs/Specimen-Basalt-port.md).
 
 **Scoring strategies** control how Specimen evaluates and selects among candidate schedules during derivation. The `specimen.scoreType` option selects the active strategy:
 
