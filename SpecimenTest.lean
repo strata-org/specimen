@@ -147,3 +147,10 @@ import SpecimenTest.Interp.NonLinearConclusionTest
 import SpecimenTest.Interp.ProvenanceTest
 -- …and derive the `Val` bridge, so the interpreter can be pointed at a real project's own types
 import SpecimenTest.Interp.DerivingTest
+-- …and learn a whole generator from where it discards, stopping at the irreducible
+import SpecimenTest.Interp.LearnTest
+-- …and interpret the other two producer sorts (checker, enumerator) end-to-end
+import SpecimenTest.Interp.CheckEnumTest
+-- …and never mistake interpreter misconfiguration for a discard: `backtrack` absorbing it hid a rule
+-- that could never run
+import SpecimenTest.Interp.InternalErrorTest

@@ -8,6 +8,7 @@ import Specimen.Interp.Deriving
 import Specimen.Interp.Preschedule
 import Specimen.Interp.Extract
 import Specimen.Interp.Runner
+import Specimen.Interp.Learn
 
 /-!
 # Interpreting schedules at runtime
@@ -40,6 +41,7 @@ derives any mode a reordering asks for. Nothing recompiles.
 | `Interp.Preschedule` | `RelSpec`/`CtorSpec` (a relation as data), `reschedule` (plan → schedule), `deriveMode`/`deriveClosure` (bring up the modes a plan needs), and the plan mutations |
 | `Interp.Extract` | `#specimen_relspec` / `derive_relspec`: read a real inductive and get its `RelSpec`, so nothing has to be written by hand |
 | `Interp.Runner` | `sample`, `profileCtor`, `sweepPlans`, `tunePlan`: the experiment loop that makes two plans comparable |
+| `Interp.Learn` | `PlanBook`, `closureStats`, `rootCauses`, `learnSchedules`: the closure-wide loop, with blame pushed down through call frames and a fixpoint to stop at |
 
 ## A session
 
