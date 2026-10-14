@@ -26,6 +26,11 @@ Modules:
   they are an idealization and which results use them.
 * `EvSlice` — evenness end to end: checker, enumerator and generator proved sound and complete, and
   `Ev` reflected as a `RelSpec`.
+* `GenInterpSPMF` / `EvGenSPMF` — the generator interpreter again, at Basalt's `SPMF`: soundness
+  **and** completeness with no generator axioms (the support laws are theorems there), and the `Ev`
+  slice closed through it. NOT imported here: `SPMF` sits on Mathlib, whose root-level names clash
+  with this test suite's at an import join, so the SPMF development is built from the separate
+  `SpecimenTest.Proofs` root instead.
 
 Not imported by `Specimen`: the development is built by the test library.
 -/
