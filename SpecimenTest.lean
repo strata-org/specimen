@@ -137,6 +137,13 @@ import SpecimenTest.TacticTest
 
 
 
--- Runtime schedule interpreter: derive the `Val` bridge, so the interpreter can be pointed at a real
--- project's own types
+-- Runtime schedule interpreter: derive a mode from data, reorder premises, profile the discards
+import SpecimenTest.Interp.BSTInterpTest
+-- …and read the relation-as-data straight off the declaration with `derive_relspec`
+import SpecimenTest.Interp.ExtractTest
+-- …and keep a variable repeated inside one conclusion argument linear, as the deriver does
+import SpecimenTest.Interp.NonLinearConclusionTest
+-- …and attribute a discard to the premise that emitted it in the schedule actually installed
+import SpecimenTest.Interp.ProvenanceTest
+-- …and derive the `Val` bridge, so the interpreter can be pointed at a real project's own types
 import SpecimenTest.Interp.DerivingTest
