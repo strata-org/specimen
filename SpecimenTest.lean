@@ -124,6 +124,8 @@ import SpecimenTest.DispatchInputsTest
 import SpecimenTest.SeededRunTest
 -- `derive_mutual` on a relation with no inputs: the second weight-emission path
 import SpecimenTest.InputFreeDeriveMutualTest
+-- `n + k` indices are matched as `Nat.succ` patterns, not solved by enumeration
+import SpecimenTest.ArithIndexTest
 
 -- `specimen_test` command / `specimen` tactic
 import SpecimenTest.TacticTest

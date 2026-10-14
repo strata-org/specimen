@@ -267,6 +267,10 @@ def getScheduleSort (conclusion : HypothesisExpr)
 def linearizeAndFlatten
   (hypotheses : Array Expr) (conclusion : Expr) (outputIndices : List Nat) (localCtx : LocalContext) :
   UnifyM (Array Expr × Expr × List (Name × Expr) × LocalContext) := do
+  -- Normalise `n + k` indices to `Nat.succ` chains *before* deciding what is unmatchable, so that an
+  -- index written with arithmetic is matched as a pattern rather than linearized into an equality the
+  -- scheduler can only discharge by enumeration. See `normalizeNatSuccIndices`.
+  let conclusion := normalizeNatSuccIndices conclusion
   -- Phase 1: flatten function calls into fresh unknowns with equality hypotheses
   let funcAppExprs ← collectUnmatchableProperSubterms conclusion
   trace[plausible.deriving.arbitrary] m!"Unmatchable exprs: {funcAppExprs} In conclusion: {conclusion}"

@@ -245,6 +245,47 @@ partial def collectFVarOccurrences (e : Expr) (skipArgIndices : List Nat := []) 
     | _ => acc
   aux e {} true
 
+/-- Rewrite `n + k` on `Nat` (for a literal `k`) into `Nat.succ` applied `k` times.
+
+`n + 1` is `HAdd.hAdd … n 1`, whose head is a **definition**, so `collectUnmatchableSubterms` classes
+it as unmatchable and `linearizeAndFlatten` replaces it with a fresh variable plus an equality
+hypothesis `v = n + 1`. Solving that for `n` means inverting addition, which the scheduler can only do
+by *enumerating* — so a checker derive ends up demanding an `EnumSizedSuchThat` that does not exist.
+`Nat.succ n` is a constructor application and is left alone, matched as a pattern.
+
+The result is that `.succ n` and `n + 1` — the same proposition — do not derive the same things:
+`lookup` is written `.succ n` and derives a checker, `Ev` is written `n + 2` and does not. Normalising
+before linearization removes the distinction. The two forms are definitionally equal, so the rewritten
+expression is still type-correct.
+
+Note this must run *before* `linearizeAndFlatten`; normalising anywhere downstream is too late, because
+the offending subterm has already been replaced by a fresh variable. -/
+private def natAddLit? (e : Expr) : Option (Expr × Nat) :=
+  let (fn, args) := e.getAppFnArgs
+  if fn == ``HAdd.hAdd && args.size == 6 && args[0]!.isConstOf ``Nat then
+    match args[5]!.nat? with
+    | some k => if k == 0 || k > 64 then none else some (args[4]!, k)
+    | none => none
+  else none
+
+private def mkSuccs : Nat → Expr → Expr
+  | 0, base => base
+  | k + 1, base => mkApp (mkConst ``Nat.succ) (mkSuccs k base)
+
+partial def normalizeNatSuccIndices (e : Expr) : Expr :=
+  match natAddLit? e with
+  | some (base, k) => mkSuccs k (normalizeNatSuccIndices base)
+  | none =>
+    match e with
+    | .app f a => .app (normalizeNatSuccIndices f) (normalizeNatSuccIndices a)
+    | .lam n t b i => .lam n (normalizeNatSuccIndices t) (normalizeNatSuccIndices b) i
+    | .forallE n t b i => .forallE n (normalizeNatSuccIndices t) (normalizeNatSuccIndices b) i
+    | .letE n t v b nd =>
+      .letE n (normalizeNatSuccIndices t) (normalizeNatSuccIndices v) (normalizeNatSuccIndices b) nd
+    | .mdata d x => .mdata d (normalizeNatSuccIndices x)
+    | .proj st i x => .proj st i (normalizeNatSuccIndices x)
+    | _ => e
+
 /-`collectUnmatchableSubterms` traverses an expression from top down until it finds anything except a constructor application
 or a variable or an inductive. It collects all such subterms. These subterms we cannot match on during unifications so we
 turn them later into equality constraints. -/
