@@ -168,3 +168,6 @@ import SpecimenTest.Interp.ScheduleEquivTest
 import SpecimenTest.Interp.CorrespondenceTest
 -- …and resolve leaves from the instances in scope, so the interpreter measures the compiled generator
 import SpecimenTest.Interp.InstanceLeavesTest
+-- …and follow blame from a measured rejection to the premises that could be reordered, including up into
+-- the caller when the inputs are what decided it
+import SpecimenTest.Interp.BlameTest
