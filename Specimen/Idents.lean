@@ -93,6 +93,46 @@ def genErrorType : Ident := mkIdent ``Plausible.GenError
 def genTypeConstructor : Ident := mkIdent ``Plausible.Gen
 def enumTypeConstructor : Ident := mkIdent $ Name.mkStr1 "Enumerator"
 
+/-! ## Basalt emission vocabulary (used when `specimen.emitBasalt` is set)
+
+    Spelled as plain names rather than with `` `` `` quotation because Specimen's deriver does not
+    import Basalt: the names only have to resolve in the *emitted* code's scope, which imports
+    `Specimen.Basalt`. `ArbitrarySizedSuchThat` and `Enumerator` above are handled the same way. -/
+
+/-- Basalt's generator class, the `[Gen G]` binder on emitted definitions. Spelled `_root_.Gen`
+    because a bare `Gen` is ambiguous with `Plausible.Gen` in any file with `open Plausible`. -/
+def basaltGenClass : Ident := mkIdent $ Name.mkStr2 "_root_" "Gen"
+
+/-- The type variable for the generator monad in emitted definitions. -/
+def basaltGenVar : Ident := mkIdent $ Name.mkStr1 "G"
+
+/-- `BacktrackGen G α`, the return type of a Basalt-targeted derived generator. Failure is a value
+    (`Outcome.refuted` or `Outcome.exhausted`) rather than a thrown error. -/
+def backtrackGenTypeConstructor : Ident := mkIdent $ Name.mkStr1 "BacktrackGen"
+
+/-- `BacktrackGenFor α P`, the Basalt counterpart of `ArbitrarySizedSuchThat`. Its `gen` field is
+    itself quantified over `∀ {G} [Gen G]`. -/
+def backtrackGenForTypeclass : Ident := mkIdent $ Name.mkStr1 "BacktrackGenFor"
+
+/-- The field name of `BacktrackGenFor`. -/
+def unqualifiedBacktrackGenForFn : Ident := mkIdent $ Name.mkStr1 "gen"
+
+/-- Basalt's weighted backtracking combinator. Its branches are functions
+    (`List (Nat × (Unit → BacktrackGen G α))`), so the emitted branch list wraps each producer in
+    `fun (_ : Unit) => …` and only the branch selected is built. -/
+def basaltBacktrackFn : Ident := mkIdent $ Name.mkStr2 "BacktrackGen" "backtrack"
+
+/-- `BacktrackGen.refutedToExhausted`: downgrade a definite refutation to inconclusive, for the
+    `size = 0` case where the recursive constructors were withheld. -/
+def backtrackGenRefutedToExhaustedFn : Ident :=
+  mkIdent $ Name.mkStr2 "BacktrackGen" "refutedToExhausted"
+
+/-- `BacktrackGen.exhaust`, the out-of-fuel failure, replacing `throw Gen.outOfFuelError`. -/
+def backtrackGenExhaustFn : Ident := mkIdent $ Name.mkStr2 "BacktrackGen" "exhaust"
+
+/-- `BacktrackGen.refute`, the definite failure, replacing `throw Plausible.Gen.genericFailure`. -/
+def backtrackGenRefuteFn : Ident := mkIdent $ Name.mkStr2 "BacktrackGen" "refute"
+
 
 /-- Produces a fresh user-facing & *accessible* identifier with respect to the local context
     - Note: prefer using this function over `Core.mkFreshUserName`, which is meant
