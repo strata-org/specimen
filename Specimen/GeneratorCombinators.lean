@@ -36,6 +36,61 @@ inductive GenResult (α : Type) where
   | impossible : String → GenResult α
   deriving Repr
 
+/-- `Gen.run` but from an explicit PRNG seed instead of the ambient `IO` one.
+
+    For tests that assert something *statistical* — "at least 20 of 200 generated traces are
+    non-trivial", "this trace distribution exposes the seeded bug". With `Gen.run` such a test draws
+    from the global RNG and so is a coin flip: two of Specimen's own thresholds sit close enough to
+    the mean that they pass or fail run to run, which makes them useless as regression tests (a real
+    quality regression is indistinguishable from bad luck) and actively misleading when comparing two
+    generator backends, since the run-to-run spread exceeds the difference being measured.
+
+    Seeding does not make the number *right* — a threshold can still be badly chosen — but it makes it
+    *reproducible*, which is what a regression test needs. -/
+def runWithSeed (x : Gen α) (size : Nat) (seed : Nat) : IO α :=
+  -- The failure-to-`IO` conversion is spelled out rather than reused: Plausible's `errorOfGenError` is
+  -- `private`. The `"Generation failure:"` prefix must match it exactly, because `runChecked` strips
+  -- that prefix to recover the `GenError` and classify it.
+  letI : MonadLift (ReaderT (ULift Nat) (Except GenError)) IO :=
+    ⟨fun m =>
+      match ReaderT.run m ⟨size⟩ with
+      | .ok a => pure a
+      | .error (.genError msg) => throw <| .userError ("Generation failure:" ++ msg)⟩
+  Plausible.runRandWith seed x
+
+/-- Draw `n` samples from a **single** seeded stream, tolerating individual failures (`none`).
+
+    This, not a loop of `runWithSeed` calls, is what a statistical test should use. Reseeding per
+    iteration looks equivalent but is not: `mkStdGen` on a sequential or affine seed sequence produces
+    *correlated* first draws — seeds `1…8` yield `46, 64, 82, 100, 17, 35, 53, 71` from
+    `choose 0 100`, an arithmetic progression mod 101. Since a derived generator's first draw picks its
+    top-level constructor, that correlation pins every sample to the same branch. Measured on
+    `BoundedBuffer`, 1000 per-iteration-seeded draws produced 1000 *empty* traces, where one seeded
+    stream produces the normal spread.
+
+    `f` receives the sample index so the caller can vary size per sample. -/
+def sampleWithSeed (n : Nat) (f : Nat → Gen α) (size : Nat) (seed : Nat) : IO (Array (Option α)) :=
+  Gen.runWithSeed
+    (do
+      let mut out : Array (Option α) := #[]
+      for i in List.range n do
+        out := out.push (← tryCatch (some <$> f i) (fun _ => pure none))
+      pure out)
+    size seed
+
+/-- `runChecked` from an explicit seed. See `runWithSeed` for why a statistical test wants this. -/
+def runCheckedWithSeed (x : Gen α) (size : Nat) (seed : Nat) : IO (GenResult α) := do
+  let result ← (Gen.runWithSeed x size seed).toBaseIO
+  match result with
+  | .ok a => return .ok a
+  | .error (.userError msg) =>
+    let stripped := msg.stripPrefix "Generation failure:"
+    if GenError.isInconclusive (.genError stripped) then
+      return .insufficientFuel stripped
+    else
+      return .impossible stripped
+  | .error e => throw e
+
 /-- Run a generator, classifying failure into `insufficientFuel` (might succeed with more fuel)
     or `impossible` (the constraint is unsatisfiable for this input). -/
 def runChecked (x : Gen α) (size : Nat) : IO (GenResult α) := do

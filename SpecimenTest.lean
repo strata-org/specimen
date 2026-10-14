@@ -120,6 +120,8 @@ import SpecimenTest.InconclusiveErrorTest
 import SpecimenTest.AndOptTest
 -- …and a derived generator skips constructors its inputs cannot match (`specimen.dispatchInputs`)
 import SpecimenTest.DispatchInputsTest
+-- …and seeded generator runs are reproducible
+import SpecimenTest.SeededRunTest
 
 -- `specimen_test` command / `specimen` tactic
 import SpecimenTest.TacticTest
