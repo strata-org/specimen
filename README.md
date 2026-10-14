@@ -325,6 +325,9 @@ A hypothesis whose generator dead-ends is counted as a discard rather than a fai
 - [`DeriveSchedules.lean`](./Specimen/DeriveSchedules.lean): Algorithm for deriving generator schedules
 - [`SearchTree.lean`](./Specimen/SearchTree.lean): Dependency-aware hypothesis ordering via lazy search tree with branch-and-bound pruning
 
+**Runtime schedule interpreter** (opt-in — `import Specimen.Interp`; `import Specimen` does not load it):
+- [`Interp.lean`](./Specimen/Interp.lean): Runs schedules as data instead of elaborating them — `derive_relspec` reads a relation into a `RelSpec`, `InterpEnv.generate` interprets it as a `Plausible.Gen`, and the `Runner`/`Learn` modules profile discards and search premise orders without recompiling. See [Docs/Interpreter.md](./Docs/Interpreter.md)
+
 **Property testing a statement**:
 - [`Tactic.lean`](./Specimen/Tactic.lean): The `specimen_test` command and `specimen` tactic — schedules a proposition as a virtual constructor, compiles a test loop, and shrinks counterexamples
 - [`TheoremChecker.lean`](./Specimen/TheoremChecker.lean): Runtime helpers referenced by the code `specimen_test` emits
