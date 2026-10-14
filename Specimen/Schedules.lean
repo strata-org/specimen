@@ -483,6 +483,19 @@ structure SpecKey where
   inductiveName : Name
   outputIndices : List Nat
   deriveSort : DeriveSort
+  /-- The **rendered** type arguments this mode is instantiated at, for a polymorphic relation.
+
+      Part of the key because a polymorphic relation is a different generator at each instantiation:
+      `MapNotContainsKey` over `(EntityType, EntitySchemaEntry)` has to generate a different kind of key
+      than the same relation over `(Attr, Qualified CedarType)`, and Cedar's `HasType` closure genuinely
+      demands both. Without this the two collapse onto one mode and one of them silently gets the other's
+      schedule.
+
+      Rendered strings rather than expressions so the key stays `Hashable`; the *expressions* needed to
+      actually substitute travel alongside the key in `InterpEnv.deriveClosure`'s work queue, since they
+      belong to the call site rather than to the mode. Empty for a monomorphic relation, which is every
+      relation the compile-time pipeline produces — so this field is inert there. -/
+  typeArgs : List String := []
   deriving Repr, BEq, Hashable, Inhabited
 
 /-- Pretty-prints a SpecKey as a spec form like "fun τ => ∃ Γ e, typing Γ e τ".
@@ -647,7 +660,7 @@ def computeSpecSCC (usedKeys : List SpecKey) (memo : Std.HashMap SpecKey MemoEnt
       let allScheds := indSched.baseSchedules ++ indSched.recSchedules
       let deps := allScheds.flatMap (fun (_, (steps, _)) => collectNonRecDeps steps)
       let relDeps := deps.filter (fun d => d.kind == .relation || d.kind == .checker)
-      let depKeys := relDeps.map (fun d => SpecKey.mk d.inductiveName d.outputIndices d.deriveSort)
+      let depKeys := relDeps.map (fun d => SpecKey.mk d.inductiveName d.outputIndices d.deriveSort [])
       depKeys.filter (usedKeys.contains ·)
     | _ => []
   Lean.SCC.scc usedKeys successors

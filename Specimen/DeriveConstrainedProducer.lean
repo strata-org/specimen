@@ -2338,7 +2338,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
             let allScheds := indSched.baseSchedules ++ indSched.recSchedules
             let deps := allScheds.flatMap (fun (_, (steps, _)) => collectNonRecDeps steps)
             let relDeps := deps.filter (fun d => d.kind == .relation || d.kind == .checker)
-            let depKeys := relDeps.map (fun d => SpecKey.mk d.inductiveName d.outputIndices d.deriveSort)
+            let depKeys := relDeps.map (fun d => SpecKey.mk d.inductiveName d.outputIndices d.deriveSort [])
               |>.filter (usedKeys.contains ·) |>.eraseDups
             totalEdges := totalEdges + depKeys.length
           | _ => pure ()
@@ -2556,13 +2556,13 @@ def elabDeriveMutual : CommandElab := fun stx => do
                   let color := match step with
                     | .Check _ false => "hsl(0, 70%, 60%)"
                     | .Check (.NonRec (name, _)) true =>
-                      let depKey := SpecKey.mk name [] .Checker
+                      let depKey := SpecKey.mk name [] .Checker []
                       match finalMemo[depKey]? with
                       | some (.done depSched) => specColor depSched
                       | _ => "hsl(30, 70%, 60%)"
                     | .Check _ true => "hsl(30, 70%, 60%)"
                     | .Unconstrained _ (.NonRec (name, _)) _ =>
-                      let depKey := SpecKey.mk name [] .Generator
+                      let depKey := SpecKey.mk name [] .Generator []
                       match finalMemo[depKey]? with
                       | some (.done depSched) => specColor depSched
                       | _ => "hsl(60, 70%, 60%)"
@@ -2571,7 +2571,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
                       let outNames := vs.map Prod.fst
                       let outIdxs := computeOutputIndices args outNames
                       let ds := match ps with | .Generator => DeriveSort.Generator | .Enumerator => .Enumerator
-                      let depKey := SpecKey.mk name outIdxs ds
+                      let depKey := SpecKey.mk name outIdxs ds []
                       match finalMemo[depKey]? with
                       | some (.done depSched) => specColor depSched
                       | _ => "hsl(90, 70%, 60%)"
@@ -2697,7 +2697,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
                 let deps := collectNonRecDeps steps
                 let relDeps := deps.filter (fun d => d.kind == .relation || d.kind == .checker)
                 for d in relDeps do
-                  let dk := SpecKey.mk d.inductiveName d.outputIndices d.deriveSort
+                  let dk := SpecKey.mk d.inductiveName d.outputIndices d.deriveSort []
                   if usedKeys.contains dk then
                     let existing := depCtors.getD dk []
                     if ctorName ∉ existing then
@@ -2891,7 +2891,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
                   let deps := collectNonRecDeps steps
                   let relDeps := deps.filter (fun d => d.kind == .relation || d.kind == .checker)
                   for d in relDeps do
-                    let dk := SpecKey.mk d.inductiveName d.outputIndices d.deriveSort
+                    let dk := SpecKey.mk d.inductiveName d.outputIndices d.deriveSort []
                     if usedKeys.contains dk then
                       let existing := depCtors.getD dk []
                       if ctorName ∉ existing then
