@@ -193,3 +193,11 @@ import SpecimenTest.Correctness.DerivedCheckerSoundness
 -- The SPMF-based correctness files are NOT imported here: they sit on Mathlib (through Basalt's
 -- `SPMF`), whose root-level names (`Even`, `BinaryTree`, …) clash with this suite's at an import
 -- join. They are built from the separate `SpecimenTest.Proofs` root instead.
+
+-- Size-graded enumeration (Basalt's `Graded`): the algebra pinned by its value, count and specification
+-- interpretations, STLC typing as a graded enumeration, and the carrier measurements
+import SpecimenTest.BasaltPort.GradedAlgebraTest
+import SpecimenTest.BasaltPort.GradedStlcTest
+import SpecimenTest.BasaltPort.GradedArityStressTest
+import SpecimenTest.BasaltPort.GradedDeadEndStressTest
+import SpecimenTest.BasaltPort.GradedCarrierComparison
