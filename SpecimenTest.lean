@@ -90,6 +90,7 @@ import SpecimenTest.DeriveEnumSuchThat.DerivePermutationEnumerator
 -- Key Value Store Example
 import SpecimenTest.KeyValueStoreExample.KeyValueStore
 import SpecimenTest.KeyValueStoreExample.TestKeyValueStoreCheckerGenerators
+import SpecimenTest.KeyValueStoreExample.BackwardFailingTraces
 
 -- Cedar Example
 import SpecimenTest.CedarExample.Cedar
