@@ -1682,8 +1682,13 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
               rec_ := rec_ ++ [(ctorName, schedule)]
             else
               base := base ++ [(ctorName, schedule)]
-          | none => pure ()
-        catch _ => pure ()
+          | none =>
+            trace[specimen.droppedCtors] m!"dropped {ctorName} from {key.inductiveName}\
+              {key.outputIndices} as {repr key.deriveSort}: no schedule found"
+        catch e =>
+          -- Still dropped, as before; see `specimen.droppedCtors` for why this at least says so.
+          trace[specimen.droppedCtors] m!"dropped {ctorName} from {key.inductiveName}\
+            {key.outputIndices} as {repr key.deriveSort}: {e.toMessageData}"
       return (base, rec_, deps, freshUnknowns.toList, freshRecFnName, ctorStats)
 
     let (base, rec_, deps, fNames, (rFnName, ctorStats)) := results

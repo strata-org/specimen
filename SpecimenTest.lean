@@ -128,6 +128,8 @@ import SpecimenTest.InputFreeDeriveMutualTest
 import SpecimenTest.ArithIndexTest
 -- …and a type abbreviation used as a type argument is a type, not a function call
 import SpecimenTest.TypeAbbrevArgTest
+-- …and a constructor a mode was derived without is reported under `trace.specimen.droppedCtors`
+import SpecimenTest.DroppedCtorsTraceTest
 
 -- `specimen_test` command / `specimen` tactic
 import SpecimenTest.TacticTest

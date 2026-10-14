@@ -143,6 +143,8 @@ derive_checker (fun n t => balanced n t)
 | `specimen.shrinkBreadth` | `8` | Max shrink candidates considered per variable/step |
 | `specimen.shrinkDepth` | `100` | Max greedy shrink steps per counterexample |
 
+Deriving decisions can be traced: `set_option trace.specimen.droppedCtors true` reports the constructors a mode was derived without (no schedule found, or unsatisfiable inputs), which otherwise vanish silently from the derived producer.
+
 **Scoring strategies** control how Specimen evaluates and selects among candidate schedules during derivation. The `specimen.scoreType` option selects the active strategy:
 
 | Strategy | Option value | Description |

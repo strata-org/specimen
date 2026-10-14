@@ -3,6 +3,16 @@ open Lean
 
 initialize registerTraceClass `plausible.deriving.results
 
+/-- Reports every constructor `deriveBestInductiveSchedule` leaves out of a mode, with the reason.
+
+    A constructor is dropped in two ways — no schedule found, or an exception while deriving one — and
+    both are silent: the generator simply lacks that rule. That is often legitimate (a rule with no
+    viable schedule in this mode), but it is also how real bugs have hidden: a generator missing some of
+    its rules was measured as if complete, and a deprecation error never reached the user. Opt-in rather
+    than a warning, because the search derives many modes speculatively, only to score candidate
+    orderings, and their drops are noise. Turn it on with `set_option trace.specimen.droppedCtors true`. -/
+initialize registerTraceClass `specimen.droppedCtors
+
 /-- Option to enable debug messages from Specimen -/
 register_option specimen.debug : Bool := {
   defValue := false
