@@ -35,3 +35,23 @@ private def verdict (e : GenError) : String :=
 #eval [ "Specimen: out of fuel (termination limit reached)", "out of fuel", "Gen.runUntil: Out of attempts",
         "some branch does not apply" ].all fun m =>
   isInconclusiveError (.genError m) == Gen.GenError.isInconclusive (.genError m)
+
+/-! ## `enumerate` squashes failures
+
+Definitive failures carry no information for any consumer, so they are dropped; the first inconclusive
+one is kept, moved to the end, which is all the checker's `lazyListBacktrackOpt` reads. Values keep their
+order. -/
+
+private def showE : Except GenError Nat → String
+  | .ok n => toString n
+  | .error e => if Gen.GenError.isInconclusive e then "?" else "✗"
+
+/-- info: ["1", "2", "?"] -/
+#guard_msgs in
+#eval (squashErrors (LazyList.fromList [.error (.genError "no match"), .ok 1, .error (.genError "out of fuel"),
+    .error (.genError "no match"), .ok 2, .error (.genError "Gen.runUntil: Out of attempts")])).toList.map showE
+
+-- No inconclusive failure: nothing is added.
+/-- info: ["1"] -/
+#guard_msgs in
+#eval (squashErrors (LazyList.fromList [.error (.genError "no match"), .ok 1])).toList.map showE

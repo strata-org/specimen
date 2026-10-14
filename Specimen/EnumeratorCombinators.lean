@@ -50,16 +50,40 @@ def enumerateFuel (fuel : Nat) (total : Nat) (es : List (ExceptT GenError Enumer
 def enumerateAll (es : List (ExceptT GenError Enumerator α)) (fuel : Nat) : LazyList (Except GenError α) :=
   es.foldr (fun e acc => LazyList.append (e fuel) acc) .lnil
 
+/-- Drops every failure except the first *inconclusive* one, which moves to the end. Values keep their
+    order.
+
+    Why this is safe: the only consumer that reads failures is the checker's `lazyListBacktrackOpt`, which
+    skips a definitive failure outright and otherwise asks only whether *any* inconclusive one appeared —
+    and a `true` anywhere wins regardless. So one inconclusive entry, anywhere, carries all the information
+    the list had. Enumerator consumers discard failures entirely.
+
+    Why it matters: every failed `match` in an emitted branch is an `.error` entry, and an enumerator's bind
+    carries each one through, so failures multiply with the values around them. Measured on the derived STLC
+    enumerator (`SpecimenTest/GradedVsDerivedConcatAblation.lean`, goal `Fun Nat Nat`, budget 11): carrying
+    them costs ~6×. Squashing at every `enumerate` bounds them to one per call.
+
+    A run of failures is skipped by a direct call, not through a thunk, so a long run cannot nest forces. -/
+def squashErrors (l : LazyList (Except GenError α)) : LazyList (Except GenError α) := go none l
+where
+  go (pending : Option GenError) : LazyList (Except GenError α) → LazyList (Except GenError α)
+    | .lnil => match pending with
+      | some e => .lcons (.error e) (Thunk.pure .lnil)
+      | none => .lnil
+    | .lcons (.ok a) t => .lcons (.ok a) ⟨fun _ => go pending t.get⟩
+    | .lcons (.error e) t =>
+      go (if pending.isNone && Gen.GenError.isInconclusive e then some e else pending) t.get
+
 /-- Concatenates *every* enumerator in `es`, in order, into a single lazy enumeration — each branch
-    contributes all of its values, and failures appear inline as `.error` entries rather than
-    causing a retry.
+    contributes all of its values. Failures do not cause a retry; definitive ones are dropped and at most
+    one inconclusive one is kept (`squashErrors`).
 
     Note this is emphatically **not** "pick one branch, retrying on failure": that is
     `enumerateFuel`, which nothing currently calls. Nor are branches weighted — unlike the
     generator's `GeneratorCombinators.backtrack`, every branch is enumerated exactly once, so
     constructor weights have no effect below the generator. -/
 def enumerate (es : List (ExceptT GenError Enumerator α)) : ExceptT GenError Enumerator α :=
-  enumerateAll es
+  fun fuel => squashErrors (enumerateAll es fuel)
 
 /-- Applies the checker `f` to a `LazyList l` of values, returning the resultant `Except ε Bool`
     (the parameter `anyNone` is used to indicate whether any of the elements examined previously have been `none`) -/
