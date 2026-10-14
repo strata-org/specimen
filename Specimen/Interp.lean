@@ -5,6 +5,8 @@ import Specimen.Interp.Validate
 import Specimen.Interp.CheckEnum
 import Specimen.Interp.Bridge
 import Specimen.Interp.Deriving
+import Specimen.Interp.Preschedule
+import Specimen.Interp.Extract
 
 /-!
 # Interpreting schedules at runtime
