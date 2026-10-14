@@ -114,6 +114,9 @@ import SpecimenTest.WeightPrecomputeTest
 -- `specimen.silent` output-suppression option tests
 import SpecimenTest.SilentOptionTest
 
+-- Inconclusive errors are classified the same way on every producer path
+import SpecimenTest.InconclusiveErrorTest
+
 -- `specimen_test` command / `specimen` tactic
 import SpecimenTest.TacticTest
 

@@ -1,5 +1,6 @@
 import Specimen.Enumerators
 import Specimen.LazyList
+import Specimen.GeneratorCombinators
 import Plausible.Gen
 import Plausible.ArbitraryFueled
 
@@ -77,11 +78,13 @@ def lazyListBacktrack (l : LazyList α) (f : α → Except GenError Bool) (anyNo
 
 /-- An enumerator error is "inconclusive" (ran out of fuel / couldn't decide) vs
     "disproved" (this constructor path definitively doesn't apply).
-    Only the specific out-of-fuel error from Specimen's derived code is inconclusive. -/
-private def isInconclusiveError : GenError → Bool
-  | .genError "Specimen: out of fuel (termination limit reached)" => true
-  | .genError "out of fuel" => true
-  | _ => false
+
+    Delegates to `Gen.GenError.isInconclusive` so all three producer sorts classify errors
+    identically. The enumerator and checker paths kept their own copy of this predicate, and it had
+    drifted from the generator's: the generator counted `"Gen.runUntil: Out of attempts"` as
+    inconclusive and this copy did not, so an exhausted retry loop was reported as a *definite
+    refutation* — a wrong `ok false` for something never determined. -/
+def isInconclusiveError : GenError → Bool := Gen.GenError.isInconclusive
 
 /-- Variant of `lazyListBacktrack` where the input `LazyList` contains `Except ε α` values instead of `α`.
 
