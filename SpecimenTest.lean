@@ -210,3 +210,6 @@ import SpecimenTest.BasaltPort.GradedStlcChunkedAdequacy
 -- relations transcribed from Cedar (leaf premises, a recursive one, and a mutual family)
 import SpecimenTest.BasaltPort.GradedRuleAdequacy
 import SpecimenTest.BasaltPort.GradedCedarRuleAdequacy
+-- …and the deriver's own `Schedules.ScheduleStep` translated into those rules, with what that translation
+-- can and cannot be proved to preserve
+import SpecimenTest.BasaltPort.ScheduleTranslate
