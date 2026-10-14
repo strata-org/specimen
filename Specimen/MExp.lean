@@ -1,3 +1,4 @@
+import Specimen.Debug
 import Plausible.Arbitrary
 import Specimen.ArbitrarySizedSuchThat
 import Specimen.Enumerators
@@ -160,6 +161,66 @@ partial def compilePattern (explicit : Explicit) (p : Pattern) : MetaM (TSyntax 
     `($(mkIdent ctorName):ident $compiledArgs*)
   | .LitPattern l => mkLiteral l
 
+
+/-- Names a pattern binds. -/
+partial def patternVars : Pattern → List Name
+  | .UnknownPattern u => [u]
+  | .CtorPattern _ args => args.flatMap patternVars
+  | .LitPattern _ => []
+
+/-- Whether `c` is the only constructor of its type. -/
+private def soleCtor (env : Environment) (c : Name) : Bool :=
+  match env.find? c with
+  | some (.ctorInfo ci) =>
+    match env.find? ci.induct with
+    | some (.inductInfo ii) => ii.ctors.length == 1
+    | _ => false
+  | _ => false
+
+/-- Matches every value once variables are erased — so testing it would filter nothing, and Lean would
+    reject the `| _ => false` arm after it as redundant. A name that is a constructor (`Pattern` spells
+    nullary constructors as `UnknownPattern` too) is irrefutable only if it is its type's sole constructor. -/
+partial def irrefutableErased (env : Environment) : Pattern → Bool
+  | .UnknownPattern u => !env.isConstructor u || soleCtor env u
+  | .CtorPattern c args => soleCtor env c && args.all (irrefutableErased env)
+  | .LitPattern _ => false
+
+/-- `p` as a pattern term with every variable replaced by a `_` **hole**. (`mkIdent `_` would be a
+    variable *named* `_`, and two of them in one pattern clash.) Constructor names are kept. -/
+partial def compileErasedPattern (env : Environment) (explicit : Explicit) : Pattern → MetaM (TSyntax `term)
+  | .UnknownPattern u => if env.isConstructor u then `($(mkIdent u):ident) else `(_)
+  | .CtorPattern ctorName args => do
+    let compiledArgs ← args.toArray.mapM (compileErasedPattern env explicit)
+    match explicit with
+    | .allExplicit => `(@$(mkIdent ctorName):ident $compiledArgs*)
+    | .allowImplicit => `($(mkIdent ctorName):ident $compiledArgs*)
+  | .LitPattern l => mkLiteral l
+
+/-- The input test a branch's schedule starts with, as a `Bool` term — or `none` if it starts with none.
+
+    Walks the **leading** `.Match` steps. A step whose scrutinee is not bound by an earlier leading pattern
+    must be an input (nothing else is bound yet), and contributes
+    `match x with | ⟨pattern, variables erased⟩ => true | _ => false`; a step on a variable an earlier
+    pattern bound is skipped (it would need a nested match), as is one whose erased pattern is irrefutable.
+    Skipping only weakens the guard. The result is implied by the branch's own leading matches succeeding,
+    so filtering on it is sound. -/
+def inputGuard? (steps : List ScheduleStep) : MetaM (Option (TSyntax `term)) := do
+  let env ← getEnv
+  let mut bound : List Name := []
+  let mut tests : Array (TSyntax `term) := #[]
+  for step in steps do
+    match step with
+    | .Match explicit scrutinee pattern =>
+      if !bound.contains scrutinee && !irrefutableErased env pattern then
+        let lhs ← compileErasedPattern env explicit pattern
+        tests := tests.push (← `(match $(mkIdent scrutinee):ident with | $lhs => true | _ => false))
+      bound := bound ++ patternVars pattern
+    | _ => break
+  if tests.isEmpty then return none
+  let mut acc := tests[0]!
+  for t in tests[1:] do
+    acc ← `($acc && $t)
+  return some acc
 
 /-- `MExp` representation of a `DecOpt` instance (a checker).
     Specifically, `decOptChecker prop fuel` represents the term

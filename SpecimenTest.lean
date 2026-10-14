@@ -118,6 +118,8 @@ import SpecimenTest.SilentOptionTest
 import SpecimenTest.InconclusiveErrorTest
 -- …and `andOpt` is K3 conjunction: a definite `false` decides it even beside an inconclusive operand
 import SpecimenTest.AndOptTest
+-- …and a derived generator skips constructors its inputs cannot match (`specimen.dispatchInputs`)
+import SpecimenTest.DispatchInputsTest
 
 -- `specimen_test` command / `specimen` tactic
 import SpecimenTest.TacticTest

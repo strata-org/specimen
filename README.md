@@ -128,6 +128,7 @@ derive_checker (fun n t => balanced n t)
 |--------|---------|-------------|
 | `specimen.autoDeriveDeps` | `true` | Automatically derive dependency instances for sub-relations in `derive_mutual` |
 | `specimen.multiOutput` | `true` | Allow multi-output production steps (multiple `∃` vars generated per hypothesis) |
+| `specimen.dispatchInputs` | `true` | Derived generators test each constructor's input pattern before entering its branch; constructors whose inputs cannot match are skipped |
 | `specimen.scoreType` | `"Scoring.BudgetAwareScore"` | Scoring strategy for schedule quality evaluation (see below) |
 | `specimen.weightFn` | `"Scoring.qualityCtorWeight"` | Weight function for constructor frequency in derived generators (see below) |
 | `specimen.weightModifier` | `""` | Optional modifier layered on top of the weight function (see below) |
