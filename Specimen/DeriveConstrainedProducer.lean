@@ -2132,6 +2132,47 @@ def setInstanceVisibility (cmd : TSyntax `command) (kind : AttributeKind) : TSyn
     let newInstNode := instNode.setArg 0 newAttrKind
     ⟨raw.setArg 1 newInstNode⟩
 
+/-- Deterministic, user-writable name for one derived spec's worker definition, qualified with the
+    ambient namespace.
+
+    Replaces `mkFreshUserName`, whose names embedded the module name, a hash and a hygiene counter
+    (`specimen_mutual._@._stdin.3622351718._hygCtx._hyg.26_Between`). Nobody can write such a name, and
+    it changes when the file is edited — so a *proof* about a derived generator could not name it.
+
+    The namespace prefix is not cosmetic. A bare deterministic name breaks real code: Cedar declares the
+    same spec's worker at `_root_` in one module and under `Variant.TypeOfCheck` in another, and an
+    unqualified reference is then `Ambiguous term`. Qualifying makes each module reference its own copy.
+
+    Uniqueness within a namespace: injective in exactly the data that determines the emitted *instance*,
+    so two specs whose worker names collide are two specs that would emit the same instance anyway. -/
+def specimenWorkerName (indName : Name) (outIdxs : List Nat) (ds : DeriveSort)
+    (currNs : Name) (mod : Name) : Name :=
+  let sort := match ds with
+    | .Generator => "gen"
+    | .Enumerator => "enum"
+    | .Checker => "check"
+    | .Theorem => "thm"
+  let idxs := if outIdxs.isEmpty then "" else "_" ++ String.intercalate "_" (outIdxs.map toString)
+  -- The ambient namespace is mangled into the *simple* name rather than used as a prefix, and no
+  -- `_root_` escaping is involved. Two earlier shapes failed on real code:
+  --   * a bare name (`specimen_gen_Foo_1`) is `Ambiguous term` wherever a module declares one at the root
+  --     and `open`s another namespace holding its own copy — Cedar's `SchemaTest` does exactly that;
+  --   * prefixing the namespace does not help there either, since at the root the "qualified" name *is*
+  --     the bare name; and building `_root_` into the `Name` gives `Unknown identifier _root_.Ns.foo`,
+  --     because `_root_` is a syntactic escape, not a name component, so it survives in one position and
+  --     not the other.
+  -- Mangling makes the simple name itself unique per declaring namespace, so an unqualified reference
+  -- resolves to the local copy and an imported copy simply has a different name.
+  -- The tag carries BOTH the module and the ambient namespace. Module, because two *modules* routinely
+  -- derive the same mode at the root — `TacticTest` and `DeriveSTLCGenerator` both derive `lookup`, and
+  -- with a module-independent name importing both dies with `environment already contains
+  -- 'specimen_gen_lookup_1._sunfold'`. Namespace, because one module can derive the same mode in two
+  -- namespaces (`WeightPrecomputeTest` does exactly that, in `Baseline` and `Precomputed`).
+  -- This is what the old hygienic name achieved with `_@.<module>.<hash>._hyg.<n>`, minus the hash and
+  -- the counter that made it unwritable.
+  let tag := (mod ++ currNs).toString.replace "." "_"
+  Name.mkSimple s!"specimen_{sort}_{indName.toString.replace "." "_"}{idxs}__{tag}"
+
 /-- Compile each SCC component's specs into `(def, instance)` command pairs.
 
     Builds one consistent name mapping per component (`compMeta`) and reuses it as the
@@ -2163,8 +2204,8 @@ def compileSpecComponents (components : List (List SpecKey))
     -- sibling list for every spec, so all specs agree on each other's names.
     let mut compMeta : Array (SpecKey × Name) := #[]
     for key in comp do
-      let uid ← liftTermElabM (Lean.Core.mkFreshUserName `specimen_mutual)
-      let globalName := Name.mkSimple s!"{uid}_{key.inductiveName.toString.replace "." "_"}"
+      let globalName := specimenWorkerName key.inductiveName key.outputIndices key.deriveSort
+        (← getCurrNamespace) (← getMainModule)
       compMeta := compMeta.push (key, globalName)
     let compSiblings : List (Name × List Nat × Name × DeriveSort) :=
       compMeta.toList.map (fun (k, gn) => (k.inductiveName, k.outputIndices, gn, k.deriveSort))
@@ -2258,8 +2299,8 @@ def elabDeriveMutual : CommandElab := fun stx => do
                   if indArgs[j]!.isFVar && outputFVars.contains indArgs[j]!.fvarId! then
                     idxs := idxs.push j
                 return (indName, idxs.toList)
-        let uid ← liftTermElabM (Lean.Core.mkFreshUserName `specimen_mutual)
-        let globalName := Name.mkSimple s!"{uid}_{indName.toString.replace "." "_"}_{i}"
+        let globalName := specimenWorkerName indName outIdxs deriveSort
+          (← getCurrNamespace) (← getMainModule)
         specMeta := specMeta.push (indName, outIdxs, globalName, deriveSort)
 
       -- Auto-derive: recursively discover and derive all transitive dependencies
@@ -2284,8 +2325,8 @@ def elabDeriveMutual : CommandElab := fun stx => do
           let inBlock := specMeta.any fun (sIndName, sOutIdxs, _, sDs) =>
             sIndName == key.inductiveName && sOutIdxs == key.outputIndices && sDs == key.deriveSort
           if !inBlock then
-            let uid ← liftTermElabM (Lean.Core.mkFreshUserName `specimen_mutual)
-            let globalName := Name.mkSimple s!"{uid}_{key.inductiveName.toString.replace "." "_"}_auto"
+            let globalName := specimenWorkerName key.inductiveName key.outputIndices key.deriveSort
+              (← getCurrNamespace) (← getMainModule)
             specMeta := specMeta.push (key.inductiveName, key.outputIndices, globalName, key.deriveSort)
         -- Use SCC-based compilation from memo
         -- Step 3: SCC decomposition and compilation
