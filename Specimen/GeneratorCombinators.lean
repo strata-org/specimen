@@ -50,6 +50,23 @@ def runChecked (x : Gen α) (size : Nat) : IO (GenResult α) := do
       return .impossible stripped
   | .error e => throw e
 
+/-- Run `x` at `size` from an explicit PRNG state, returning its outcome and the state to use
+    next.
+
+    One stream threaded through a run of tests, rather than a seed per test: reseeding each test
+    correlates its first draw, and that draw picks the top-level constructor, so the tests would
+    all explore the same shape. The next state comes from `RandomGen.split`, taken before `x`
+    runs, because `Gen` is `StateT StdGen` over `Except` and a failing draw rolls the state back:
+    splitting first means a discard still advances the stream.
+
+    `Except` rather than `IO`: a generator that dead-ends is a discard, which a caller counts, not
+    an exception it has to catch. -/
+def runFrom {α : Type} (x : Gen α) (size : Nat) (g : StdGen) : Except GenError α × StdGen :=
+  let (g', gNext) := RandomGen.split g
+  match ReaderT.run (StateT.run x (ULift.up g')) (ULift.up size) with
+  | .ok (a, _) => (.ok a, gNext)
+  | .error e => (.error e, gNext)
+
 end Gen
 
 namespace GeneratorCombinators

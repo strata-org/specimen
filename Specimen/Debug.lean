@@ -93,6 +93,18 @@ register_option specimen.shrinkDepth : Nat := {
   descr := "max greedy shrink steps (descent depth) per counterexample"
 }
 
+/-- Seed for the random draws `specimen_test` and the `specimen` tactic make.
+
+    Zero means draw a seed from the ambient RNG, so interactive use varies from run to run. Any
+    other value fixes the stream, which is what a test file wants: the same draws every run, so a
+    pathological draw is either always present or never, rather than appearing at random. The seed
+    a run used is reported alongside a counterexample, so a varying run can be reproduced by
+    setting this option to it. -/
+register_option specimen.testSeed : Nat := {
+  defValue := 0
+  descr := "seed for `specimen_test` draws (0 draws a seed from the ambient RNG)"
+}
+
 /-- When true, `derive_mutual` logs where its time went: a per-phase breakdown (schedule
     search, SCC condensation, constraints, codegen, widget/text, Lean's elaboration of the
     emitted block) plus a codegen-versus-pretty-printing split. Diagnostic only. -/

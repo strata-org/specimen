@@ -8,6 +8,12 @@ open Plausible
 
 namespace TacticTest
 
+-- Fix the draws for this file. The tactic runs a freshly derived generator through Lean's IR
+-- interpreter, so a draw that asks for an unusually large structure costs far more here than the
+-- same draw does at runtime. With the seed fixed, this file either pays that cost every run or
+-- never, instead of once in a few hundred runs on CI.
+set_option specimen.testSeed 20261020
+
 -- A simple inductive relation to test (using .succ.succ for structural pattern matching in checkers)
 inductive Even : Nat → Prop where
   | zero : Even 0

@@ -213,8 +213,14 @@ unsafe def elabSpecimenTest : CommandElab := fun stx => do
       let shrinksIdent : TSyntax `term := mkIdent shrinksName
       let diagIdent : TSyntax `term := mkIdent shrinkDiagName
 
+      -- Seed the draws. A fixed seed makes the run reproducible, so a pathological draw is
+      -- either always there or never, rather than appearing in one run out of a hundred. Zero
+      -- draws a seed, keeping interactive use varied, and the drawn seed is reported with a
+      -- counterexample so that run can be repeated.
+      let configuredSeed := Lean.Option.get (← getOptions) specimen.testSeed
+      let seed ← if configuredSeed == 0 then IO.rand 1 1000000000 else pure configuredSeed
       let testExpr ← buildTestExpr varNames varTypes checkerIdent shrinksIdent diagIdent
-        minSize maxSize numTests richOutput
+        minSize maxSize numTests richOutput seed (configuredSeed == 0)
 
       let e ← liftTermElabM <| Term.elabTerm testExpr none
       let expectedType ← liftTermElabM <| inferType e
