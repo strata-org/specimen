@@ -1063,10 +1063,10 @@ structure SizeGoal where
       cheerfully "improves" by chasing that, and reports a tweak on a constructor whose weight has no
       bearing on output size at all.
 
-      With `runSeeded` pairing the comparison, two *identical* schedules now agree exactly, so this can
-      be small. Not zero, though: a different plan consumes the random stream in a different order, so
-      the same seed does not mean the same draws are used for the same purposes. It is a residual, not
-      the sample-mean spread it used to have to cover. -/
+      `runSeeded` pairs the comparison, so two *identical* schedules agree exactly and this can be
+      small. Not zero, though: a different plan consumes the random stream in a different order, so the
+      same seed does not mean the same draws are used for the same purposes. It covers that residual,
+      not the spread of an unpaired sample mean. -/
   toleranceCenti : Nat := 5
   deriving Repr, Inhabited
 
@@ -1512,13 +1512,12 @@ def InterpEnv.learnSchedules (env : InterpEnv) (specs : List RelSpec) (rootKey :
               trace := trace ++ [{ round := round + 1, target := some aim, plan := some cand,
                                    note := s!"unbuildable: {e}" }]
             | .ok (built', s') =>
-              -- Better, and not *newly* misconfigured. The guard used to demand `interpErrors == 0`,
-              -- which is right when the only source of them is a missing leaf but wrong once there is a
-              -- constant background level: `closureStats` profiles every mode on the *root's* inputs, so
-              -- a mode of unrelated arity always reports some. Cedar's closure sits at 1282, which made
-              -- the old guard unsatisfiable — 306 candidates over 30 targets, one of them a genuine
-              -- improvement (waste 441‰ against 443‰), and not one could be accepted. What matters is
-              -- that a candidate did not introduce errors the incumbent did not have.
+              -- Better, and not *newly* misconfigured. Demanding `interpErrors == 0` instead is right
+              -- only when a missing leaf is their one source: `closureStats` profiles every mode on the
+              -- *root's* inputs, so a mode of unrelated arity always reports some, and Cedar's closure
+              -- sits at a background 1282. That bar is then unsatisfiable, and rejects even a genuine
+              -- improvement (waste 441‰ against 443‰) among 306 candidates over 30 targets. What
+              -- matters is that a candidate did not introduce errors the incumbent did not have.
               --
               -- Coverage non-regression is unconditional, not part of the objective. Under `.waste` or
               -- `.throughput` a candidate that stops a rule firing scores as a large *improvement*

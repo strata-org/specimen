@@ -305,12 +305,13 @@ partial def evalConstructorExpr (funcs : FuncTable) (env : ValEnv) :
     A variable that is **already bound** — in `bindings` as passed, or by an earlier occurrence in this
     same pattern — must equal `v` (by `Val.beq`, the equality `Eq` checks use); it is never
     overwritten. That is what a repeated variable means in a constructor, and what
-    `RelSchedule.guardPasses` has always assumed. This used to `insert` unconditionally, so a second
-    occurrence silently replaced the first: Cedar's `HasType.binaryAppEqLitSame`, whose conclusion is
-    `HasType (.binaryApp .eq (.lit p) (.lit p)) … (.bool .tt)`, reached here as that non-linear pattern
-    and accepted `.binaryApp .eq (.lit 1) (.lit 2)` as `.bool .tt`. `schedulePrologue` now linearizes
-    such a pattern as the deriver does, so a well-formed schedule never gets here with a repeat; this
-    keeps one that does — a premise's destructuring `Match` (`P (x, x)`, `P x (.succ x)`), a
+    `RelSchedule.guardPasses` assumes. An unconditional `insert` lets a second occurrence silently
+    replace the first, which accepts values a repeated variable forbids: Cedar's
+    `HasType.binaryAppEqLitSame`, whose conclusion is
+    `HasType (.binaryApp .eq (.lit p) (.lit p)) … (.bool .tt)`, reaches here as that non-linear pattern,
+    and would accept `.binaryApp .eq (.lit 1) (.lit 2)` as `.bool .tt`. `schedulePrologue` linearizes
+    such a pattern as the deriver does, so a well-formed schedule never gets here with a repeat; the
+    check keeps one that does — a premise's destructuring `Match` (`P (x, x)`, `P x (.succ x)`), a
     hand-written schedule, a future lowering — sound rather than silently wrong.
 
     One deliberate divergence from emitted code follows. A *compiled* schedule loaded through

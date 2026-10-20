@@ -501,7 +501,7 @@ def profile? : PlanOutcome → Option CtorProfile
     run here, then plans that are not schedules at all. -/
 def rank : PlanOutcome → Nat × Nat × Nat
   -- A plan whose own schedule hit interpreter misconfiguration ranks with the unrunnable ones: its
-  -- `discards` can be 0 precisely *because* every attempt died internally, and it used to win on that.
+  -- `discards` can be 0 precisely *because* every attempt died internally, which would otherwise win.
   -- Keyed on the constructor's own profile only (`p`), not the top-level sample, which also reflects
   -- misconfiguration elsewhere in the closure that no choice of plan here can cause or fix.
   | ran _ s p =>

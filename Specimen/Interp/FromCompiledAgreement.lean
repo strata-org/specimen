@@ -79,8 +79,8 @@ def Agreement.render (a : Agreement) : String :=
     * **Instantiated modes.** A closure key carries its instantiation (`MapContains[3]@(0:Attr, …)`),
       and the memo's keys do not. So the deriver's schedule is looked up without `typeArgs`, and it is read
       with the closure's instantiation for that key, recovered from the call sites that asked for it
-      (`depKeysTyped`), in place of its type parameters. Previously every such mode fell into "never
-      derived" and out of the count.
+      (`depKeysTyped`), in place of its type parameters. Without that, every instantiated mode falls into
+      "never derived" and out of the count.
     * **Mutual linking.** The memo holds schedules from before `linkMutualCalls`, and the closure's
       schedules are linked. So the compiled side is first linked against the closure's own sibling table,
       and the `MutRec` names then agree.

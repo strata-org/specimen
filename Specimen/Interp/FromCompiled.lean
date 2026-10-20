@@ -4,13 +4,13 @@ import Specimen.Interp
 /-!
 # Starting the interpreter from the deriver's own choice
 
-The runtime interpreter used to begin learning from its own default — `deriveModeIn`'s first resolvable
-plan, fewest checks — and that default is not what `derive_mutual` ships. On Cedar's `HasType[0,3,4]` the
-two disagreed on 31 of 76 constructors, so a learned book mixed two kinds of difference that cannot be
-told apart afterwards: places where measurement beat branch and bound, and places where the interpreter
-merely started somewhere else. Only the first kind is worth pinning.
+The interpreter's own default start, `deriveModeIn`'s first resolvable plan with the fewest checks, is
+not what `derive_mutual` ships: on Cedar's `HasType[0,3,4]` the two differ on 31 of 76 constructors. A
+book learned from that start mixes two kinds of difference that cannot be told apart afterwards, places
+where measurement beat branch and bound and places where the interpreter merely began somewhere else, and
+only the first is worth pinning.
 
-So learning starts here instead: run the deriver's search unpinned, read back the premise order it settled
+So learning starts here: run the deriver's search unpinned, read back the premise order it settled
 on for every `(mode, constructor)` it derived (`Schedules.getChosenOrders`), and turn that into a
 `PlanBook` (`PlanBook.ofOrders`). A learned book's `PlanBook.diff` against this one is then exactly the
 set of constructors where dynamic measurement overruled the static estimate.
@@ -84,10 +84,9 @@ def book (c : DeriverChoice) : PlanBook := PlanBook.ofOrders c.orders
 /-- The orders at **generator** modes only, with checker and enumerator modes left to the interpreter's
     default. Kept for comparison; prefer `book`.
 
-    This used to be the start, on the grounds that non-generator orders sampled identically at size 4 and
-    that the full book needed a `List String` enumerator leaf nobody had registered. Both reasons are
-    gone: instance leaves (`withInstanceLeaves`) supply the enumerator, and at realistic sizes the default
-    checker orders are what make sampling slow (see `book`). -/
+    Not the start to learn from: at realistic sizes the default checker orders are what make sampling slow
+    (see `book`). Non-generator orders sample identically only at size 4, and the enumerator leaf the full
+    book needs comes from instance leaves (`withInstanceLeaves`). -/
 def generatorBook (c : DeriverChoice) : PlanBook :=
   PlanBook.ofOrders (c.orders.filter (fun (k, _, _) => k.deriveSort == .Generator))
 

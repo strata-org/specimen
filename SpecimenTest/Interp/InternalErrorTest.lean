@@ -146,9 +146,9 @@ def brokenEnv : Except String InterpEnv := brokenLeaves.deriveClosure specs [bst
 
 A generator's `Check` on a premise of *another* relation names it (`Source.NonRec`); a check on the same
 relation or a mutual sibling names the checker mode's recursive function (`Source.Rec`/`.MutRec`), and
-`Gen.checkSource` looks that up by function name. `publishInterpretedCheckers` used to install the
-relation name only, so on Cedar every `Check (.MutRec aux_hasTypeRecord_ …)` and the like died on "no
-checker for `aux_…`" — invisible until `backtrackInterp` stopped absorbing it. -/
+`Gen.checkSource` looks that up by function name. So `publishInterpretedCheckers` installs both names:
+under the relation name alone, every Cedar `Check (.MutRec aux_hasTypeRecord_ …)` dies on "no checker for
+`aux_…`", and `backtrackInterp` reports it rather than absorbing it. -/
 
 -- Every derived checker mode is reachable both ways after publishing.
 /-- info: true -/

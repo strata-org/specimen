@@ -4,10 +4,10 @@ import SpecimenTest.Interp.BSTInterpTest
 # Provenance describes the schedule that is installed
 
 Blame attribution maps a rejecting step back to the premise that emitted it, so a mutation has something
-to move. It used to rebuild that map by re-lowering `PlanBook.planFor`, which is a *different* plan from
-the installed one whenever lowering repaired a booked order, chose the first resolvable plan, or worked
-from an instantiated spec. The map is now recorded when the schedule is lowered (`CtorProvenance`); these
-tests pin that it describes what actually runs.
+to move. The map is recorded when the schedule is lowered (`CtorProvenance`), not rebuilt afterwards by
+re-lowering `PlanBook.planFor`: that is a *different* plan from the installed one whenever lowering
+repaired a booked order, chose the first resolvable plan, or worked from an instantiated spec. These
+tests pin that the map describes what actually runs.
 -/
 
 open Lean Schedules Specimen Specimen.Interp SpecimenTest.InterpBST

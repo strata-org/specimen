@@ -5,21 +5,20 @@ import SpecimenTest.Interp.BSTInterpTest
 # What the schedule comparator must tell apart, and what it may equate
 
 `Specimen.Interp.ScheduleEquiv.compareSchedules` decides whether an interpreter schedule and a compiled one are
-the same generator. It is only useful if it is **sound**. The first comparator was not, and each case
-below that must come out *different* is one it called equal:
+the same generator. It is only useful if it is **sound**, so each case below that must come out
+*different* is one a comparator taking an easier route calls equal:
 
-* inputs swapped between two same-shaped matches, which alpha-renaming by first occurrence could not see;
-* outputs bound from different inputs, since it never compared what a schedule returns;
-* a type argument at a polymorphic call, and an unconstrained `List Nat` against a `List String`, since it
-  erased every `TyCtor`;
+* inputs swapped between two same-shaped matches, which alpha-renaming by first occurrence cannot see;
+* outputs bound from different inputs, which only comparing what a schedule returns catches;
+* a type argument at a polymorphic call, and an unconstrained `List Nat` against a `List String`, both
+  invisible once `TyCtor`s are erased;
 * a dictionary the interpreter passes as a value where the compiled code resolves an instance, which no
   syntactic comparator can see because both sides spell it identically.
 
 The cases that must come out *the same* are the reasons a sound comparator still has to normalise:
 reordered prologue matches, outputs made equal by an `Eq` check (Cedar's `Lub.ext`), constructor
 parameters the deriver spells out, an abbreviation reified as a `FuncApp`, and each side's own name for
-its recursive call. Every expectation here was first checked on a Python model of the same rules, which
-also reproduces the manual review's verdicts on the 114 Cedar mismatches the old comparator dumped.
+its recursive call.
 
 Then, end to end: on `BST`, the closure built from the deriver's book agrees with the deriver on every
 generator constructor they share.

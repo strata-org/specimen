@@ -2280,13 +2280,13 @@ def ofOrders (orders : List (SpecKey × Name × List Nat)) : PlanBook :=
     Pinned constructors skip the search and, with it, the speculative dependency derivation that the
     compile-time profile put at ~60% of search self-time, so fewer modes get minted at all.
 
-    **No time saving is quoted here, deliberately.** The figures this docstring used to carry (a Cedar
-    derivation "92.3s → 56.2s at coverage parity") are withdrawn. They were measured while every pin for a
-    constructor with a non-linear conclusion had the wrong length — the interpreter has no premise for a
-    non-linearity equality, the deriver does — and `deriveBestInductiveSchedule` swallowed the resulting
-    error and **dropped the constructor**, so `HasType.var*` and their siblings were simply missing from the
-    "pinned" generator. `searchBestScheduleM` now translates between the two bases and reports an
-    unusable pin with `logError` instead. Re-measure before quoting a saving.
+    **No time saving is quoted here, deliberately.** Measuring one is easy to get wrong: a pin for a
+    constructor with a non-linear conclusion has a different length on each side, since the interpreter
+    has no premise for a non-linearity equality and the deriver does. `searchBestScheduleM` translates
+    between the two bases and reports an unusable pin with `logError`; where instead the error is
+    swallowed and the constructor dropped, the "pinned" generator is missing `HasType.var*` and its
+    siblings altogether and any timing compares two different generators. Measure before quoting a
+    saving.
 
     **Pass a generous `limit`.** The default 24 never enumerates the one ordering that stops `iteAnyBool`
     demoting `Lub` (see below): only 16 of its 7! orderings are reached, and all 16 keep `Lub` late, while
@@ -2433,7 +2433,7 @@ end PlanBook
 /-- `RelSpec.deriveModeIn`, but taking a constructor's plan from `book` when the book names one.
 
     A booked plan is `repair`ed rather than trusted blindly, so a plan carried over from a different
-    mode — where a variable that is now an input used to need generating — still lowers. -/
+    mode, where a variable that is an input here needs generating there, still lowers. -/
 def RelSpec.deriveModeWith (rel : RelSpec) (env : InterpEnv) (key : SpecKey) (book : PlanBook)
     (limit : Nat := 24) (recFnName : Option Name := none) (derivable : List Name := []) :
     Except String RelSchedule :=

@@ -731,14 +731,13 @@ partial def interpRelSchedule (env : InterpEnv) (rel : RelSchedule) (fuel initSi
     -- Hoisted dispatch: drop the branches whose leading input `Match` cannot match, instead of entering
     -- them and letting each reject at its first step. `numBase`/`numRec` are counted *after* the filter,
     -- so the weight function sees the branch counts it is actually choosing among.
-    -- `inputNames` is hoisted out of the per-constructor test. Computing it inside meant rebuilding
+    -- `inputNames` is hoisted out of the per-constructor test. Computing it inside rebuilds
     -- `List.range rel.argNames.length` plus two filters and a `filterMap` **76 times per entry**, purely
-    -- to map a scrutinee name to an input index — which is why the first version of this filter made the
-    -- generator 14% slower despite cutting absorbed failures 83%. The `matchPattern` calls genuinely
-    -- depend on the runtime inputs and stay; the scaffolding does not.
+    -- to map a scrutinee name to an input index, which costs more than the filter saves: 14% slower
+    -- generation even while absorbed failures drop 83%. The `matchPattern` calls genuinely depend on the
+    -- runtime inputs and stay; the scaffolding does not.
     --
-    -- The filter can empty the list, which `backtrack` could not previously be handed. That case is
-    -- correct rather than merely tolerated: `backtrack []` throws "all branches failed", a *definitive*
+    -- The filter can empty the list. That case is correct rather than merely tolerated: `backtrack []` throws "all branches failed", a *definitive*
     -- failure and not `outOfFuelError`, and by `guardPassesWith`'s soundness argument an empty list means
     -- no constructor's input pattern can match these inputs — so there is genuinely no derivation. The
     -- distinction matters downstream, where only inconclusive errors poison a checker's verdict

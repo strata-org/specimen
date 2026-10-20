@@ -4,12 +4,12 @@ import Specimen.Interp
 # Leaves from the instances in scope
 
 An interpreter closure bottoms out at leaves: an unconstrained generator for every type a schedule
-generates blind. They used to be registered by hand, in a module of their own, and so they were resolved
-in *that* module's environment rather than where the generator is actually derived. That made the
-interpreter measure a different generator from the compiled one. On Cedar the compiled code's
-`Arbitrary Expr` is `TypeOfLeanTest`'s placeholder `return .lit (.bool true)`, while the hand-written leaf
-was a real expression generator; the interpreter reached three times as many distinct 3-paths as the code
-it was meant to predict (481 against 159), and an order it learned did nothing once pinned.
+generates blind. Registering those by hand, in a module of their own, resolves them in *that* module's
+environment rather than where the generator is derived, and the interpreter then measures a different
+generator from the compiled one. On Cedar the compiled code's `Arbitrary Expr` is `TypeOfLeanTest`'s
+placeholder `return .lit (.bool true)`; against a hand-written leaf that generates real expressions the
+interpreter reaches three times as many distinct 3-paths as the code it is meant to predict (481 against
+159), and an order learned from that does nothing once pinned.
 
 So resolve them where the derivation runs. For every type the closure generates unconstrained, the Lean
 type is rebuilt from the schedule's reified form, `Arbitrary`/`Enum` and `ToVal` are synthesised in the

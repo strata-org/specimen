@@ -10,32 +10,31 @@ elaborated as typed Lean. So "the same" has to mean "behaves the same", and the 
 has to be **sound**. It may call two equivalent schedules different, but it must never call two different
 ones the same.
 
-The first comparator was not sound, so the counts it produced cannot be trusted: 1756 of 1870 recorded
-Cedar `HasType[0,4]` generator orders "agree", and 820 of 861 closure constructors. It renamed every
-variable by first occurrence, erased every `TyCtor` and non-atomic nullary `FuncApp`, ordered commuting
-steps by a rendering with the names blanked out, and never looked at what a schedule returns. Each of
-those choices hides a real difference:
+Four things a comparator must therefore not do, each of which equates schedules that generate different
+things. They are what the readings below are built to avoid, and they are easy to reach for, because each
+one makes agreement look higher:
 
-* **Inputs were renamed, not pinned.** The caller binds a mode's inputs *by argument position*, so they
-  are free variables of the schedule, not binders. Renaming them independently on each side equates
+* **Rename the inputs.** The caller binds a mode's inputs *by argument position*, so they are free
+  variables of the schedule, not binders. Renaming them independently on each side equates
   `match a ~ x :: xs; match b ~ y :: ys; [z] ← P x ys` with the same schedule with `a` and `b` swapped,
-  even though the swapped one passes the other input's head to `P`.
-* **The epilogue was never compared.** Cedar's `Lub.ext` returns `.ext xty`. The interpreter binds `xty`
-  from argument 0 and the deriver binds it from argument 1. The two agree only because both check
-  `xty = xty'`, and with that check removed from either side the old comparator still said "agree".
-* **Type-level arguments were erased everywhere, but the interpreter reads them.** At a call to a
-  polymorphic relation the `TyCtor`s are the instantiation (`renderedTypeArgs`, `SpecKey.typeArgs`). An
-  `Unconstrained` step's type is what `lookupArbitrary` looks up. So `x ← List Nat` and
-  `x ← List String` compared equal.
-* **Syntactic agreement is not semantic agreement.** Both sides spell Cedar's
-  `MapNotContainsKey Attr (Qualified CedarType) instDecidableEqString a vrty` identically, so every
-  syntactic comparator calls the two calls equal. In the compiled code the dictionary is filled by
-  instance synthesis. `splitHypothesis` used to pass it as a *value* to a callee whose inputs exclude
-  position 2, so `bindVars` failed and `backtrack` swallowed the failure: that call from
-  `hasAttrRecordNotFound` could never succeed in the interpreter, in any of the 15 `HasType` modes the
-  round trip compared. `Gen` now drops it by position (`typeArgIndicesOf`), and this reading does too.
+  even though the swapped one passes the other input's head to `P`. Hence the Pin rule below.
+* **Skip the epilogue.** Cedar's `Lub.ext` returns `.ext xty`. The interpreter binds `xty` from
+  argument 0 and the deriver binds it from argument 1, and they agree only because both check
+  `xty = xty'`. A comparator that stops at the steps calls them equal with that check deleted from
+  either side.
+* **Erase type-level arguments.** At a call to a polymorphic relation the `TyCtor`s are the
+  instantiation (`renderedTypeArgs`, `SpecKey.typeArgs`), and an `Unconstrained` step's type is what
+  `lookupArbitrary` looks up. Erase them and `x ← List Nat` equals `x ← List String`.
+* **Trust the spelling.** Both sides spell Cedar's
+  `MapNotContainsKey Attr (Qualified CedarType) instDecidableEqString a vrty` identically, so any
+  syntactic comparator calls the two calls equal, whatever each side then does with the dictionary
+  argument. In the compiled code instance synthesis fills it; the interpreter drops it by position
+  (`typeArgIndicesOf`), and the reading below drops it the same way. Passing it on as a *value*
+  instead, to a callee whose inputs exclude that position, leaves `bindVars` failing and `backtrack`
+  swallowing the failure, so the call can never succeed and a spelling-based comparison still reports
+  agreement.
 
-## How this one works
+## How the comparator works
 
 First, each side is **read by its own evaluator** into one small value-level language (`NSched`).
 The interpreter's steps are read exactly as `Gen.runSteps` reads them: constructor arguments by *kind*
@@ -62,12 +61,17 @@ results are compared with `==`. That makes soundness a local property of each ru
 | EqSym | `Eq`/`Ne` arguments are sorted | both equalities are symmetric |
 | Epilogue | the returned outputs are read and compared too, after EqSubst | the outputs are what the generator returns |
 
-Validated against the 114 Cedar mismatches the first comparator dumped (a Python model of these rules,
-run on `rt_dump.sexp`): it gives 107 equivalent and 7 different, matching a case-by-case manual review,
-once the polymorphic modes are read at their instantiation and the dictionary is read as a trailing-leaf
-convention would read it. Read strictly, without that convention, the 15 `hasAttrRecordNotFound` cases
-differ, as they should. Without instantiation, the 34 polymorphic lowerings differ, because as lowered
-they cannot run.
+Two readings are conventions rather than consequences of the rules above, and the verdict on real Cedar
+modes turns on them:
+
+* a polymorphic mode is read at its instantiation (`SpecKey.typeArgs`), because as lowered without one it
+  cannot run at all;
+* an instance argument in a trailing position is dropped, the way `typeArgIndicesOf` drops it. Read
+  strictly instead, Cedar's `hasAttrRecordNotFound` calls come out different from their compiled
+  counterparts.
+
+`SpecimenTest/Interp/ScheduleEquivTest.lean` is where the rules are exercised, and
+`DeriverChoice.agreement` is what runs the comparison over a whole closure.
 
 **Not certified here**, and needing a separate check:
 
@@ -322,10 +326,9 @@ structure Side where
   trailingLeaves : List (Name × List Nat) := []
   /-- Interpreter only: the argument positions of each relation that `Gen` drops as carrying no value —
       `InterpEnv.typeArgIndicesOf`, which `splitHypothesis` and `evalHypothesisArgs` consult. Reading the
-      interpreter without it transcribes the *old* by-kind rule, under which an instance dictionary was
-      passed as a value; `Gen` no longer does that, so neither may this reading. Pass
-      `env.typeArgIndicesOf`; the default (`[]` everywhere) is exact only for an environment with no
-      polymorphic relation. -/
+      interpreter without it falls back to a by-kind rule that passes an instance dictionary as a value,
+      which is not what `Gen` does. Pass `env.typeArgIndicesOf`; the default (`[]` everywhere) is exact
+      only for an environment with no polymorphic relation. -/
   typeIdxOf : Name → List Nat := fun _ => []
 
 structure ReadState where

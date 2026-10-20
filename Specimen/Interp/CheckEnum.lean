@@ -62,10 +62,10 @@ namespace Specimen.Interp
     Only exhaustion counts. A failed check, a non-matching pattern, and an `[interp]`
     misconfiguration are all *definite* about the branch they killed, so they must not poison a
     checker's verdict into "don't know". An exhausted retry loop
-    (`"Gen.runUntil: Out of attempts"`) determined nothing, so it *does* count — this used to be a
-    local copy that omitted that case and so reported it as a definite refutation.
+    (`"Gen.runUntil: Out of attempts"`) determined nothing, so it *does* count: omitting it reports an
+    exhausted loop as a definite refutation.
 
-    Now shared with `EnumeratorCombinators.isInconclusiveError` and the generator path, so all three
+    Shared with `EnumeratorCombinators.isInconclusiveError` and the generator path, so all three
     producer sorts classify errors identically. -/
 def isEnumInconclusive : GenError → Bool := Gen.GenError.isInconclusive
 
@@ -322,9 +322,9 @@ partial def interpCheckerSchedule (env : InterpEnv) (rel : RelSchedule) (fuel in
     let (baseScheds, recScheds) := rel.bucketedSchedules
     let branch := fun (size' : Nat) (p : Name × Schedule) =>
       -- `initSize` is the *original* budget, passed through unchanged as the emitted `aux_dec` does on
-      -- every recursive call. This used to pass the current `size`, so each level of recursion shrank the
-      -- budget given to delegated checks and enumerations — which read as a definite `false` until the
-      -- size-0 failsafe below made it an honest inconclusive.
+      -- every recursive call. Passing the current `size` instead shrinks the budget of delegated checks
+      -- and enumerations at every level of recursion, and a check that runs out reads as a definite
+      -- `false` rather than as inconclusive.
       fun (_ : Unit) => runCheckCtor env rel fuel' initSize size' inputs p.2
     -- The emitted checker's size-0 failsafe (`baseProducersWithFailsafe`): with recursive constructors
     -- still untried, "no base case matched" means *inconclusive*, not `false`. Without it this answered a
