@@ -6,6 +6,7 @@ import Specimen.DeriveConstrainedProducer
 import Specimen.EnumeratorCombinators
 import Specimen.GeneratorCombinators
 import Plausible.Attr
+import Specimen.Basalt
 
 /-!
 # Backward generation of state-machine traces
@@ -132,6 +133,16 @@ def runTrace (s : KVState) (ops : List (Op × Res)) : KVState :=
 
 instance : Arbitrary String where
   arbitrary := GeneratorCombinators.elementsWithDefault "A" ["A", "B", "C", "D"]
+
+/-- The same four-key pool for the Basalt path, which draws unconstrained values through
+`Basalt.ArbitraryFueled`. Basalt's own `Arbitrary String` draws random printable ASCII, so two keys
+would almost never be equal and every `HasKey` and `NoKey` premise would take its trivial branch.
+
+Flag off, the instance above is the one in force, so the Plausible path still exercises it. -/
+local instance instBackwardTraceBasaltArbitraryString : Basalt.ArbitraryFueled String where
+  arbitraryFueled _ := do
+    let i ← chooseNat 0 3
+    pure (["A", "B", "C", "D"].getD i "A")
 
 set_option specimen.multiOutput true
 set_option specimen.autoDeriveDeps true

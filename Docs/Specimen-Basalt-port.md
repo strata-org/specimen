@@ -39,10 +39,11 @@ derive_generator (fun τ => ∃ e, HasType e τ)
   because Basalt keeps `Gen` at the root namespace, where it is ambiguous with `Plausible.Gen` in any
   file with `open Plausible`. With the flag on and the import missing, deriving stops with an error
   naming the import.
-- **Dependency.** Specimen requires `basalt`, which requires Mathlib. Run `lake exe cache get` after
-  cloning to download Mathlib's build (`lake update` does this by itself). Specimen only imports
-  Basalt's generation modules (`Gen`, `RandomChoice`, the combinators, `BacktrackGen`, `Arbitrary`,
-  the Plausible bridge), which import no Mathlib, so Mathlib is downloaded but not loaded.
+- **Dependency.** Specimen requires `basalt`, which requires Mathlib. So Mathlib is cloned and a few GB
+  of prebuilt artefacts downloaded, by `lake exe cache get` (`lake update` runs it). It is never built
+  from source or elaborated into Specimen: the only Basalt modules Specimen imports are the generation
+  ones (`Gen`, `RandomChoice`, the combinators, `BacktrackGen`, `Arbitrary`, the Plausible bridge), and
+  those import no Mathlib.
 - **Set the flag for a whole library, not per file** (§6.1):
 
   ```toml
@@ -251,7 +252,7 @@ result before attributing a failure to the flag.
 A hand-written constrained producer that has to serve both paths needs both instances: the
 `ArbitrarySizedSuchThat` one for the Plausible path, a `BacktrackGenFor` twin for the Basalt path.
 (Writing only the `BacktrackGenFor` one also serves both, through the bridge, but then the Plausible
-path no longer runs the instance as written.)
+path runs the bridge rather than the instance as written.)
 
 ### 6.2 Every datatype needs its own `Basalt.ArbitraryFueled`
 

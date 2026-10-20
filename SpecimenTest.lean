@@ -181,5 +181,5 @@ import SpecimenTest.Interp.DiagnoseTest
 import SpecimenTest.BasaltEmissionTest
 -- …and without `Specimen.Basalt`, Basalt stays unloaded and the flag asks for the import
 import SpecimenTest.BasaltNotImportedTest
--- Constraint propagation for polymorphic dependencies (issue #38), not previously in this root
+-- Constraint propagation for polymorphic dependencies (issue #38)
 import SpecimenTest.PolymorphicDepConstraints
