@@ -105,6 +105,22 @@ register_option specimen.testSeed : Nat := {
   descr := "seed for `specimen_test` draws (0 draws a seed from the ambient RNG)"
 }
 
+/-- Budget in milliseconds for one `specimen_test` or `specimen` invocation, zero meaning no
+    budget.
+
+    Wall clock rather than a step count, because the test loop runs as a plain `IO` action through
+    Lean's IR interpreter, where neither the heartbeat limit nor `maxRecDepth` reaches it. A step
+    count would have to be threaded through the generator combinators, which every derived
+    generator calls at runtime, and the check would cost more than the budget is worth.
+
+    The default is two orders of magnitude above a normal invocation, so it marks a generator that
+    has run away rather than one that is merely slow on a loaded machine. Exceeding it is reported
+    as an error naming the proposition, the budget and the seed. -/
+register_option specimen.testTimeoutMs : Nat := {
+  defValue := 120000
+  descr := "budget in ms for one `specimen_test` invocation (0 for no budget)"
+}
+
 /-- When true, `derive_mutual` logs where its time went: a per-phase breakdown (schedule
     search, SCC condensation, constraints, codegen, widget/text, Lean's elaboration of the
     emitted block) plus a codegen-versus-pretty-printing split. Diagnostic only. -/

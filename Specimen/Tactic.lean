@@ -75,6 +75,38 @@ private def extractSizeField (cfg : Syntax) (fieldName : String) : Option Nat :=
     | _ => `Specimen.Tactic.testsField
   findFieldNum cfg kind
 
+/-- Run the compiled test loop, giving up if it outlives `specimen.testTimeoutMs`.
+
+    The loop is an `IO` action produced by `evalExpr`, so it runs in the IR interpreter outside the
+    elaborator's reach: Lean's heartbeat limit does not apply to it, and a generator that explores
+    a combinatorial space can hold the build for as long as it likes. Running it as a task and
+    waiting with a deadline turns that into a reported failure.
+
+    The error names the seed, so the run can be repeated with `set_option specimen.testSeed`. A
+    task cannot be interrupted from outside while it is inside interpreted code, so the abandoned
+    work continues until the file is finished; what this buys is a build that fails with a
+    diagnosis rather than one that never finishes. -/
+private def runWithinBudget (prop : TSyntax `term) (seed : Nat)
+    (action : IO (String × Nat × List (String × List (String × String × String)))) :
+    CommandElabM (String × Nat × List (String × List (String × String × String))) := do
+  let budgetMs := Lean.Option.get (← getOptions) specimen.testTimeoutMs
+  if budgetMs == 0 then
+    return (← action)
+  let task ← IO.asTask action
+  let deadline := (← IO.monoNanosNow) + budgetMs * 1000000
+  repeat
+    if ← IO.hasFinished task then
+      return (← IO.ofExcept task.get)
+    if (← IO.monoNanosNow) ≥ deadline then
+      IO.cancel task
+      throwError "specimen: testing {prop} did not finish within {budgetMs}ms \
+        (specimen.testTimeoutMs).\n\
+        The generator for this proposition is exploring more than the budget allows, which at a \
+        large size can mean a space it cannot finish. Reproduce this run with \
+        `set_option specimen.testSeed {seed}`, then lower `max` or raise the budget."
+    IO.sleep 25
+  throwError "specimen: unreachable"
+
 @[command_elab specimenTestCmd]
 unsafe def elabSpecimenTest : CommandElab := fun stx => do
   match stx with
@@ -226,7 +258,7 @@ unsafe def elabSpecimenTest : CommandElab := fun stx => do
       let expectedType ← liftTermElabM <| inferType e
       let action ← liftTermElabM <| unsafe Lean.Meta.evalExpr
         (IO (String × Nat × List (String × List (String × String × String)))) expectedType e
-      let (resultMsg, _shrinkCount, shrinkTree) ← action
+      let (resultMsg, _shrinkCount, shrinkTree) ← runWithinBudget prop seed action
 
       -- Emit the test result first (appears at top of infoview)
       if resultMsg.startsWith "Found counter-example!" then
