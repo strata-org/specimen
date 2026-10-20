@@ -56,7 +56,7 @@ def roundTrip (order : List Nat) : Elab.Command.CommandElabM Bool := do
     return false
   | .ok (repaired, interpSched) =>
     let memo ← IO.mkRef (∅ : Std.HashMap SpecKey MemoEntry)
-    pinnedOrdersRef.set [(bstKey, ``BST.BstNode, order)]
+    PinnedOrders.install [(bstKey, ``BST.BstNode, order)]
     try
       -- `derive_mutual` sets `multiOutput` via `withScope`; a direct call must do the same, or it runs
       -- the deprecated single-output path where a premise order does not determine the schedule.
@@ -64,7 +64,7 @@ def roundTrip (order : List Nat) : Elab.Command.CommandElabM Bool := do
         let _ ← Elab.Command.liftTermElabM (deriveBestInductiveSchedule bstKey memo)
     catch e =>
       IO.println s!"order {order}: derivation failed: {(← e.toMessageData.toString).take 300}"
-    pinnedOrdersRef.set []
+    PinnedOrders.install []
     let m ← memo.get
     match m[bstKey]? with
     | some (.done indSched) =>
@@ -133,9 +133,9 @@ def sourceBook : PlanBook :=
     match Parser.runParserCategory (← getEnv) `command cmd with
     | .error e => throwError "emitted pin source does not parse: {e}\n{cmd}"
     | .ok stx => Elab.Command.elabCommand stx
-  -- `run_cmd PinnedOrders.install` is part of what was emitted, so the ref now holds the pin.
-  let installed ← pinnedOrdersRef.get
-  pinnedOrdersRef.set []
+  -- `run_cmd PinnedOrders.install` is part of what was emitted, so the pin is now in force.
+  let installed ← getPinnedOrders
+  PinnedOrders.install []
   unless installed.find? bstKey ``BST.BstNode == some [2, 1, 0] do
     throwError "emitted source elaborated but installed {repr installed}"
   IO.println "[pinned-order] emitted pin table compiles and installs the order it names"
@@ -143,16 +143,16 @@ def sourceBook : PlanBook :=
 /-! ## Starting from the deriver's own choice
 
 Learning should begin from what `derive_mutual`'s branch and bound settled on, not from the interpreter's
-default. That needs the settled order back out (`chosenOrdersRef`), and it is only a faithful starting
+default. That needs the settled order back out (`getChosenOrders`), and it is only a faithful starting
 point if the interpreter lowers that order to the *same schedule* the deriver emitted — for every
 constructor, not just the pinned one above. -/
 
 #eval show Elab.Command.CommandElabM Unit from do
-  chosenOrdersRef.set []
+  setChosenOrders []
   let memo ← IO.mkRef (∅ : Std.HashMap SpecKey MemoEntry)
   Elab.Command.withScope (fun sc => { sc with opts := sc.opts.set `specimen.multiOutput true }) do
     let _ ← Elab.Command.liftTermElabM (deriveBestInductiveSchedule bstKey memo)
-  let chosen := (← chosenOrdersRef.get).filter (fun (k, _, _) => k == bstKey)
+  let chosen := (← getChosenOrders).filter (fun (k, _, _) => k == bstKey)
   let some (.done ind) := (← memo.get)[bstKey]? | throwError "BST did not derive"
   let compiled := ind.baseSchedules ++ ind.recSchedules
   unless chosen.length == bstSpec.ctors.length do

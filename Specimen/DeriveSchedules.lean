@@ -1262,31 +1262,58 @@ def PinnedOrders.find? (p : PinnedOrders) (key : SpecKey) (ctorName : Name) : Op
 
 /-- Pinned orders in force for the current derivation.
 
-    A ref rather than a parameter because the search is reached through several layers that have no
-    other reason to know about it — the same shape as `Scoring.weightModifierRegistry`. Set it, derive,
-    reset it. -/
-initialize pinnedOrdersRef : IO.Ref PinnedOrders ← IO.mkRef []
+    Environment state rather than a parameter because the search is reached through several layers that
+    have no other reason to know about it, and rather than an `IO.Ref` because the environment is scoped:
+    a pin a file installs is in force for that file's derivations and is not written to the `.olean`, so
+    it cannot reach a module that imports it.
+
+    `asyncMode := .local` because the state is read and written at command elaboration level, where
+    there is a single branch; the mode that would reconcile branches is only needed for state set while
+    elaborating a declaration. -/
+initialize pinnedOrdersExt : EnvExtension PinnedOrders ←
+  registerEnvExtension (pure []) (asyncMode := .local)
+
+/-- The pinned orders in force. -/
+def getPinnedOrders [Monad m] [MonadEnv m] : m PinnedOrders :=
+  return pinnedOrdersExt.getState (← getEnv)
 
 /-- Put `ps` in force for subsequent derivations in this file.
 
     Exists so emitted pin tables (`PlanBook.toPinnedOrdersSource`) can be installed with a plain
     `run_cmd PinnedOrders.install …` above the `derive_mutual`, without the emitted source having to
-    name the ref or know that it is one. -/
-def PinnedOrders.install (ps : PinnedOrders) : IO Unit := pinnedOrdersRef.set ps
+    know where the orders are kept. -/
+def PinnedOrders.install [Monad m] [MonadEnv m] (ps : PinnedOrders) : m Unit :=
+  modifyEnv (pinnedOrdersExt.setState · ps)
 
 /-- The premise order the deriver actually **settled on**, for every (mode, constructor) it derived — in
     the same declaration-order basis as `PinnedOrders`, so the list reads directly as a pin table.
 
     This is how the runtime interpreter starts from the compile-time choice instead of from its own
     default: `PlanBook.ofOrders` turns it into a book, and learning then perturbs only the constructors
-    that measure badly. Without it the interpreter began from `deriveModeIn`'s first resolvable plan,
-    which on Cedar's `HasType[0,3,4]` disagreed with the deriver on 31 of 76 constructors — so "where did
-    dynamic analysis beat static?" could not even be asked.
+    that measure badly. Starting instead from `deriveModeIn`'s first resolvable plan makes the two
+    disagree for no reason the measurement can see: on Cedar's `HasType[0,3,4]` that default differs from
+    the deriver on 31 of 76 constructors, so "where did dynamic analysis beat static?" cannot be asked.
 
     Always recorded, pinned or not: a pinned order is also the order that was settled on. The first
     checks (`collectCheckedHypotheses`) lead the recorded order, because they lead the schedule. Reset
-    with `chosenOrdersRef.set []` before a derivation whose choices you want in isolation. -/
-initialize chosenOrdersRef : IO.Ref PinnedOrders ← IO.mkRef []
+    with `setChosenOrders []` before a derivation whose choices you want in isolation. -/
+initialize chosenOrdersExt : EnvExtension PinnedOrders ←
+  registerEnvExtension (pure []) (asyncMode := .local)
+
+/-- The orders the deriver settled on so far. -/
+def getChosenOrders [Monad m] [MonadEnv m] : m PinnedOrders :=
+  return chosenOrdersExt.getState (← getEnv)
+
+/-- Replaces the recorded orders, which `[]` resets. -/
+def setChosenOrders [Monad m] [MonadEnv m] (ps : PinnedOrders) : m Unit :=
+  modifyEnv (chosenOrdersExt.setState · ps)
+
+/-- Records `order` as what the search settled on for `ctorName` of `key`, replacing any order recorded
+    for that pair earlier. -/
+def recordChosenOrder [Monad m] [MonadEnv m] (key : SpecKey) (ctorName : Name) (order : List Nat) :
+    m Unit :=
+  modifyEnv (chosenOrdersExt.modifyState · (fun l =>
+    (key, ctorName, order) :: l.filter (fun (k, c, _) => !(k == key && c == ctorName))))
 
 /-- Find the best hypothesis ordering for one constructor, using the active
     scoring bundle as the objective function.
@@ -1334,7 +1361,7 @@ partial def searchBestScheduleM (ctorName : Name) (vars : List TypedVar)
   let toDeriver := fun (i : Nat) => if i < nlStart then i else i + nlCount
   let isNonlinear := fun (j : Nat) => nlStart ≤ j && j < nlStart + nlCount
   let toInterp := fun (j : Nat) => if j < nlStart then j else j - nlCount
-  let pinnedOrder := ((← pinnedOrdersRef.get).find? key ctorName).map (fun o =>
+  let pinnedOrder := ((← getPinnedOrders).find? key ctorName).map (fun o =>
     -- The non-linear equalities go *last*. By then every premise that could bind either side has run,
     -- so each one is either a check (both sides bound) or produces the duplicate from the original —
     -- which is exactly what the conclusion's repeated variable means. Placing one first could ask it to
@@ -1476,7 +1503,7 @@ partial def searchBestScheduleM (ctorName : Name) (vars : List TypedVar)
   -- interpreter emits a `Check` at the premise's own position, and the point of pinning is to
   -- reproduce a measured schedule exactly rather than a re-derived approximation of it.
   let mut pinned := false
-  -- The hypotheses in the order the final schedule takes them, for `chosenOrdersRef`: first checks
+  -- The hypotheses in the order the final schedule takes them, as recorded: first checks
   -- (which lead the schedule), then each component's winning ordering. Replaced wholesale when pinned.
   let mut chosenHyps : List HypothesisExpr := newCheckedHyps.reverse
 
@@ -1526,7 +1553,7 @@ partial def searchBestScheduleM (ctorName : Name) (vars : List TypedVar)
     -- Use minTreePruningM to find the best ordering for this component
     let componentDone ← IO.mkRef false
     let componentBestRef ← IO.mkRef (none : Option (List (PreScheduleStep HypothesisExpr Name) × List Name × Std.HashSet Name × Score))
-    -- The ordering behind `componentBestRef`, kept in lockstep with it for `chosenOrdersRef`.
+    -- The ordering behind `componentBestRef`, kept in lockstep with it for the recorded order.
     let componentOrderRef ← IO.mkRef ([] : List HypothesisExpr)
     let envSnapshot := accEnv
     let envSetSnapshot := accEnvSet
@@ -1580,8 +1607,7 @@ partial def searchBestScheduleM (ctorName : Name) (vars : List TypedVar)
   -- interpreter has no premise for them) and later indices shift down past them.
   if declOrder.length == hypotheses.length then
     let interpOrder := (declOrder.filter (fun j => !isNonlinear j)).map toInterp
-    chosenOrdersRef.modify (fun l =>
-      (key, ctorName, interpOrder) :: l.filter (fun (k, c, _) => !(k == key && c == ctorName)))
+    recordChosenOrder key ctorName interpOrder
 
   -- 5. Build final schedule: firstChecks + component schedules + remaining vars
   let remainingUninstantiated := remainingVarNames.filter (!accEnvSet.contains ·)

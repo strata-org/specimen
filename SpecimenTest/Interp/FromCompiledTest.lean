@@ -112,21 +112,21 @@ info: [plan-diff] the learned book agrees with the start book everywhere
   let c := start.set bstKey ``BST.BstNode [.inst `x, .use 0, .use 1, .use 2]
   IO.println (PlanBook.renderDiff specs (PlanBook.diff specs start c))
 
--- `deriveChoice` answers for branch and bound, not for a pin in force, and leaves both refs as it found
--- them: a pin installed for a `derive_mutual` elsewhere in the file must neither leak into the choice
+-- `deriveChoice` answers for branch and bound, not for a pin in force, and leaves the pinned and the
+-- recorded orders as it found them: a pin installed for a `derive_mutual` elsewhere in the file must neither leak into the choice
 -- nor be lost, and the choice must not pick up orders recorded before it.
 /-- info: [from-compiled] pin ignored and restored; earlier recorded orders excluded and restored -/
 #guard_msgs in
 #eval show Elab.Command.CommandElabM Unit from do
   let pin : PinnedOrders := [(bstKey, ``BST.BstNode, [2, 1, 0])]
   let earlier : PinnedOrders := [(bstKey, `earlier, [7])]
-  pinnedOrdersRef.set pin
-  chosenOrdersRef.set earlier
+  PinnedOrders.install pin
+  setChosenOrders earlier
   let c ← deriveChoice bstKey
-  let pinsAfter ← pinnedOrdersRef.get
-  let chosenAfter ← chosenOrdersRef.get
-  pinnedOrdersRef.set []
-  chosenOrdersRef.set []
+  let pinsAfter ← getPinnedOrders
+  let chosenAfter ← getChosenOrders
+  PinnedOrders.install []
+  setChosenOrders []
   unless c.orders.find? bstKey ``BST.BstNode == some [0, 1, 2] do
     throwError "the pin leaked into the choice: {c.orders.find? bstKey ``BST.BstNode}"
   if c.orders.any (fun (_, n, _) => n == `earlier) then

@@ -2148,7 +2148,7 @@ namespace PlanBook
     falls back to the book's entry for the **uninstantiated** mode when it has none of its own. That is
     what an entry keyed at `typeArgs := []` means: the compile-time pipeline mints only such keys, and
     one polymorphic generator serves every instantiation, so a book read off the deriver
-    (`ofOrders` over `chosenOrdersRef`) holds `SetContains[1]` and never `SetContains[1]@(0:EntityType)`.
+    (`ofOrders` over `getChosenOrders`) holds `SetContains[1]` and never `SetContains[1]@(0:EntityType)`.
     Without the fallback those entries were silently never consulted: on Cedar's `HasType[0,4]` closure
     52 generator constructors across 24 instantiated modes ran the interpreter's own default instead of
     the deriver's choice — `MapNotContainsKey.skip` generating `k` blind and checking, where the deriver
@@ -2265,7 +2265,7 @@ def set (b : PlanBook) (key : SpecKey) (ctorName : Name) (plan : Plan) : PlanBoo
 def size (b : PlanBook) : Nat := b.entries.length
 
 /-- A book from premise orders in declaration-index form — the compile-time deriver's own choices, read
-    off `Schedules.chosenOrdersRef` after a `derive_mutual`.
+    off `Schedules.getChosenOrders` after a `derive_mutual`.
 
     This is the starting point for learning: begin from what branch and bound settled on, measure where
     it fails, and perturb only there, so that every entry the learned book ends up differing on is a
@@ -2335,7 +2335,7 @@ def ofInterpDefaults (rel : RelSpec) (key : SpecKey) (limit : Nat := 24) : PlanB
 
 /-! ### Where a learned book departs from its start
 
-    Learning starts from the deriver's own choice (`ofOrders` over `Schedules.chosenOrdersRef`) so that
+    Learning starts from the deriver's own choice (`ofOrders` over `Schedules.getChosenOrders`) so that
     its *result* can be read as a list of disagreements with branch and bound: every entry below is a
     constructor where measurement overruled the static estimate. That list is the thing to inspect, and
     the thing to pin — pinning the whole learned book would also pin every constructor learning never

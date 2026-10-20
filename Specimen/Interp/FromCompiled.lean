@@ -11,7 +11,7 @@ told apart afterwards: places where measurement beat branch and bound, and place
 merely started somewhere else. Only the first kind is worth pinning.
 
 So learning starts here instead: run the deriver's search unpinned, read back the premise order it settled
-on for every `(mode, constructor)` it derived (`Schedules.chosenOrdersRef`), and turn that into a
+on for every `(mode, constructor)` it derived (`Schedules.getChosenOrders`), and turn that into a
 `PlanBook` (`PlanBook.ofOrders`). A learned book's `PlanBook.diff` against this one is then exactly the
 set of constructors where dynamic measurement overruled the static estimate.
 
@@ -54,7 +54,7 @@ namespace Specimen.Interp
 /-- What the deriver settled on for one root and everything its search pulled in. -/
 structure DeriverChoice where
   /-- The settled premise order per `(mode, constructor)`, in the interpreter's basis — the contents of
-      `chosenOrdersRef` after the derivation, and nothing from any earlier one. -/
+      `getChosenOrders` after the derivation, and nothing from any earlier one. -/
   orders : PinnedOrders
   /-- The deriver's memo, holding the schedules those orders lowered to: the comparison target for
       anyone checking that the interpreter reproduces them. -/
@@ -127,15 +127,15 @@ end DeriverChoice
     * `specimen.multiOutput` is set, as `derive_mutual` sets it. Without it the deprecated single-output
       path runs, under which a premise order does not determine the schedule, and the recorded orders
       would not lower to anything the pipeline emits.
-    * `pinnedOrdersRef` is set to `pins` for the duration — empty by default. A pin a file installed for
+    * The pins in force are `pins` for the duration, empty by default. A pin a file installed for
       its own `derive_mutual` would be recorded as "settled on" (pinned orders are recorded too), and the
       book would reproduce the pin instead of branch and bound. Passing `pins` deliberately gives what
       the compiled generator would get *with* them — including the badness, which is a function of the
       schedule, so a pinned constructor's weight changes with its order.
-    * The memo is fresh and `chosenOrdersRef` is reset first, so the orders are this derivation's and
+    * The memo is fresh and the recorded orders are reset first, so the orders are this derivation's and
       nothing else's — including no leftovers from a `derive_mutual` earlier in the file.
 
-    Both refs are restored afterwards, even on failure, so calling this does not disturb pins a file
+    Both are restored afterwards, even on failure, so calling this does not disturb pins a file
     installed for its own `derive_mutual`.
 
     Throws when the deriver did not actually search the root. The deriver skips any mode Lean already
@@ -144,10 +144,10 @@ end DeriverChoice
     back empty. Learning would then start from the interpreter's own default while reporting it as the
     compiled start, which is the confusion this module exists to remove. -/
 def deriveChoice (root : SpecKey) (pins : PinnedOrders := []) : Elab.Command.CommandElabM DeriverChoice := do
-  let savedPins ← pinnedOrdersRef.get
-  let savedChosen ← chosenOrdersRef.get
-  pinnedOrdersRef.set pins
-  chosenOrdersRef.set []
+  let savedPins ← getPinnedOrders
+  let savedChosen ← getChosenOrders
+  PinnedOrders.install pins
+  setChosenOrders []
   let memo ← IO.mkRef (∅ : Std.HashMap SpecKey MemoEntry)
   try
     Elab.Command.withScope (fun sc => { sc with opts := sc.opts.set `specimen.multiOutput true }) do
@@ -175,10 +175,10 @@ def deriveChoice (root : SpecKey) (pins : PinnedOrders := []) : Elab.Command.Com
     let weightFn : CtorWeightFn := match wm with
       | some m => fun c o srt b r z nb nr nrc => m.fn (wf.fn c o srt b r z nb nr nrc) c o srt b r z nb nr nrc
       | none => wf.fn
-    return { orders := ← chosenOrdersRef.get, memo := memoNow, badness := badness, weightFn := weightFn }
+    return { orders := ← getChosenOrders, memo := memoNow, badness := badness, weightFn := weightFn }
   finally
-    pinnedOrdersRef.set savedPins
-    chosenOrdersRef.set savedChosen
+    PinnedOrders.install savedPins
+    setChosenOrders savedChosen
 
 /-- The deriver's generator choices for `root` as a `PlanBook`: the book generator learning should start
     from (see `DeriverChoice.generatorBook` for why checker and enumerator orders are left out). -/
