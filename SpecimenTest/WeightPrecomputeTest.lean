@@ -86,9 +86,10 @@ def keepZeroScaleModifier (baseWeight : Nat) (_ctorName : Lean.Name) (_outputInd
 
 initialize Scoring.registerWeightModifier `keepZeroScaleModifier keepZeroScaleModifier ``keepZeroScaleModifier
 
--- Version C: that modifier over a size-dependent base. Folding the two in one `simp` substituted the
--- base *expression* at both mentions, so the emitted weight recomputed `if size' = 0 then … else …` twice
--- on every branch construction. The base is now folded on its own and shared through `have`.
+-- Version C: that modifier over a size-dependent base. The modifier mentions its `base` twice, so folding
+-- it together with the base would substitute the `if size' = 0 then … else …` expression at both mentions
+-- and recompute it on every branch construction. The emitted weight below binds the base in a `have`
+-- instead, which is what this snapshot pins.
 namespace SharedBase
 set_option specimen.richOutput false in
 set_option specimen.textOutput 3 in

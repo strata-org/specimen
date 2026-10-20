@@ -58,8 +58,8 @@ register_option specimen.searchLimit : Nat := {
     inputs, so removing it leaves the output distribution unchanged — weights are *not* recounted after
     the filter. The guard is built from each branch's own leading `match`es (with bound variables replaced
     by wildcards), so it can only be weaker than the branch's test and never drops a branch that could
-    succeed. Measured in the interpreter's equivalent (`InterpEnv.dispatchInputs`): Cedar `HasType[0,4]`
-    9–30% faster; STLC and BST unchanged. -/
+    succeed. The gain is in relations whose constructors split on an input, such as Cedar's `HasType`;
+    where every constructor can match any input, as in STLC and BST, the filter keeps them all. -/
 register_option specimen.dispatchInputs : Bool := {
   defValue := true
   descr := "in derived generators, skip constructors whose leading input pattern cannot match"

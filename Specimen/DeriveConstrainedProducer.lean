@@ -744,8 +744,8 @@ private def precomputeWeight (finalWeight : TSyntax `term) (sizePrimeName : Name
     The two are folded in **separate** `simp` calls, and that is the whole point. Folding
     `mod (weightFn …) …` in one call unfolds the modifier, which substitutes the base-weight
     *expression* at every mention of its `base` parameter — and every modifier mentions `base`
-    twice (once to preserve a zero weight, once to scale it). A tuned recursive constructor came out
-    as
+    twice (once to preserve a zero weight, once to scale it). A tuned recursive constructor then comes
+    out as
 
         ((if size' = 0 then 0 else max 1 size' * 2).min 1).max
           ((if size' = 0 then 0 else max 1 size' * 2) * 16000 / 1000)

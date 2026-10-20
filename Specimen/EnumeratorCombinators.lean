@@ -59,9 +59,8 @@ def enumerateAll (es : List (ExceptT GenError Enumerator α)) (fuel : Nat) : Laz
     the list had. Enumerator consumers discard failures entirely.
 
     Why it matters: every failed `match` in an emitted branch is an `.error` entry, and an enumerator's bind
-    carries each one through, so failures multiply with the values around them. Measured on the derived STLC
-    enumerator (`SpecimenTest/GradedVsDerivedConcatAblation.lean`, goal `Fun Nat Nat`, budget 11): carrying
-    them costs ~6×. Squashing at every `enumerate` bounds them to one per call.
+    carries each one through, so failures multiply with the values around them and a deep enumeration spends
+    most of its entries on them. Squashing at every `enumerate` bounds them to one per call.
 
     A run of failures is skipped by a direct call, not through a thunk, so a long run cannot nest forces. -/
 def squashErrors (l : LazyList (Except GenError α)) : LazyList (Except GenError α) := go none l

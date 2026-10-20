@@ -135,11 +135,13 @@ def concat (l : LazyList (LazyList α)) : LazyList α :=
 /-- Round-robin concatenation of lazy enumerations: lazily takes one element from the back of each lazy enumeration in turn
     until there are no more to go, then starts at the head of the enumeration of enumerations. -/
 partial def roundRobinConcat (l : LazyList (LazyList α)) : LazyList α :=
-  -- The queue of partly-consumed enumerations is `front ++ back.reverse`: pop from `front`, push onto
-  -- `back`, and reverse `back` only when `front` runs out. Same order as a single list with `queue ++ [x]`,
-  -- but each push is O(1) instead of a walk of the whole queue — which made combining `n` enumerations
-  -- quadratic. Measured on the derived STLC enumerator at goal `Fun Nat Nat`, budget 9: 403 s with the
-  -- single-list queue (`SpecimenTest/GradedVsDerivedSameDiscipline.lean`).
+  -- The queue of partly-consumed enumerations is the batched queue `front ++ back.reverse`: pop from
+  -- `front`, push onto `back`, and reverse `back` only when `front` runs out. This is the order a single
+  -- list with `queue ++ [x]` gives, but each push is O(1) rather than a walk of the whole queue, which is
+  -- what keeps combining `n` enumerations linear in the pushes rather than quadratic. The structure is
+  -- older than its analysis (Burton 1982; Hood and Melville 1981 for the real-time variant) and is
+  -- analysed as the batched queue in Okasaki, Purely Functional Data Structures, §5.2; the lazy
+  -- persistent queues there (banker's, physicist's) are not needed, since this queue is never shared.
   let rec go (current : LazyList (LazyList α)) (front back : List (LazyList α)) : LazyList α :=
     match current with
     | lnil =>
