@@ -131,6 +131,8 @@ import SpecimenTest.ArithIndexTest
 import SpecimenTest.TypeAbbrevArgTest
 -- …and a constructor a mode was derived without is reported under `trace.specimen.droppedCtors`
 import SpecimenTest.DroppedCtorsTraceTest
+-- …and a large mutual block of workers recurses structurally on `fuel`, not by well-founded recursion
+import SpecimenTest.StructuralFuelTest
 
 -- `specimen_test` command / `specimen` tactic
 import SpecimenTest.TacticTest

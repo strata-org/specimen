@@ -95,6 +95,10 @@ def requireBasaltImport : CoreM Unit := do
     throwError "`specimen.emitBasalt` requires `import Specimen.Basalt` in this file: derived \
       generators are emitted against Basalt's `Gen`, `BacktrackGen` and `BacktrackGenFor`"
 
+/-- Whether `stx` contains the identifier `x`, ignoring macro scopes. -/
+private def mentionsIdent (x : Name) (stx : Syntax) : Bool :=
+  (stx.find? fun s => s.isIdent && s.getId.eraseMacroScopes == x.eraseMacroScopes).isSome
+
 /-- Produces an instance of the `ArbitrarySizedSuchThat` / `EnumSizedSuchThat` typeclass containing the definition for a constrained generator.
     The arguments to this function are:
     - a list of `baseGenerators` (each represented as a Lean term), to be invoked when `size == 0`
@@ -441,7 +445,18 @@ def mkConstrainedProducerMutualPieces
       if useBasalt then
         `(fun {$basaltGenVar : Type → Type} [$basaltGenClass $basaltGenVar] => $innerLambda)
       else pure innerLambda
-    let defCmd ← `(command| def $defIdent : $defType := $lambdaBody)
+    -- Name the recursive argument. Left to infer it, Lean's structural search over a large mutual block
+    -- with three `Nat` parameters per definition gives up and falls back to well-founded recursion, whose
+    -- eagerly proved unfolding lemma can exhaust the kernel's memory. Only a definition that passes
+    -- `fuel'` on (see `recCall`) recurses; the clause on any other draws an "unused" warning.
+    let recurses := [baseGenerators, inductiveGenerators].any (mentionsIdent freshFuel'.getId ·)
+    let defCmd ←
+      if !recurses then `(command| def $defIdent : $defType := $lambdaBody)
+      -- `termination_by` binds every parameter after the colon, so `_ _` skips `{G} [Gen G]`.
+      else if useBasalt then `(command| def $defIdent : $defType := $lambdaBody
+        termination_by structural _ _ $fuelIdent:ident => $fuelIdent)
+      else `(command| def $defIdent : $defType := $lambdaBody
+        termination_by structural $fuelIdent:ident => $fuelIdent)
 
     -- Emit the instance (differs by deriveSort)
     let fuelVal := Lean.Option.get (← getOptions) specimen.fuel
