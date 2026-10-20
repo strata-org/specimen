@@ -153,6 +153,7 @@ initialize rulePathEnabledRef : IO.Ref Bool ← IO.mkRef false
 /-- The rule paths seen so far, most recent first. -/
 initialize rulePathsRef : IO.Ref (List (List Name)) ← IO.mkRef []
 
+@[never_extract, noinline]
 private unsafe def notePathImpl {α : Type} (p : List Name) (a : α) : α :=
   unsafeBaseIO do
     if ← rulePathEnabledRef.get then
@@ -160,7 +161,7 @@ private unsafe def notePathImpl {α : Type} (p : List Name) (a : α) : α :=
     return a
 
 /-- Records one completed rule path and returns `a` unchanged. -/
-@[implemented_by notePathImpl]
+@[implemented_by notePathImpl, never_extract, noinline]
 def notePath {α : Type} (_p : List Name) (a : α) : α := a
 
 /-- The path count at the start of each open branch, innermost first.
@@ -174,10 +175,12 @@ def notePath {α : Type} (_p : List Name) (a : α) : α := a
     on success, truncating back to it on failure. What remains is exactly the kept derivations.
 
     Every one of these is a pure-looking function whose *result is the thing run next*, the same shape
-    as `notePath`: the push returns the branch, the pops return the continuation. That is what pins
-    them in place. The first version took the count as a separate `let` and the compiler moved it —
-    once hoisted to a constant evaluated a single time, once floated into the failure handler, both
-    silently wrong. -/
+    as `notePath`: the push returns the branch, the pops return the continuation. Taking the count in a
+    separate `let` instead leaves the compiler free to move it, which it does: hoisted to a constant
+    evaluated once, or floated into the failure handler, both silently wrong. The same reason puts
+    `@[never_extract, noinline]` on every shim here. Their pure definitions are the identity, so two
+    identical applications may be commoned up, and a call whose result is discarded may be dropped,
+    either of which loses what it was there to record. -/
 initialize rulePathMarksRef : IO.Ref (List Nat) ← IO.mkRef []
 
 @[never_extract, noinline]
@@ -343,6 +346,7 @@ private def RetryLog.bump (l : RetryLog) (k : SpecKey) (c : Name) (failed : Bool
   { l with byCtor := byCtor, byStep := byStep, firstInternal := firstInternal,
            byStepNoApply := byStepNoApply }
 
+@[never_extract, noinline]
 private unsafe def noteSuccessImpl {α : Type} (k : SpecKey) (c : Name) (a : α) : α :=
   unsafeBaseIO do
     if ← retryEnabledRef.get then
@@ -350,9 +354,10 @@ private unsafe def noteSuccessImpl {α : Type} (k : SpecKey) (c : Name) (a : α)
     return a
 
 /-- Records a successful constructor attempt and returns `a` unchanged. -/
-@[implemented_by noteSuccessImpl]
+@[implemented_by noteSuccessImpl, never_extract, noinline]
 def noteSuccess {α : Type} (_k : SpecKey) (_c : Name) (a : α) : α := a
 
+@[never_extract, noinline]
 private unsafe def noteFailureImpl (k : SpecKey) (c : Name) (e : GenError) : GenError :=
   unsafeBaseIO do
     if ← retryEnabledRef.get then
@@ -363,7 +368,7 @@ private unsafe def noteFailureImpl (k : SpecKey) (c : Name) (e : GenError) : Gen
 
 /-- Records a failed constructor attempt and returns `e` unchanged, so the error still propagates
     to `backtrack` exactly as before. -/
-@[implemented_by noteFailureImpl]
+@[implemented_by noteFailureImpl, never_extract, noinline]
 def noteFailure (_k : SpecKey) (_c : Name) (e : GenError) : GenError := e
 
 /-! ## Rule-path coverage
