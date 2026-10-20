@@ -64,9 +64,9 @@ def runWithSeed (x : Gen α) (size : Nat) (seed : Nat) : IO α :=
     iteration looks equivalent but is not: `mkStdGen` on a sequential or affine seed sequence produces
     *correlated* first draws — seeds `1…8` yield `46, 64, 82, 100, 17, 35, 53, 71` from
     `choose 0 100`, an arithmetic progression mod 101. Since a derived generator's first draw picks its
-    top-level constructor, that correlation pins every sample to the same branch. Measured on
-    `BoundedBuffer`, 1000 per-iteration-seeded draws produced 1000 *empty* traces, where one seeded
-    stream produces the normal spread.
+    top-level constructor, that correlation pins every sample to the same branch: on `BoundedBuffer`,
+    1000 per-iteration-seeded draws collapse to 1000 *empty* traces, where one seeded stream gives the
+    normal spread.
 
     `f` receives the sample index so the caller can vary size per sample. -/
 def sampleWithSeed (n : Nat) (f : Nat → Gen α) (size : Nat) (seed : Nat) : IO (Array (Option α)) :=

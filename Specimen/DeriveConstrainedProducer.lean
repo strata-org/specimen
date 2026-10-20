@@ -2132,16 +2132,16 @@ def setInstanceVisibility (cmd : TSyntax `command) (kind : AttributeKind) : TSyn
     let newInstNode := instNode.setArg 0 newAttrKind
     ⟨raw.setArg 1 newInstNode⟩
 
-/-- Deterministic, user-writable name for one derived spec's worker definition, qualified with the
-    ambient namespace.
+/-- Deterministic, user-writable name for one derived spec's worker definition, carrying the module and
+    the ambient namespace it is declared in.
 
-    Replaces `mkFreshUserName`, whose names embedded the module name, a hash and a hygiene counter
-    (`specimen_mutual._@._stdin.3622351718._hygCtx._hyg.26_Between`). Nobody can write such a name, and
-    it changes when the file is edited — so a *proof* about a derived generator could not name it.
+    Determined by the spec alone, so the name is stable across edits to the file and can be written out:
+    a *proof* about a derived generator needs to name its subject.
 
-    The namespace prefix is not cosmetic. A bare deterministic name breaks real code: Cedar declares the
-    same spec's worker at `_root_` in one module and under `Variant.TypeOfCheck` in another, and an
-    unqualified reference is then `Ambiguous term`. Qualifying makes each module reference its own copy.
+    Carrying the declaration site is not cosmetic. The same spec is derived in more than one place:
+    Cedar's worker for one spec sits at `_root_` in one module and under `Variant.TypeOfCheck` in
+    another, and with one name for both a module that declares one and `open`s the other reads an
+    unqualified reference as `Ambiguous term`. A name per declaration site resolves to the local copy.
 
     Uniqueness within a namespace: injective in exactly the data that determines the emitted *instance*,
     so two specs whose worker names collide are two specs that would emit the same instance anyway. -/
@@ -2153,23 +2153,18 @@ def specimenWorkerName (indName : Name) (outIdxs : List Nat) (ds : DeriveSort)
     | .Checker => "check"
     | .Theorem => "thm"
   let idxs := if outIdxs.isEmpty then "" else "_" ++ String.intercalate "_" (outIdxs.map toString)
-  -- The ambient namespace is mangled into the *simple* name rather than used as a prefix, and no
-  -- `_root_` escaping is involved. Two earlier shapes failed on real code:
-  --   * a bare name (`specimen_gen_Foo_1`) is `Ambiguous term` wherever a module declares one at the root
-  --     and `open`s another namespace holding its own copy — Cedar's `SchemaTest` does exactly that;
-  --   * prefixing the namespace does not help there either, since at the root the "qualified" name *is*
-  --     the bare name; and building `_root_` into the `Name` gives `Unknown identifier _root_.Ns.foo`,
-  --     because `_root_` is a syntactic escape, not a name component, so it survives in one position and
-  --     not the other.
-  -- Mangling makes the simple name itself unique per declaring namespace, so an unqualified reference
-  -- resolves to the local copy and an imported copy simply has a different name.
+  -- The declaration site is mangled into the *simple* name rather than used as a namespace prefix, and
+  -- no `_root_` escaping is involved. A prefix cannot separate the copies: at the root the "qualified"
+  -- name *is* the bare name, and `_root_` cannot be built into a `Name` (it is a syntactic escape, not a
+  -- name component, so it survives in one position and not the other, giving
+  -- `Unknown identifier _root_.Ns.foo`). Mangling makes the simple name itself unique per declaring
+  -- namespace, so an unqualified reference resolves to the local copy and an imported copy simply has a
+  -- different name.
   -- The tag carries BOTH the module and the ambient namespace. Module, because two *modules* routinely
-  -- derive the same mode at the root — `TacticTest` and `DeriveSTLCGenerator` both derive `lookup`, and
-  -- with a module-independent name importing both dies with `environment already contains
+  -- derive the same mode at the root (`TacticTest` and `DeriveSTLCGenerator` both derive `lookup`), and a
+  -- module-independent name makes importing both fail with `environment already contains
   -- 'specimen_gen_lookup_1._sunfold'`. Namespace, because one module can derive the same mode in two
   -- namespaces (`WeightPrecomputeTest` does exactly that, in `Baseline` and `Precomputed`).
-  -- This is what the old hygienic name achieved with `_@.<module>.<hash>._hyg.<n>`, minus the hash and
-  -- the counter that made it unwritable.
   let tag := (mod ++ currNs).toString.replace "." "_"
   Name.mkSimple s!"specimen_{sort}_{indName.toString.replace "." "_"}{idxs}__{tag}"
 

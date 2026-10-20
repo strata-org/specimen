@@ -4,10 +4,11 @@ import Specimen
 # A type abbreviation used as a type argument reifies as a type, not a function call
 
 `abbrev Label := String` is a constant whose value is a *type*. In `@Tagged.mk Label s n` it is a type
-argument, which carries no runtime value. It used to reify as `FuncApp Label []`, so the deriver saw a
-function application in the premise: it lifted the type into a fresh *value* variable with an equality
-premise (unrunnable — nothing generates a value for a type) and treated the enclosing argument as
-containing a call. Cedar's `abbrev Attr := String` hit this on every premise over a map keyed by `Attr`.
+argument, which carries no runtime value, and it has to reify as a type rather than as the function
+application `FuncApp Label []`. Read as a call, the deriver lifts the type into a fresh *value* variable
+with an equality premise, which nothing can run because nothing generates a value for a type, and treats
+the enclosing argument as containing a call. Cedar's `abbrev Attr := String` reaches this on every
+premise over a map keyed by `Attr`.
 -/
 
 open Lean Meta Elab Term Schedules

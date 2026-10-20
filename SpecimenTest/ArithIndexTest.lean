@@ -3,27 +3,26 @@ import Specimen
 /-!
 # Regression: recursive indices written with arithmetic
 
-A recursive constructor's index can be written `.succ n` or `n + 1`. These are the same proposition,
-and they used not to derive the same things: only the constructor spelling worked.
+A recursive constructor's index can be written `.succ n` or `n + 1`. These are the same proposition, and
+both derive the same things, which takes work: the two spellings are very different terms.
 
-`n + 1` is `HAdd.hAdd … n 1`, whose head is a **definition**, so `collectUnmatchableSubterms` classed
-it as unmatchable and `linearizeAndFlatten` replaced it with a fresh variable plus an equality
-hypothesis `v = n + 1`. Discharging that means inverting addition, which the scheduler can only do by
-*enumerating* — so `derive_checker` failed with an unrelated-looking
-`failed to synthesize EnumSizedSuchThat`. `Nat.succ n` is a constructor application and was matched as
-a pattern instead.
+`n + 1` is `HAdd.hAdd … n 1`, whose head is a **definition**, so `collectUnmatchableSubterms` classes it
+as unmatchable and `linearizeAndFlatten` replaces it with a fresh variable plus an equality hypothesis
+`v = n + 1`. Discharging that means inverting addition, which the scheduler can only do by *enumerating*,
+and `derive_checker` reports the unrelated-looking `failed to synthesize EnumSizedSuchThat`.
+`Nat.succ n` is a constructor application, which is matched as a pattern.
 
-The fix normalises `n + k` to a `Nat.succ` chain *before* linearization (`Utils.normalizeNatSuccIndices`);
-normalising later is too late, since the subterm has already been replaced.
+So `n + k` is normalised to a `Nat.succ` chain *before* linearization
+(`Utils.normalizeNatSuccIndices`); normalising afterwards is too late, since the subterm has by then
+been replaced.
 
-This mattered in practice, not just in principle: `lookup` in `STLCDefinitions.lean` is written
-`.succ n` and always derived a checker, while an evenness relation written `n + 2` could not derive one
-and had to have its checker written out by hand.
+Both spellings appear in practice: `lookup` in `STLCDefinitions.lean` is written `.succ n`, while an
+evenness relation is naturally written `n + 2`.
 -/
 
 open Plausible
 
-/-- `+ 1`: the spelling that used to fail. -/
+/-- `+ 1`: the spelling that needs normalising. -/
 inductive ArithIdxSucc : Nat → Prop where
   | z : ArithIdxSucc 0
   | s : ∀ n, ArithIdxSucc n → ArithIdxSucc (n + 1)

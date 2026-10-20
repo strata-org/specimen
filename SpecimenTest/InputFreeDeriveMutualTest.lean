@@ -5,15 +5,15 @@ import Specimen
 
 `derive_mutual` has two weight-emission paths. The primary one goes through
 `compileWeightedProducer`; a second is taken when the target relation has no lambda-bound inputs, so
-every argument is an output. Nothing in the suite exercised that second path, and it drifted out of
-sync with the first unnoticed: it emitted the weight function's `scoreBadness` argument as a `Float`
-literal long after that parameter became a per-mille `Nat`, so every such derive failed with
-`failed to synthesize OfScientific Nat` (fixed in #63).
+every argument is an output. The second path has to pass the weight function the same arguments as the
+first, down to their types: a `Float` where the per-mille `scoreBadness` parameter expects a `Nat` fails
+every such derive with `failed to synthesize OfScientific Nat`.
 
-It was invisible because `derive_generator` uses a different path and every other `derive_mutual` call
-site in the suite passes a relation that *has* inputs (`lookup Γ x τ`, `typing Γ e τ`, `BST lo hi t`).
-The two shapes below are the minimum that pin the path down: one purely recursive, one whose only
-constructor carries a side condition, so the schedule has to draw-and-check rather than construct.
+Nothing else in the suite reaches it, since `derive_generator` uses a different path and every other
+`derive_mutual` call site passes a relation that *has* inputs (`lookup Γ x τ`, `typing Γ e τ`,
+`BST lo hi t`). The two shapes below are the minimum that pin the path down: one purely recursive, one
+whose only constructor carries a side condition, so the schedule has to draw-and-check rather than
+construct.
 -/
 
 open Plausible
