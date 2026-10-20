@@ -127,7 +127,7 @@ inductive Elem : Nat → Tree → Prop where
 
 /-- error: Found counter-example! -/
 #guard_msgs (error, drop info, substring := true, drop warning) in
-specimen_test (∀ (x : Nat) (t : Tree), Elem x t → Elem x.succ t)
+specimen_test (max := 12) (∀ (x : Nat) (t : Tree), Elem x t → Elem x.succ t)
 
 -- === D: STLC type preservation with a buggy step relation ===
 -- `typing` and `lookup` come from SpecimenTest.CommonDefinitions.STLCDefinitions.
