@@ -93,30 +93,45 @@ derive_mutual
 -- directly reflects how often the recursive constructor is chosen.
 -- ============================================================
 
-private def sampleAvgOffset (gen : Nat → Gen Nat) (lo : Nat)
-    (trials : Nat := 1000) (size : Nat := 8) : IO Float := do
-  let mut totalOffset : Nat := 0
-  let mut successes : Nat := 0
-  for i in [:trials] do
-    try
-      let n ← Gen.run (gen size) (size + i % 11)
-      totalOffset := totalOffset + (n - lo)
-      successes := successes + 1
-    catch _ => pure ()
-  if successes == 0 then return 0.0
-  return totalOffset.toFloat / successes.toFloat
+/-- Any fixed value works. The point is that the averages below come from a reproducible stream
+    instead of the ambient RNG, whose state at this point depends on whatever ran before. -/
+private def sampleSeed : Nat := 20261020
+
+/-- Draws behind each average, large enough that the narrowest of the three gaps compared below,
+    flat against balanced at about 8%, stands clear of the sampling spread. -/
+private def sampleTrials : Nat := 5000
+
+/-- Average of `n - lo` over `sampleTrials` draws of `gen`, taken from one seeded stream.
+
+    One stream rather than a seeded run per draw: reseeding every draw correlates its first value
+    across draws, and that value is what picks the constructor, so the average would stop reflecting
+    the weights. The run size cycles over `size` to `size + 10`, so each average spans sizes. -/
+private def avgOffset (gen : Nat → Gen Nat) (lo : Nat) (size : Nat := 8) : Float :=
+  let loop : Gen Float := do
+    let mut totalOffset : Nat := 0
+    let mut successes : Nat := 0
+    for i in [:sampleTrials] do
+      try
+        let n ← Gen.resize (fun _ => size + i % 11) (gen size)
+        totalOffset := totalOffset + (n - lo)
+        successes := successes + 1
+      catch _ => pure ()
+    return if successes == 0 then 0.0 else totalOffset.toFloat / successes.toFloat
+  match ((runRandWith sampleSeed loop).run (ULift.up size)).toOption with
+  | some avg => avg
+  | none => 0.0
 
 /-- info: PASS -/
 #guard_msgs in
 #eval do
   let lo := 0
-  let avgBalanced ← sampleAvgOffset
+  let avgBalanced := avgOffset
     (fun sz => ArbitrarySizedSuchThat.arbitrarySizedST (fun n => BetweenA lo 20 n) sz) lo
-  let avgFlat ← sampleAvgOffset
+  let avgFlat := avgOffset
     (fun sz => ArbitrarySizedSuchThat.arbitrarySizedST (fun n => BetweenB lo 20 n) sz) lo
-  let avgHeavyBase ← sampleAvgOffset
+  let avgHeavyBase := avgOffset
     (fun sz => ArbitrarySizedSuchThat.arbitrarySizedST (fun n => BetweenC lo 20 n) sz) lo
-  let avgTripleRec ← sampleAvgOffset
+  let avgTripleRec := avgOffset
     (fun sz => ArbitrarySizedSuchThat.arbitrarySizedST (fun n => BetweenD lo 20 n) sz) lo
 
   -- heavyBase should produce values closer to lo (fewer recursive steps)
