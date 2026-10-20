@@ -110,8 +110,8 @@ mutual
             match e_1 with
             | term.Var x => DecOpt.decOpt (lookup Γ_1 x τ_1) initSize
             | _ => .ok Bool.false,
-            -- `typing.TAdd`. This branch was missing, so the checker refuted well-typed sums:
-            -- `checkTyping [] (.Add (.Const 1) (.Const 2)) .Nat` answered `.ok false`.
+            -- `typing.TAdd`: a sum has type `Nat` exactly when both operands do, so this branch has
+            -- to be here for the checker to accept well-typed sums.
             fun _ =>
             match τ_1 with
             | type.Nat =>

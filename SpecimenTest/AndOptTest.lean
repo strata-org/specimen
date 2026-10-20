@@ -3,6 +3,13 @@ import Specimen.DecOpt
 /-!
 # `andOpt` is Kleene's strong conjunction
 
+Kleene's strong three-valued logic (K3) is the logic of the `option bool` a checker returns: `some true`,
+`some false`, and `none` for out of fuel. Its conjunction is `false` whenever either operand is `false`,
+even if the other is `none`, and `none` only when no operand is `false`. `DecOpt.decOpt` returns
+`Except GenError Bool` rather than `Option Bool`, so the undetermined case carries the reason it is
+undetermined, but the three cases and the table are K3's. See Kleene, *Introduction to Metamathematics*
+(1952), §64.
+
 `false` annihilates conjunction even when the other operand is inconclusive: the conjunction is false on
 account of the definite operand alone. Reporting "cannot decide" there would make an enclosing checker
 inconclusive about something it can refute. The full truth table, both operand orders.

@@ -27,11 +27,9 @@ def pickDrop (xs : List (ExceptT GenError Enumerator α)) (n : Nat) : ExceptT Ge
 
 /-- Picks one out of `total` enumerators, retrying with the rest on failure until `fuel` runs out.
 
-    **Currently unused** — the only reference is its own recursive call. `enumerate` (and hence all
-    derived enumerator code) goes through `enumerateAll` instead, which concatenates every branch
-    rather than picking one. Kept as the enumerator counterpart of
-    `GeneratorCombinators.backtrack`; the docstring previously described it as a helper *for*
-    `backtrack`, which does not exist in this module. -/
+    Unused outside its own recursive call: `enumerate`, and so all derived enumerator code, goes
+    through `enumerateAll` instead, which concatenates every branch rather than picking one. Kept as
+    the enumerator counterpart of `GeneratorCombinators.backtrack`. -/
 def enumerateFuel (fuel : Nat) (total : Nat) (es : List (ExceptT GenError Enumerator α)) : ExceptT GenError Enumerator α :=
   match fuel with
   | .zero => throw (.genError "out of fuel")
@@ -44,12 +42,11 @@ def enumerateFuel (fuel : Nat) (total : Nat) (es : List (ExceptT GenError Enumer
 
 /-- Combines all enumerators into a single lazy list, **preserving the order of `es`**.
 
-    A `foldl` here would reverse it (`append (e₃ …) (append (e₂ …) (append (e₁ …) lnil))`), which
-    puts the last-emitted branch first. Derived code emits a relation's constructors in declaration
-    order, so the cheap non-recursive base cases come first and the failure-prone recursive ones
-    last; reversing that buries every success behind the failures. Measured on the derived
-    enumerator for well-typed STLC terms, all 620 successes within the first 4000 entries at size 3
-    sat at indices 2966–3735, with none in the first half. -/
+    The fold has to be a `foldr`: a `foldl` builds
+    `append (e₃ …) (append (e₂ …) (append (e₁ …) lnil))`, putting the last branch first. Derived code
+    emits a relation's constructors in declaration order, so the cheap non-recursive base cases come
+    first and the failure-prone recursive ones last. Reversing that buries every success behind the
+    failures, and a consumer taking a prefix sees `.error` entries almost exclusively. -/
 def enumerateAll (es : List (ExceptT GenError Enumerator α)) (fuel : Nat) : LazyList (Except GenError α) :=
   es.foldr (fun e acc => LazyList.append (e fuel) acc) .lnil
 
@@ -79,11 +76,10 @@ def lazyListBacktrack (l : LazyList α) (f : α → Except GenError Bool) (anyNo
 /-- An enumerator error is "inconclusive" (ran out of fuel / couldn't decide) vs
     "disproved" (this constructor path definitively doesn't apply).
 
-    Delegates to `Gen.GenError.isInconclusive` so all three producer sorts classify errors
-    identically. The enumerator and checker paths kept their own copy of this predicate, and it had
-    drifted from the generator's: the generator counted `"Gen.runUntil: Out of attempts"` as
-    inconclusive and this copy did not, so an exhausted retry loop was reported as a *definite
-    refutation* — a wrong `ok false` for something never determined. -/
+    Delegates to `Gen.GenError.isInconclusive`, the one classifier all three producer sorts use, so
+    that an error means the same thing on every path. A sort-local copy would be free to disagree
+    about an error such as `"Gen.runUntil: Out of attempts"`, and a path that reads it as definite
+    turns something never determined into an `ok false`: a refutation of a true proposition. -/
 def isInconclusiveError : GenError → Bool := Gen.GenError.isInconclusive
 
 /-- Variant of `lazyListBacktrack` where the input `LazyList` contains `Except ε α` values instead of `α`.

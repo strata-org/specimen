@@ -3,10 +3,10 @@ import Specimen.EnumeratorCombinators
 /-!
 # One classification of inconclusive errors
 
-The checker path (`lazyListBacktrackOpt`, behind `enumeratingOpt`) must read every error the generator
-calls inconclusive as *inconclusive*: the search did not finish, so the answer is `error`, not `ok false`.
-It used to keep its own copy of the classifier, which had drifted — an exhausted retry loop
-(`"Gen.runUntil: Out of attempts"`) came back as a definite refutation.
+The checker path (`lazyListBacktrackOpt`, behind `enumeratingOpt`) reads every error the generator calls
+inconclusive as *inconclusive*: the search did not finish, so the answer is `error`, not `ok false`. The
+classifier is shared, so a message such as `"Gen.runUntil: Out of attempts"` cannot be a definite
+refutation on one path and inconclusive on another.
 -/
 
 open EnumeratorCombinators Plausible
