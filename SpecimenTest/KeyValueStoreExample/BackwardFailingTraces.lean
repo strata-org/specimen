@@ -6,7 +6,6 @@ import Specimen.DeriveConstrainedProducer
 import Specimen.EnumeratorCombinators
 import Specimen.GeneratorCombinators
 import Plausible.Attr
-import Specimen.Basalt
 
 /-!
 # Backward generation of state-machine traces
@@ -134,14 +133,6 @@ def runTrace (s : KVState) (ops : List (Op × Res)) : KVState :=
 instance : Arbitrary String where
   arbitrary := GeneratorCombinators.elementsWithDefault "A" ["A", "B", "C", "D"]
 
-/-- The same four-key pool for the Basalt path. Basalt's own `Arbitrary String` draws random printable
-ASCII, so two generated keys would almost never be equal and every `HasKey` / `NoKey` premise would take
-its trivial branch. -/
-local instance instBackwardTraceBasaltArbitraryString : Basalt.ArbitraryFueled String where
-  arbitraryFueled _ := do
-    let i ← chooseNat 0 3
-    pure (["A", "B", "C", "D"].getD i "A")
-
 set_option specimen.multiOutput true
 set_option specimen.autoDeriveDeps true
 set_option linter.unusedVariables false
@@ -159,14 +150,20 @@ derive_mutual
 
 /-! ### On the seeded runs below
 
-Each `Gen` draw is seeded from the loop index rather than the ambient `IO` RNG. These checks assert
-*statistical* properties ("at least 50 of 200 traces are non-trivial"), and with an ambient seed they
-pass or fail run to run — which makes them useless as regression tests, since a real quality regression
-becomes indistinguishable from bad luck. It also hides real differences: unseeded, the Plausible and
-Basalt paths looked equivalent here, but at a fixed seed they are 16/200 versus 7/200.
+Each `Gen` draw comes from one seeded stream rather than the ambient `IO` RNG. These checks assert
+*statistical* properties ("at least 50 of 200 traces are non-trivial"), and under an ambient seed such a
+check passes or fails run to run, which makes it useless as a regression test: a real quality regression
+is then indistinguishable from bad luck. A fixed seed also makes two generator paths comparable, since
+any difference between them is a difference in the generators and not in the draws.
 
-The seed still varies per iteration, so this is 200 different draws rather than 200 copies of one; it is
-just the *same* 200 every time. -/
+The size still varies per iteration, so this is 200 different draws rather than 200 copies of one; it is
+just the *same* 200 every time.
+
+`traceSeed` is a date. Any fixed value does, which is the point: the number is arbitrary, repeating it
+is not. -/
+
+/-- The seed every run below draws from. -/
+def traceSeed : Nat := 20261014
 
 /-- Draw 200 seeded backward traces at `target`, replay each non-trivial one forward through the
     oracle, and fail if a trace is unsound or fewer than `minNonTrivial` are non-trivial. -/
@@ -174,7 +171,7 @@ def checkBackwardTraces (target : KVState) (minNonTrivial : Nat) : IO Unit := do
   let mut nonTrivial := 0
   -- One seeded stream, not a seed per iteration: consecutive or affine seeds correlate the first draw.
   let samples ← Gen.sampleWithSeed 200
-    (fun i => ArbitrarySizedSuchThat.arbitrarySizedST (fun (s1, ops) => Trace s1 ops target) (5 + i % 10)) 10 20261014
+    (fun i => ArbitrarySizedSuchThat.arbitrarySizedST (fun (s1, ops) => Trace s1 ops target) (5 + i % 10)) 10 traceSeed
   for sample in samples do
     match sample with
     | some (s1, ops) =>
@@ -232,7 +229,7 @@ def checkBackwardTraces (target : KVState) (minNonTrivial : Nat) : IO Unit := do
   let mut withData := 0
   -- One seeded stream, not a seed per iteration: consecutive or affine seeds correlate the first draw.
   let samples ← Gen.sampleWithSeed 200
-    (fun i => ArbitrarySizedSuchThat.arbitrarySizedST (fun (ops, s2) => Trace start ops s2) (5 + i % 10)) 10 20261014
+    (fun i => ArbitrarySizedSuchThat.arbitrarySizedST (fun (ops, s2) => Trace start ops s2) (5 + i % 10)) 10 traceSeed
   for sample in samples do
     match sample with
     | some (ops, s2) =>
@@ -243,11 +240,9 @@ def checkBackwardTraces (target : KVState) (minNonTrivial : Nat) : IO Unit := do
           s!"UNSOUND: {repr start} + {repr ops} → {repr landed} ≠ {repr s2}"
       if s2.length > 0 then withData := withData + 1
     | none => pure ()
-  -- Expect at least some traces that produce non-empty end states. The bound is 12 against a measured
-  -- 16 at this seed: it is a floor chosen to catch the failure mode that matters — forward generation
-  -- collapsing to only-empty end states — not a target. The previous bound of 20 was above what the
-  -- generator has ever produced here (every observation has fallen in 10–18), so it failed on unchanged
-  -- code; it only looked intermittent because the run was unseeded.
+  -- Expect at least some traces that produce non-empty end states. The bound is a floor, not a target:
+  -- it catches forward generation collapsing to only-empty end states, and sits below the spread this
+  -- generator produces at this seed.
   if withData < 12 then
     throw <| IO.userError s!"Too few traces with data: {withData}/200"
   IO.println "PASS"
@@ -269,7 +264,7 @@ def checkBackwardTraces (target : KVState) (minNonTrivial : Nat) : IO Unit := do
   let mut nonTrivial := 0
   -- One seeded stream, not a seed per iteration: consecutive or affine seeds correlate the first draw.
   let samples ← Gen.sampleWithSeed 200
-    (fun i => ArbitrarySizedSuchThat.arbitrarySizedST (fun (s1, ops) => Trace s1 ops target) (8 + i % 10)) 10 20261014
+    (fun i => ArbitrarySizedSuchThat.arbitrarySizedST (fun (s1, ops) => Trace s1 ops target) (8 + i % 10)) 10 traceSeed
   for sample in samples do
     match sample with
     | some (s1, ops) =>

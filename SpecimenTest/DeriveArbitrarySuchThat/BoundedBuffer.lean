@@ -222,8 +222,8 @@ def traceSeed : Nat := 20260909
 /-- Drawn from one seeded stream rather than the ambient `IO` RNG, so the run is reproducible.
 
     `sampleWithSeed` rather than a loop of seeded runs: reseeding per iteration correlates the first draw
-    across samples, and since that draw picks the trace's top-level constructor, it collapsed all 1000
-    traces to empty here. See `Specimen/GeneratorCombinators.lean` for the measurement. -/
+    across samples, and that draw picks the trace's top-level constructor, so every trace comes out
+    empty. `Specimen/GeneratorCombinators.lean` has the detail. -/
 def differentialTest (buggy : Bool := false) : IO Unit := do
   let samples ← Gen.sampleWithSeed 1000
     (fun _ => ArbitrarySizedSuchThat.arbitrarySizedST
