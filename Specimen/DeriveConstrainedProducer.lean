@@ -452,7 +452,11 @@ def getScheduleForInductiveRelationConstructor
       let localCtx ← getLCtx
       let localDecl := localCtx.get! fvar.fvarId!
       let userName := localDecl.userName
-      if not userName.hasMacroScopes || localDecl.binderInfo == .instImplicit then
+      -- An unnamed premise (`a = b → …`) elaborates to a binder with a hygienic name, which is how
+      -- hypotheses are told apart. An anonymous parameter (`(_ : List α)`) has one too, so a hygienic
+      -- binder is a hypothesis only if its type is a proposition.
+      if not userName.hasMacroScopes || localDecl.binderInfo == .instImplicit
+          || !(← Meta.isProp localDecl.type) then
         return (some userName, localDecl.type)
       else
         return (none, localDecl.type))

@@ -17,21 +17,17 @@ set_option specimen.multiOutput false
 inductive HasDep {α : Type} (_ : List α) : Nat → Prop where
 | foo (a b : α) : a = b → HasDep _ 0
 
-/--
-error: unable to find unknown x._@.SpecimenTest.DeriveArbitrarySuchThat.DependentArgs.1339814650._hygCtx._hyg.3 in UnknownMap [(n_1,
-  Undef Nat),
- (α_1, Fixed),
- (l_1, Fixed),
- (a, Undef α),
- (u_2, Unknown n_1),
- (b, Undef α),
- (u_1, Unknown l_1),
- (unk_0, Undef Nat),
- (α, Unknown u_0),
- (u_0, Unknown α_1)]
--/
-#guard_msgs(error, ordering:=sorted) in
+-- The parameter is anonymous, so it elaborates to a binder with a hygienic name, as an unnamed premise
+-- does; it is still a variable, not a hypothesis.
+#guard_msgs(drop info) in
 derive_generator (fun α l => ∃ n, @HasDep α l n)
+
+/-- info: true -/
+#guard_msgs in
+#eval do
+  let xs ← Gen.sampleWithSeed 20
+    (fun _ => ArbitrarySizedSuchThat.arbitrarySizedST (fun n => @HasDep Nat [1, 2] n) 5) 5 7
+  return (xs.size == 20 && (xs.filterMap id).size == 20 && (xs.filterMap id).all (· == 0))
 
 inductive HasClassDep {α : Type} [h : DecidableEq α] : Nat → Prop where
 | foo (a b : α) : a = b → HasClassDep 0
