@@ -2294,7 +2294,12 @@ def compileSpecComponents (components : List (List SpecKey))
             compiledCodeMap := compiledCodeMap.insert key (defStr, instStr)
         catch e =>
           logWarning m!"Failed to compile {key.inductiveName}{key.outputIndices}{repr key.deriveSort}: {e.toMessageData}"
-      | _ => logWarning m!"No schedule found for {key.inductiveName}{key.outputIndices}"
+      | _ =>
+        -- A non-inductive head (`LE.le`, `Not`, …) never has a schedule: the emitted code calls its
+        -- `DecOpt` instance, which the existence check cannot always see with the arguments left open,
+        -- and whose absence the call site reports itself.
+        if ← isInductive key.inductiveName then
+          logWarning m!"No schedule found for {key.inductiveName}{key.outputIndices}"
     compiledComponents := compiledComponents.push (compMeta, defCmds, instCmds)
   if reportTimers then
     logInfo m!"⏱ codegen+pp split (ms): codegen {codegenNs / 1000000}, pp {ppNs / 1000000}{if buildCodeMap then "" else " (pp skipped: richOutput off)"}"

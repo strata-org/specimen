@@ -20,6 +20,8 @@ end ScopedInstanceTest
 
 namespace Strategy.A
 
+-- No warnings: the `≤` premises have a non-inductive head, which needs no schedule.
+#guard_msgs(warning, drop info) in
 set_option specimen.autoDeriveDeps true in
 scoped derive_mutual
   (fun (lo hi : Nat) => ∃ (t : BinaryTree), BST lo hi t)
@@ -28,6 +30,8 @@ end Strategy.A
 
 namespace Strategy.B
 
+-- No warnings: the `≤` premises have a non-inductive head, which needs no schedule.
+#guard_msgs(warning, drop info) in
 set_option specimen.autoDeriveDeps true in
 scoped derive_mutual
   (fun (lo hi : Nat) => ∃ (t : BinaryTree), BST lo hi t)
