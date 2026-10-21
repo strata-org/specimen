@@ -15,7 +15,7 @@ open Plausible
 set_option guard_msgs.diff true
 
 -- Auto-derives missing lookup and typing sub-instances from a single top-level spec.
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 set_option specimen.autoDeriveDeps true in
 derive_mutual
   (∃ (Γ : List type) (e : term) (τ : type), typing Γ e τ)

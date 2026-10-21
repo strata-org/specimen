@@ -1605,7 +1605,7 @@ def InterpEnv.learnGenerator (env : InterpEnv) (specs : List RelSpec) (rootKey :
     (targetsPerRound : Nat := 6) : IO LearnedGenerator := do
   let (plans, planTrace) ←
     env.learnSchedules specs rootKey size inputs n rounds width limit start seeds budget fuel
-      deriveCheckers
+      deriveCheckers targetsPerRound
   match goal, coverage.bands.isEmpty with
   | none, true => return { plans := plans, weights := {}, planTrace := planTrace }
   | _, _ =>

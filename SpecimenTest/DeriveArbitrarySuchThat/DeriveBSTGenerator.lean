@@ -20,7 +20,7 @@ deriving instance Arbitrary for BinaryTree
 -- which is non-inductive but has Decidable — handled by the non-inductive guard)
 set_option specimen.multiOutput true in
 set_option specimen.autoDeriveDeps true in
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(warning, drop info) in
 derive_mutual
   (fun (lo hi : Nat) => ∃ (t : BinaryTree), BST lo hi t)
 

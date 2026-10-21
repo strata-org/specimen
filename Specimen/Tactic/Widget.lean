@@ -174,9 +174,6 @@ private def derivedSpecsSection (finalMemo : Std.HashMap SpecKey MemoEntry)
 private def depGraphSection (finalMemo : Std.HashMap SpecKey MemoEntry)
     (usedKeys : Std.HashSet SpecKey) (totalEdges : Nat) :
     TermElabM (Option ProofWidgets.Html) := do
-  let bundle ← Scoring.getActiveScorerBundle
-  let scoreToColor := scoreToColor bundle
-  let specColor := specColor bundle
   let mut htmlChildren : Array ProofWidgets.Html := #[]
   if totalEdges > 0 then
     let mut graphItems : Array ProofWidgets.Html := #[]
@@ -302,7 +299,6 @@ def theoremWidgetHtml
     TermElabM MessageData := do
   let bundle ← Scoring.getActiveScorerBundle
   let scoreToColor := scoreToColor bundle
-  let specColor := specColor bundle
   let stepColor := stepColor bundle finalMemo
   let mut htmlChildren : Array ProofWidgets.Html := #[]
   -- Title

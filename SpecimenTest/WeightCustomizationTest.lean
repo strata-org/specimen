@@ -49,7 +49,7 @@ inductive BetweenF : Nat → Nat → Nat → Prop where
 
 set_option specimen.weightFn "Scoring.balancedCtorWeight" in
 set_option specimen.autoDeriveDeps true in
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual
   (fun (lo hi : Nat) => ∃ n, BetweenA lo hi n)
 
@@ -59,7 +59,7 @@ derive_mutual
 
 set_option specimen.weightFn "Scoring.flatCtorWeight" in
 set_option specimen.autoDeriveDeps true in
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual
   (fun (lo hi : Nat) => ∃ n, BetweenB lo hi n)
 
@@ -75,7 +75,7 @@ initialize Scoring.registerWeightFn `heavyBaseWeight heavyBaseWeight ``heavyBase
 
 set_option specimen.weightFn "heavyBaseWeight" in
 set_option specimen.autoDeriveDeps true in
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual
   (fun (lo hi : Nat) => ∃ n, BetweenC lo hi n)
 
@@ -92,7 +92,7 @@ def tripleRecModifier (baseWeight : Nat) (_ctorName : Name) (_outputIndices : Li
 
 set_option specimen.weightModifier "tripleRecModifier" in
 set_option specimen.autoDeriveDeps true in
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual
   (fun (lo hi : Nat) => ∃ n, BetweenD lo hi n)
 
@@ -108,7 +108,7 @@ initialize Scoring.registerWeightFn `heavyRecWeight heavyRecWeight ``heavyRecWei
 
 set_option specimen.weightFn "heavyRecWeight" in
 set_option specimen.autoDeriveDeps true in
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual
   (fun (lo hi : Nat) => ∃ n, BetweenE lo hi n)
 
@@ -120,7 +120,7 @@ derive_mutual
 -- ============================================================
 
 set_option specimen.autoDeriveDeps true in
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual
   (fun (lo hi : Nat) => ∃ n, BetweenF lo hi n)
 

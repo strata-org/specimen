@@ -29,7 +29,7 @@ set_option specimen.emitBasalt false
 
 set_option specimen.autoDeriveDeps true in
 set_option specimen.multiOutput true in
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual
   checker (fun α x xs => @MyContains α x xs),
   generator (fun α xs => ∃ x, @NotIn α x xs)
@@ -51,7 +51,7 @@ inductive HasAllEq {α : Type} : List α → Prop where
 
 set_option specimen.autoDeriveDeps true in
 set_option specimen.multiOutput true in
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual
   checker (fun α x xs => @AllEq α x xs),
   generator (fun α => ∃ xs, @HasAllEq α xs)
@@ -72,7 +72,7 @@ inductive HasHead {α : Type} : List α → Prop where
 
 set_option specimen.autoDeriveDeps true in
 set_option specimen.multiOutput true in
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual
   checker (fun α x xs => @ListHead α x xs),
   generator (fun α => ∃ ys, @HasHead α ys)
@@ -100,7 +100,7 @@ inductive ValidHash {α : Type} [MyHashable α] : α → Prop where
 
 set_option specimen.autoDeriveDeps true in
 set_option specimen.multiOutput true in
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual
   generator (fun a b x => ∃ h, @HashesTo a b x h)
 

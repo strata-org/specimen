@@ -54,7 +54,7 @@ instance : BacktrackGenFor Nat (fun n => n % 4 = 1) where
     let k ← chooseNat 0 size
     pure (4 * k + 1)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator ∃ n, OneMod4 n
 
 /-- info: true -/
@@ -80,7 +80,7 @@ def Tree.elem (x : Nat) : Tree → Bool
   | .leaf => false
   | .node l y r => x == y || l.elem x || r.elem x
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun x => ∃ t, Elem x t)
 
 /-- info: true -/
@@ -129,7 +129,7 @@ inductive Below : Nat → Nat → Prop where
   | zero : Below 0 (n + 1)
   | succ : Below m n → Below (m + 1) (n + 1)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(warning, drop info) in
 derive_mutual (fun n => ∃ m, Below m n)
 
 example (n : Nat) : BacktrackGenFor Nat (fun m => Below m n) := inferInstance
@@ -146,7 +146,7 @@ inductive Even : Nat → Prop where
   | z : Even 0
   | ss : ∀ n, Even n → Even (n + 2)
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(warning, drop info) in
 derive_mutual generator (∃ n, Even n)
 
 example : BacktrackGenFor Nat (fun n => Even n) := inferInstance

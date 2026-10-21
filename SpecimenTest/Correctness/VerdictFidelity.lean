@@ -38,7 +38,7 @@ inductive Chain : Nat → Prop where
 inductive Guard : Nat → Nat → Prop where
   | mk : ∀ k, Chain k → Guard k 0
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual generator (fun k => ∃ o, Guard k o)
 
 /-- Refutation-soundness of the *derived* `Chain` checker, as a hypothesis. `DerivedCheckerSoundness`

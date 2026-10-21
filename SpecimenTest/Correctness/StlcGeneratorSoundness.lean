@@ -122,7 +122,7 @@ set_option linter.unusedSimpArgs false
 -- whole library is built under `specimen.emitBasalt`.
 namespace StlcGeneratorSoundness
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual generator (fun G t => ∃ e, typing G e t)
 
 /-! ## The `lookup` stratum

@@ -39,5 +39,5 @@ inductive HasTy : List Nat → Tm → Nat → Prop where
 --   exprToConstructorExpr can only handle free variables, constants, and
 --   applications. Attempted to convert: fun as i => i < as.length
 -- It should now derive a generator (generate `i`, then check `Γ[i]? = some τ`).
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun Γ τ => ∃ e : Tm, HasTy Γ e τ)

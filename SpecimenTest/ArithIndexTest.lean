@@ -44,16 +44,16 @@ inductive ArithIdxImplicit : Nat → Prop
   | z : ArithIdxImplicit 0
   | ss {n : Nat} : ArithIdxImplicit n → ArithIdxImplicit (n + 2)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_checker (fun n => ArithIdxSucc n)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_checker (fun n => ArithIdxTwo n)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_checker (fun n => ArithIdxCtor n)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_checker (fun n => ArithIdxImplicit n)
 
 -- The derived checkers are not merely well-typed — they decide correctly. `ArithIdxSucc` holds of

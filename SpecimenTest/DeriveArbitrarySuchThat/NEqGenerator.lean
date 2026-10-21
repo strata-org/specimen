@@ -17,7 +17,7 @@ def ConstTrue (_ : Prop) := True
 inductive usesNeq : Nat → Prop where
 | c : a ≠ b → usesNeq a
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator ∃ a, usesNeq a
 
 inductive usesConstTrue : Nat → Prop where
@@ -33,14 +33,14 @@ error: failed to synthesize instance of type class
 
 Hint: Type class instance resolution failures can be inspected with the `set_option trace.Meta.synthInstance true` command.
 -/
-#guard_msgs(error, drop info, whitespace := lax) in
+#guard_msgs(warning, error, drop info, whitespace := lax) in
 derive_generator ∃ a, usesConstTrue a
 
 
 inductive usesNeq' : Nat × Nat → Prop where
 | c : a ≠ b → usesNeq' (a, b)
 
-#guard_msgs(error, drop info, whitespace := lax) in
+#guard_msgs(warning, error, drop info, whitespace := lax) in
 derive_generator ∃ a, usesNeq' a
 
 inductive Diag : (α : Type u) → α → α × α → Prop where
@@ -48,10 +48,10 @@ inductive Diag : (α : Type u) → α → α × α → Prop where
 
 -- set_option trace.plausible.deriving.arbitrary true
 
-#guard_msgs(drop info, whitespace := lax) in
+#guard_msgs(warning, drop info, whitespace := lax) in
 derive_generator fun γ p => ∃ g, Diag γ g p
 
-#guard_msgs(drop info, whitespace := lax) in
+#guard_msgs(warning, drop info, whitespace := lax) in
 derive_checker fun γ g p => Diag γ g p
 
 inductive usesVec : _ → Prop where
@@ -59,7 +59,7 @@ inductive usesVec : _ → Prop where
 
 -- Fails today: the emitted generator for the vector-literal pattern does not typecheck (application type
 -- mismatch). Kept to exercise the path; its errors are dropped.
-#guard_msgs(drop error, drop info, whitespace := lax) in
+#guard_msgs(warning, drop error, drop info, whitespace := lax) in
 derive_generator ∃ a, usesVec a
 
 inductive TypeChange : Type u → Nat → Prop where
@@ -72,7 +72,7 @@ example : TypeChange Nat 0 := .ennd |>.change.change.change
 
 -- Fails today: the type index changes across the recursive call, which the emitted match cannot express
 -- (invalid pattern). Kept to exercise the path; its errors are dropped.
-#guard_msgs(drop error, drop info) in
+#guard_msgs(warning, drop error, drop info) in
 derive_generator fun α => ∃ n, TypeChange α n
 
 namespace NEqGeneratorTest
@@ -88,10 +88,10 @@ inductive MapsFind₂ : Maps α β → α × β → Prop where
 | hd : MapFind₂ m (x, y) → MapsFind₂ (m :: ms) (x, y)
 | tl : MapsFind₂ ms (x, y) → MapsFind₂ (m :: ms) (x, y)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator fun α β m => ∃ pa, @MapFind₂ α β m pa
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator fun α β m => ∃ pa, @MapsFind₂ α β m pa
 
 end NEqGeneratorTest
@@ -101,32 +101,32 @@ inductive Contains {α : Type} : List α → α → Prop where
 | head : Contains (x :: xs) x
 | tail : Contains xs x → Contains (y :: xs) x
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator fun α xs => ∃ x, @Contains α xs x
 
 -- Polymorphic option wrapping
 inductive IsWrapped {α : Type} : α → Option α → Prop where
 | some : IsWrapped x (some x)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator fun α x => ∃ opt, @IsWrapped α x opt
 
 -- Simple type equality
 inductive SameType {α : Type} : α → α → Prop where
 | refl : SameType (x : α) (x : α)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator fun α x => ∃ y, @SameType α x y
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_checker fun α x y => @SameType α x y
 
 -- Polymorphic pair components
 inductive FirstOf {α β : Type} : α × β → α → Prop where
 | mk : FirstOf (x, y) x
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator fun α β p => ∃ x, @FirstOf α β p x
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator fun α β x => ∃ p, @FirstOf α β p x
 
 -- List length relation
@@ -134,7 +134,7 @@ inductive HasLen {α : Type} : List α → Nat → Prop where
 | nil : HasLen [] 0
 | cons : HasLen xs n → HasLen (x :: xs) (n + 1)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator fun α xs => ∃ n, @HasLen α xs n
 
 /--info: 3-/
@@ -147,7 +147,7 @@ inductive Interleaves {α β : Type} : List α → List β → List (α ⊕ β) 
 | left_cons : Interleaves xs ys zs → Interleaves (x :: xs) ys (Sum.inl x :: zs)
 | right_cons : Interleaves xs ys zs → Interleaves xs (y :: ys) (Sum.inr y :: zs)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator fun α β xs ys => ∃ zs, @Interleaves α β xs ys zs
 
 -- Relation with negated hypothesis containing type variable
@@ -155,5 +155,5 @@ inductive NotContains {α : Type} : List α → α → Prop where
 | empty : NotContains [] x
 | cons : x ≠ y → NotContains xs x → NotContains (y :: xs) x
 -- set_option trace.plausible.deriving.results true
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator fun α xs => ∃ x, @NotContains α xs x

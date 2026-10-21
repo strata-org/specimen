@@ -84,7 +84,7 @@ def runCheckedWithSeed (x : Gen α) (size : Nat) (seed : Nat) : IO (GenResult α
   match result with
   | .ok a => return .ok a
   | .error (.userError msg) =>
-    let stripped := msg.stripPrefix "Generation failure:"
+    let stripped := (msg.dropPrefix "Generation failure:").toString
     if GenError.isInconclusive (.genError stripped) then
       return .insufficientFuel stripped
     else

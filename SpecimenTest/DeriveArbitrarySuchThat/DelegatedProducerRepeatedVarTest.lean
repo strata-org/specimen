@@ -78,21 +78,21 @@ def p (a b : Nat) : Bool := a == b
 inductive S1 : Tm → Prop where
   | mk : f (g i) = true → S1 (.var i)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun _u : Unit => ∃ e : Tm, S1 e)
 
 /-- Repeated output across arguments, no matching instance: `h i = i`. -/
 inductive S2a : Tm → Prop where
   | mk : h i = i → S2a (.var i)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun _u : Unit => ∃ e : Tm, S2a e)
 
 /-- Repeated output within one argument, no matching instance: `p i i = true`. -/
 inductive S2b : Tm → Prop where
   | mk : p i i = true → S2b (.var i)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun _u : Unit => ∃ e : Tm, S2b e)
 
 end NoDelegation
@@ -118,7 +118,7 @@ instance : BacktrackGenFor Nat (fun i => p i i = true) where
 inductive R : Tm → Prop where
   | mk : p i i = true → R (.var i)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun _u : Unit => ∃ e : Tm, R e)
 
 #guard_msgs(drop info) in
@@ -151,7 +151,7 @@ instance : BacktrackGenFor Nat (fun i => g i = i) where
 inductive R : Tm → Prop where
   | mk : g i = i → R (.var i)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun _u : Unit => ∃ e : Tm, R e)
 
 #guard_msgs(drop info) in
@@ -203,7 +203,7 @@ inductive R : ITm → Prop where
 
 -- Compiles with no `Arbitrary Idx` in scope: `i` is produced only by the
 -- delegated call, so no unconstrained step requiring `Arbitrary Idx` is emitted.
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun _u : Unit => ∃ e : ITm, R e)
 
 #guard_msgs(drop info) in
