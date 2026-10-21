@@ -131,6 +131,8 @@ import SpecimenTest.ArithIndexTest
 import SpecimenTest.TypeAbbrevArgTest
 -- …and a match on a one-constructor structure emits no redundant failure arm
 import SpecimenTest.IrrefutableMatchTest
+-- Pattern coverage: the input-space trie and per-leaf scoring
+import SpecimenTest.PatternCoverageTest
 -- …and a constructor a mode was derived without is reported under `trace.specimen.droppedCtors`
 import SpecimenTest.DroppedCtorsTraceTest
 -- …and a large mutual block of workers recurses structurally on `fuel`, not by well-founded recursion
