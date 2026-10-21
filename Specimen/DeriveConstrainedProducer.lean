@@ -701,7 +701,9 @@ def getProducerScheduleForInductiveConstructor
     `Nat`/`Name` literals now that badness is a `Nat`) while preserving `if`/`match`
     surface structure (unlike `Meta.reduce`, which normalizes a symbolic `if size == 0`
     into a raw `Bool.rec` that fails to delaborate). We delaborate the residual back to a
-    term. The `size` variable survives only where the original expression used it
+    term, reporting alongside it whether the residual folded all the way to a closed numeral.
+    `extraBinder` is a further `Nat` variable the term may mention (see `foldedWeight`, which
+    folds a weight modifier against a symbolic base). The `size` variable survives only where the original expression used it
     (delaborated to the same `sizePrimeName` ident, which the surrounding generated code
     binds); constructors that don't depend on `size` (e.g. base ctors, whose weight uses
     size `0`) fold to a literal with no `size` reference. The residual is definitionally
@@ -709,24 +711,107 @@ def getProducerScheduleForInductiveConstructor
     metavariables, or any elaboration/simp/delaboration failure we return the original
     term unchanged. -/
 private def precomputeWeight (finalWeight : TSyntax `term) (sizePrimeName : Name)
-    (unfoldNames : List Name) : TermElabM (TSyntax `term) := do
+    (unfoldNames : List Name) (extraBinder : Option Name := none) :
+    TermElabM (TSyntax `term × Bool) := do
   unless Lean.Option.get (← getOptions) specimen.precomputeWeights do
-    return finalWeight
+    return (finalWeight, false)
   try
     withLocalDeclD sizePrimeName (mkConst ``Nat) fun _ => do
+    -- `extraBinder` is bound the same way, so a term mentioning it elaborates and the residual
+    -- delaborates back to an ident of the same name — which the caller then binds.
+    let withExtra : (Unit → TermElabM (TSyntax `term × Bool)) → TermElabM (TSyntax `term × Bool) :=
+      fun k => match extraBinder with
+        | none => k ()
+        | some n => withLocalDeclD n (mkConst ``Nat) fun _ => k ()
+    withExtra fun _ => do
       let e ← Term.elabTermEnsuringType finalWeight (some (mkConst ``Nat))
       Term.synthesizeSyntheticMVarsNoPostponing
       let e ← instantiateMVars e
-      if e.hasMVar then return finalWeight
+      if e.hasMVar then return (finalWeight, false)
       let mut thms : SimpTheorems ← getSimpTheorems
       for n in unfoldNames do
         thms ← thms.addDeclToUnfold n
       let ctx ← Simp.mkContext (config := { decide := true }) (simpTheorems := #[thms])
         (congrTheorems := ← getSimpCongrTheorems)
       let (r, _) ← simp e ctx (simprocs := #[← Simp.getSimprocs])
-      PrettyPrinter.delab r.expr
+      return (← PrettyPrinter.delab r.expr, (r.expr.rawNatLit?.isSome || r.expr.nat?.isSome))
   catch _ =>
-    return finalWeight
+    return (finalWeight, false)
+
+/-- Emit a constructor's branch weight: `weightFn` applied to `args`, optionally passed through a
+    `CtorWeightModifier`, with both folded at elaboration time by `precomputeWeight`.
+
+    The two are folded in **separate** `simp` calls, and that is the whole point. Folding
+    `mod (weightFn …) …` in one call unfolds the modifier, which substitutes the base-weight
+    *expression* at every mention of its `base` parameter — and every modifier mentions `base`
+    twice (once to preserve a zero weight, once to scale it). A tuned recursive constructor then comes
+    out as
+
+        ((if size' = 0 then 0 else max 1 size' * 2).min 1).max
+          ((if size' = 0 then 0 else max 1 size' * 2) * 16000 / 1000)
+
+    recomputing the size-dependent base on every branch construction. Binding it in the emitted term
+    does not help: `simp` inlines both `let` (zeta, which `Simp.Config.zeta := false` does not stop
+    here) and `have` (`letFun`). So the base is kept out of the modifier's fold instead — the
+    modifier is folded against a *symbolic* `base`, which `simp` cannot inline — and the two
+    residuals are joined by a `have` afterwards.
+
+    When the base folds to a closed numeral (base constructors, whose weight is taken at size `0`)
+    there is nothing to share, so it is substituted in directly and the whole weight folds to one
+    literal. -/
+private def foldedWeight (weightFnIdent : Ident) (modifierIdent : Option Ident)
+    (args : Array (TSyntax `term)) (sizePrimeName : Name) : TermElabM (TSyntax `term) := do
+  let baseApp ← `($weightFnIdent $args*)
+  let (base, baseIsLit) ← precomputeWeight baseApp sizePrimeName [weightFnIdent.getId]
+  match modifierIdent with
+  | none => return base
+  | some modIdent =>
+    if baseIsLit then
+      let (w, _) ← precomputeWeight (← `($modIdent $base $args*)) sizePrimeName
+        [weightFnIdent.getId, modIdent.getId]
+      return w
+    let baseName := (← getLCtx).getUnusedName `baseW
+    let baseIdent := mkIdent baseName
+    let (modBody, _) ← precomputeWeight (← `($modIdent $baseIdent $args*)) sizePrimeName
+      [modIdent.getId] (extraBinder := baseName)
+    -- Sharing is only worth a binding if the residual actually uses the base more than once. An
+    -- arm that leaves the weight alone folds to `baseW` itself, and `have baseW := e; baseW` would
+    -- be strictly worse than `e`.
+    let rec uses : Syntax → Nat
+      | .ident _ _ n _ => if n == baseName then 1 else 0
+      | .node _ _ as => as.foldl (fun acc a => acc + uses a) 0
+      | _ => 0
+    if uses modBody ≤ 1 then
+      return ⟨modBody.raw.replaceM (m := Id) fun stx =>
+        if stx.isIdent && stx.getId == baseName then some base else none⟩
+    `(have $baseIdent := $base; $modBody)
+
+/-- Whether this derive filters its generator branches by their input guard (`specimen.dispatchInputs`). -/
+private def dispatching (sort : DeriveSort) : CoreM Bool :=
+  return sort == .Generator && specimen.dispatchInputs.get (← getOptions)
+
+/-- Wrap one generator branch as `some branch`, or `if guard then some branch else none` when its schedule
+    starts with input matches (`MExp.inputGuard?`). Identity when not dispatching. -/
+private def guardIf (sort : DeriveSort) (steps : List ScheduleStep) (t : TSyntax `term) :
+    TermElabM (TSyntax `term) := do
+  if !(← dispatching sort) then return t
+  match ← MExp.inputGuard? steps with
+  | some g => `(if $g then some $t else none)
+  | none => `(some $t)
+
+/-- The branch list handed to `backtrack`: the guarded branches that pass, or the plain list when not
+    dispatching. When no branch has a guard, the plain list is emitted too — every entry would be `some`,
+    so the `filterMap` would cost a pass and filter nothing, and generators with nothing to dispatch on stay
+    byte-identical to what they were. -/
+private def producerListTerm (sort : DeriveSort) (xs : Array (TSyntax `term)) : TermElabM (TSyntax `term) := do
+  if !(← dispatching sort) then return ← `([$xs,*])
+  let unguarded : Option (Array (TSyntax `term)) := xs.mapM fun x =>
+    match x with
+    | `(some $t) => some t
+    | _ => none
+  match unguarded with
+  | some ts => `([$ts,*])
+  | none => `(List.filterMap (fun o => o) [$xs,*])
 
 /-- Produces an instance of a typeclass for a constrained producer (either `ArbitrarySizedSuchThat` or `EnumSizedSuchThat`).
     The arguments to this function are:
@@ -896,28 +981,24 @@ def deriveConstrainedProducer
             let subProducerTerm ←
               match producerSort with
               | .Generator =>
-                let baseWeight ← `($weightFnIdent $ctorNameLit $outputIndicesLit $deriveSortLit 0 true $freshSize' $numBaseLit $numRecLit $numRecCallsLit)
-                let finalWeight ← match modifierIdent with
-                  | none => pure baseWeight
-                  | some modIdent => `($modIdent $baseWeight $ctorNameLit $outputIndicesLit $deriveSortLit 0 true $freshSize' $numBaseLit $numRecLit $numRecCallsLit)
-                let finalWeight ← precomputeWeight finalWeight freshSizePrimeName
-                  (weightFnIdent.getId :: (modifierIdent.map (·.getId)).toList)
+                let args : Array (TSyntax `term) :=
+                  #[ctorNameLit, outputIndicesLit, deriveSortLit, (← `(0)), (← `(true)), freshSize',
+                     numBaseLit, numRecLit, numRecCallsLit]
+                let finalWeight ← foldedWeight weightFnIdent modifierIdent args freshSizePrimeName
                 `( ($finalWeight, $subProducer) )
               | .Enumerator => pure subProducer
-            recursiveProducers := recursiveProducers.push subProducerTerm
+            recursiveProducers := recursiveProducers.push (← guardIf deriveSort schedule.1 subProducerTerm)
           else
             let subGeneratorTerm ←
               match producerSort with
               | .Generator =>
-                let baseWeight ← `($weightFnIdent $ctorNameLit $outputIndicesLit $deriveSortLit 0 false 0 $numBaseLit $numRecLit $numRecCallsLit)
-                let finalWeight ← match modifierIdent with
-                  | none => pure baseWeight
-                  | some modIdent => `($modIdent $baseWeight $ctorNameLit $outputIndicesLit $deriveSortLit 0 false 0 $numBaseLit $numRecLit $numRecCallsLit)
-                let finalWeight ← precomputeWeight finalWeight freshSizePrimeName
-                  (weightFnIdent.getId :: (modifierIdent.map (·.getId)).toList)
+                let args : Array (TSyntax `term) :=
+                  #[ctorNameLit, outputIndicesLit, deriveSortLit, (← `(0)), (← `(false)), (← `(0)),
+                     numBaseLit, numRecLit, numRecCallsLit]
+                let finalWeight ← foldedWeight weightFnIdent modifierIdent args freshSizePrimeName
                 `( ($finalWeight, $subProducer) )
               | .Enumerator => pure subProducer
-            nonRecursiveProducers := nonRecursiveProducers.push subGeneratorTerm
+            nonRecursiveProducers := nonRecursiveProducers.push (← guardIf deriveSort schedule.1 subGeneratorTerm)
 
         | none => throwError m!"Unable to derive producer schedule for constructor {ctorName}"
 
@@ -932,8 +1013,8 @@ def deriveConstrainedProducer
 
       -- Collect all the base / inductive producers into two Lean list terms
       -- Base producers are invoked when `size = 0`, inductive producers are invoked when `size > 0`
-      let baseProducers ← `([$nonRecursiveProducers,*])
-      let inductiveProducers ← `([$nonRecursiveProducers,*, $recursiveProducers,*])
+      let baseProducers ← producerListTerm deriveSort nonRecursiveProducers
+      let inductiveProducers ← producerListTerm deriveSort (nonRecursiveProducers ++ recursiveProducers)
 
       return (baseProducers, inductiveProducers, freshenedOutputNames, Lean.mkIdent <$> freshUnknowns, localCtx))
 
@@ -971,20 +1052,12 @@ private def compileWeightedProducer
     | .Theorem => `(Schedules.DeriveSort.Theorem)
   match deriveSort with
   | .Generator =>
-    let baseWeight ←
-      if isRecursive then
-        `($weightFnIdent $ctorNameLit $outputIndicesLit $deriveSortLit $badnessLit true $freshSize' $numBaseLit $numRecLit $numRecCallsLit)
-      else
-        `($weightFnIdent $ctorNameLit $outputIndicesLit $deriveSortLit $badnessLit false 0 $numBaseLit $numRecLit $numRecCallsLit)
-    let finalWeight ← match modifierIdent with
-      | none => pure baseWeight
-      | some modIdent =>
-        if isRecursive then
-          `($modIdent $baseWeight $ctorNameLit $outputIndicesLit $deriveSortLit $badnessLit true $freshSize' $numBaseLit $numRecLit $numRecCallsLit)
-        else
-          `($modIdent $baseWeight $ctorNameLit $outputIndicesLit $deriveSortLit $badnessLit false 0 $numBaseLit $numRecLit $numRecCallsLit)
-    let finalWeight ← precomputeWeight finalWeight sizePrimeName
-      (weightFnIdent.getId :: (modifierIdent.map (·.getId)).toList)
+    let (isRecLit, sizeArg) ←
+      if isRecursive then pure ((← `(true)), freshSize') else pure ((← `(false)), (← `(0)))
+    let args : Array (TSyntax `term) :=
+      #[ctorNameLit, outputIndicesLit, deriveSortLit, badnessLit, isRecLit, sizeArg,
+         numBaseLit, numRecLit, numRecCallsLit]
+    let finalWeight ← foldedWeight weightFnIdent modifierIdent args sizePrimeName
     `( ($finalWeight, $subProducer) )
   | .Enumerator => pure subProducer
   | .Checker | .Theorem => `(fun (_ : Unit) => $subProducer)
@@ -1342,6 +1415,7 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
       let term ← compileWeightedProducer (rewrittenSteps, sort) outputType key.deriveSort
         freshFuelPrimeName freshSizePrimeName key.inductiveName
         weightFnIdent modifierIdent ctorName key.outputIndices (lookupCtorBadness ctorName) isRec freshSize' numBaseLit numRecLit
+      let term ← guardIf key.deriveSort rewrittenSteps term
       if isRec then recursiveProducers := recursiveProducers.push term
       else nonRecursiveProducers := nonRecursiveProducers.push term
     for (ctorName, schedule) in indSched.recSchedules do
@@ -1349,7 +1423,7 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
       let term ← compileWeightedProducer (rewriteSchedule steps, sort) outputType key.deriveSort
         freshFuelPrimeName freshSizePrimeName key.inductiveName
         weightFnIdent modifierIdent ctorName key.outputIndices (lookupCtorBadness ctorName) true freshSize' numBaseLit numRecLit
-      recursiveProducers := recursiveProducers.push term
+      recursiveProducers := recursiveProducers.push (← guardIf key.deriveSort (rewriteSchedule steps) term)
     -- For checkers/enumerators with recursive constructors, add a failsafe to the base case:
     -- if no base constructor matches, return "unknown" (error) rather than "false",
     -- since a recursive constructor might succeed at a larger size.
@@ -1368,9 +1442,9 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
         | .Generator => pure nonRecursiveProducers
       else
         pure nonRecursiveProducers
-    let baseProducers ← `([$baseProducersWithFailsafe,*])
+    let baseProducers ← producerListTerm key.deriveSort baseProducersWithFailsafe
     let allProducers := nonRecursiveProducers ++ recursiveProducers
-    let inductiveProducers ← `([$allProducers,*])
+    let inductiveProducers ← producerListTerm key.deriveSort allProducers
     let argNames := (List.range allFVars.size).map (fun i => indSched.argNames.getD i (Name.mkSimple s!"arg_{i}"))
     let freshArgIdents : TSyntaxArray `term := argNames.toArray.map (fun n => Lean.mkIdent n)
     let freshenedOutputNames := outputIndicesNonSort.filterMap (fun i => argNames[i]?)
@@ -1803,34 +1877,30 @@ def deriveConstrainedProducerParts
           if isRecursive then
             let subProducerTerm ← match producerSort with
               | .Generator =>
-                let baseWeight ← `($weightFnIdent $ctorNameLit $outputIndicesLit $deriveSortLit 0 true $freshSize' $numBaseLit $numRecLit $numRecCallsLit)
-                let finalWeight ← match modifierIdent with
-                  | none => pure baseWeight
-                  | some modIdent => `($modIdent $baseWeight $ctorNameLit $outputIndicesLit $deriveSortLit 0 true $freshSize' $numBaseLit $numRecLit $numRecCallsLit)
-                let finalWeight ← precomputeWeight finalWeight freshSizePrimeName
-                  (weightFnIdent.getId :: (modifierIdent.map (·.getId)).toList)
+                let args : Array (TSyntax `term) :=
+                  #[ctorNameLit, outputIndicesLit, deriveSortLit, (← `(0)), (← `(true)), freshSize',
+                     numBaseLit, numRecLit, numRecCallsLit]
+                let finalWeight ← foldedWeight weightFnIdent modifierIdent args freshSizePrimeName
                 `( ($finalWeight, $subProducer) )
               | .Enumerator => pure subProducer
-            recursiveProducers := recursiveProducers.push subProducerTerm
+            recursiveProducers := recursiveProducers.push (← guardIf deriveSort rewrittenSteps subProducerTerm)
           else
             let subGeneratorTerm ← match producerSort with
               | .Generator =>
-                let baseWeight ← `($weightFnIdent $ctorNameLit $outputIndicesLit $deriveSortLit 0 false 0 $numBaseLit $numRecLit $numRecCallsLit)
-                let finalWeight ← match modifierIdent with
-                  | none => pure baseWeight
-                  | some modIdent => `($modIdent $baseWeight $ctorNameLit $outputIndicesLit $deriveSortLit 0 false 0 $numBaseLit $numRecLit $numRecCallsLit)
-                let finalWeight ← precomputeWeight finalWeight freshSizePrimeName
-                  (weightFnIdent.getId :: (modifierIdent.map (·.getId)).toList)
+                let args : Array (TSyntax `term) :=
+                  #[ctorNameLit, outputIndicesLit, deriveSortLit, (← `(0)), (← `(false)), (← `(0)),
+                     numBaseLit, numRecLit, numRecCallsLit]
+                let finalWeight ← foldedWeight weightFnIdent modifierIdent args freshSizePrimeName
                 `( ($finalWeight, $subProducer) )
               | .Enumerator => pure subProducer
-            nonRecursiveProducers := nonRecursiveProducers.push subGeneratorTerm
+            nonRecursiveProducers := nonRecursiveProducers.push (← guardIf deriveSort rewrittenSteps subGeneratorTerm)
         | none => throwError m!"Unable to derive producer schedule for constructor {ctorName}"
       if nonRecursiveProducers.isEmpty && recursiveProducers.isEmpty then
         throwError "Cannot derive constrained producer for '{inductiveName}': no constructor schedules were generated"
       if nonRecursiveProducers.isEmpty then
         throwError "Cannot derive constrained producer for '{inductiveName}': all constructors are recursive (no finite base case)"
-      let baseProducers ← `([$nonRecursiveProducers,*])
-      let inductiveProducers ← `([$nonRecursiveProducers,*, $recursiveProducers,*])
+      let baseProducers ← producerListTerm deriveSort nonRecursiveProducers
+      let inductiveProducers ← producerListTerm deriveSort (nonRecursiveProducers ++ recursiveProducers)
       return (baseProducers, inductiveProducers, freshenedOutputNames, Lean.mkIdent <$> freshUnknowns, localCtx))
   return (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, outputTypes, localCtx, inductiveName, inductiveLevels, producerSort)
 

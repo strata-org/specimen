@@ -51,6 +51,20 @@ register_option specimen.searchLimit : Nat := {
   descr := "max hypothesis orderings to evaluate per constructor during schedule search"
 }
 
+/-- When true, a derived **generator** tests each constructor's leading input pattern-matches before
+    handing the constructor list to `backtrack`, and drops the constructors that cannot match these inputs.
+
+    A dropped constructor is one whose branch would fail at its first step on every run with these
+    inputs, so removing it leaves the output distribution unchanged — weights are *not* recounted after
+    the filter. The guard is built from each branch's own leading `match`es (with bound variables replaced
+    by wildcards), so it can only be weaker than the branch's test and never drops a branch that could
+    succeed. The gain is in relations whose constructors split on an input, such as Cedar's `HasType`;
+    where every constructor can match any input, as in STLC and BST, the filter keeps them all. -/
+register_option specimen.dispatchInputs : Bool := {
+  defValue := true
+  descr := "in derived generators, skip constructors whose leading input pattern cannot match"
+}
+
 /-- When true, all of Specimen's informational derivation output is suppressed:
     the `Try this:` suggestion popups from the single-derive commands
     (`derive_checker` / `derive_generator` / `derive_generator_multi` /

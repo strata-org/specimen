@@ -77,6 +77,31 @@ set_option specimen.autoDeriveDeps true in
 scoped derive_mutual (fun (lo hi : Nat) => ∃ n, PrecompBetween lo hi n)
 end Precomputed
 
+/-- A modifier that mentions its base twice, as every real modifier does — once to keep a zero weight
+    zero, once to scale it. -/
+def keepZeroScaleModifier (baseWeight : Nat) (_ctorName : Lean.Name) (_outputIndices : List Nat)
+    (_deriveSort : DeriveSort) (_scoreBadness : Nat) (_isRec : Bool) (_size : Nat)
+    (_numBase _numRec : Nat) (_numRecCalls : Nat) : Nat :=
+  if baseWeight = 0 then 0 else baseWeight * 2
+
+initialize Scoring.registerWeightModifier `keepZeroScaleModifier keepZeroScaleModifier ``keepZeroScaleModifier
+
+-- Version C: that modifier over a size-dependent base. The modifier mentions its `base` twice, so folding
+-- it together with the base would substitute the `if size' = 0 then … else …` expression at both mentions
+-- and recompute it on every branch construction. The emitted weight below binds the base in a `have`
+-- instead, which is what this snapshot pins.
+namespace SharedBase
+set_option specimen.richOutput false in
+set_option specimen.textOutput 3 in
+set_option specimen.weightFn "Scoring.balancedCtorWeight" in
+set_option specimen.weightModifier "keepZeroScaleModifier" in
+set_option specimen.precomputeWeights true in
+set_option specimen.autoDeriveDeps true in
+/-- have baseW := if size' = 0 then 0 else max 1 size' * 3; -/
+#guard_msgs (substring := true, whitespace := lax) in
+scoped derive_mutual (fun (lo hi : Nat) => ∃ n, PrecompBetween lo hi n)
+end SharedBase
+
 -- Each snapshot binds the scoped instance from exactly one namespace.
 open Baseline in
 private def genOff (sz : Nat) : Gen Nat :=

@@ -135,16 +135,26 @@ def concat (l : LazyList (LazyList α)) : LazyList α :=
 /-- Round-robin concatenation of lazy enumerations: lazily takes one element from the back of each lazy enumeration in turn
     until there are no more to go, then starts at the head of the enumeration of enumerations. -/
 partial def roundRobinConcat (l : LazyList (LazyList α)) : LazyList α :=
-  let rec go (current : LazyList (LazyList α)) (queue : List (LazyList α)) : LazyList α :=
+  -- The queue of partly-consumed enumerations is the batched queue `front ++ back.reverse`: pop from
+  -- `front`, push onto `back`, and reverse `back` only when `front` runs out. This is the order a single
+  -- list with `queue ++ [x]` gives, but each push is O(1) rather than a walk of the whole queue, which is
+  -- what keeps combining `n` enumerations linear in the pushes rather than quadratic. The structure is
+  -- older than its analysis (Burton 1982; Hood and Melville 1981 for the real-time variant) and is
+  -- analysed as the batched queue in Okasaki, Purely Functional Data Structures, §5.2; the lazy
+  -- persistent queues there (banker's, physicist's) are not needed, since this queue is never shared.
+  let rec go (current : LazyList (LazyList α)) (front back : List (LazyList α)) : LazyList α :=
     match current with
     | lnil =>
-      match queue with
-      | [] => lnil
-      | q :: qs => go (lcons q ⟨fun _ => lnil⟩) qs
-    | lcons lnil rest => go rest.get queue
+      match front with
+      | q :: qs => go (lcons q ⟨fun _ => lnil⟩) qs back
+      | [] =>
+        match back with
+        | [] => lnil
+        | _ => go lnil back.reverse []
+    | lcons lnil rest => go rest.get front back
     | lcons (lcons a as) rest =>
-      lcons a ⟨fun _ => go rest.get (queue ++ [as.get])⟩
-  go l []
+      lcons a ⟨fun _ => go rest.get front (as.get :: back)⟩
+  go l [] []
 
 /-- Bind for `LazyList`s is just `concatMap` (same as the list monad) -/
 partial def bindLazyList (l : LazyList α) (f : α → LazyList β) : LazyList β :=
@@ -203,3 +213,9 @@ instance [Monad m] : ForIn m (LazyList α) α where
   pure ()
 
 end LazyList
+
+-- Round-robin order on an uneven input, including an empty enumeration: one element from each in turn,
+-- the partly-consumed ones re-queued in order. Pins the order the two-list queue must keep.
+/-- info: [1, 4, 5, 2, 6, 3] -/
+#guard_msgs in
+#eval (LazyList.roundRobinConcat (LazyList.fromList ([[1, 2, 3], [4], [], [5, 6]].map LazyList.fromList))).toList
