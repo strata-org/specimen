@@ -48,27 +48,10 @@ inductive Diag : (α : Type u) → α → α × α → Prop where
 
 -- set_option trace.plausible.deriving.arbitrary true
 
-/--
-error: Redundant alternative: Any expression matching
-  _
-will match one of the preceding alternatives
----
-error: Redundant alternative: Any expression matching
-  _
-will match one of the preceding alternatives-/
-#guard_msgs(error, drop info, whitespace := lax) in
+#guard_msgs(drop info, whitespace := lax) in
 derive_generator fun γ p => ∃ g, Diag γ g p
 
-/-- error: Redundant alternative: Any expression matching
-  _
-will match one of the preceding alternatives
-
----
-
-error: Redundant alternative: Any expression matching
-  _
-will match one of the preceding alternatives -/
-#guard_msgs(error, drop info, whitespace := lax) in
+#guard_msgs(drop info, whitespace := lax) in
 derive_checker fun γ g p => Diag γ g p
 
 inductive usesVec : _ → Prop where
@@ -101,24 +84,10 @@ inductive MapsFind₂ : Maps α β → α × β → Prop where
 | hd : MapFind₂ m (x, y) → MapsFind₂ (m :: ms) (x, y)
 | tl : MapsFind₂ ms (x, y) → MapsFind₂ (m :: ms) (x, y)
 
-/--error: Redundant alternative: Any expression matching
-  _
-will match one of the preceding alternatives-/
-#guard_msgs(error, drop info) in
+#guard_msgs(drop info) in
 derive_generator fun α β m => ∃ pa, @MapFind₂ α β m pa
 
-/--error: Redundant alternative: Any expression matching
-  _
-will match one of the preceding alternatives
----
-error: Redundant alternative: Any expression matching
-  _
-will match one of the preceding alternatives
----
-error: Redundant alternative: Any expression matching
-  _
-will match one of the preceding alternatives-/
-#guard_msgs(error, drop info) in
+#guard_msgs(drop info) in
 derive_generator fun α β m => ∃ pa, @MapsFind₂ α β m pa
 
 end NEqGeneratorTest
@@ -151,14 +120,7 @@ derive_checker fun α x y => @SameType α x y
 inductive FirstOf {α β : Type} : α × β → α → Prop where
 | mk : FirstOf (x, y) x
 
-/--error: Redundant alternative: Any expression matching
-  _
-will match one of the preceding alternatives
----
-error: Redundant alternative: Any expression matching
-  _
-will match one of the preceding alternatives-/
-#guard_msgs(error, drop info) in
+#guard_msgs(drop info) in
 derive_generator fun α β p => ∃ x, @FirstOf α β p x
 #guard_msgs(drop info) in
 derive_generator fun α β x => ∃ p, @FirstOf α β p x
