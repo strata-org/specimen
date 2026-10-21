@@ -116,6 +116,7 @@ inductive HasColor : MyColor → Nat → Prop where
 /--
 warning: derive_mutual: [generator] fun b => ∃ a, HasColor a b needs [Arbitrary (MyColor)] but no such instance exists
 -/
+-- The warning is what is pinned; the derivation then fails for want of that instance, so errors are dropped.
 #guard_msgs(warning, drop error, drop info) in
 set_option specimen.autoDeriveDeps true in
 set_option specimen.multiOutput true in

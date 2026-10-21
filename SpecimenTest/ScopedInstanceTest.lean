@@ -4,6 +4,7 @@ import Specimen.ArbitrarySizedSuchThat
 import Specimen.DeriveConstrainedProducer
 import SpecimenTest.CommonDefinitions.BinaryTree
 import SpecimenTest.DeriveDecOpt.DeriveBSTChecker
+import Specimen.Basalt
 
 /-! Test: scoped and local instance visibility for `derive_mutual`.
     Demonstrates that the same relation can be derived with different strategies
@@ -11,7 +12,11 @@ import SpecimenTest.DeriveDecOpt.DeriveBSTChecker
 
 open Plausible
 
+-- In a namespace of its own so its name cannot clash with another module's derivation of the same
+-- instance; the instance itself is still global.
+namespace ScopedInstanceTest
 deriving instance Arbitrary for BinaryTree
+end ScopedInstanceTest
 
 namespace Strategy.A
 

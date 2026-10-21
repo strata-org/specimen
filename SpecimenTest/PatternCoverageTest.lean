@@ -1,3 +1,8 @@
+import Specimen.PatternCoverage
+import Specimen.DeriveConstrainedProducer
+import Specimen.Scoring
+import Specimen.Basalt
+
 /-!
 # Pattern Coverage Tests
 
@@ -11,11 +16,16 @@ and what the trie/scoring produces.
 - **Scoring strategies**: cross-strategy comparison on representative cases
 - **End-to-end derivation**: full `derive_mutual` integration
 -/
-import Specimen.PatternCoverage
-import Specimen.DeriveConstrainedProducer
-import Specimen.Scoring
 
 open Lean Meta Elab Term PatternCoverage Schedules Scoring
+
+-- The per-leaf snapshots below are written against `DefaultScore`'s fields; sections that compare
+-- scorers or need another one set it themselves.
+set_option specimen.scoreType "Scoring.DefaultScore"
+
+-- Namespaced so the relations below cannot collide with the rest of the suite's.
+namespace PatternCoverageTest
+
 
 ----------------------------------------------
 -- Test harness
@@ -31,7 +41,7 @@ def testCoverage (indName : Name) (outputIndices : List Nat) : TermElabM String 
       conclusionToCovPattern indName conclusion outputIndices indInfo.numParams
     patterns := patterns ++ [(ctorName, pat)]
 
-  let mut result := s!"=== Coverage for {indName} (outputs: {outputIndices}) ===\n"
+  let mut result := s!"=== Coverage for {indName.getString!} (outputs: {outputIndices}) ===\n"
   result := result ++ s!"Constructors and their input patterns:\n"
   for (name, pat) in patterns do
     let shortName := name.componentsRev.head?.getD name |>.toString
@@ -109,9 +119,9 @@ def testStrategy (indName : Name) (outputIndices : List Nat) (bundle : ScorerBun
         key.outputIndices.all fun idx => s.argNames.getD idx `_ != n
       Std.HashSet.ofList inputNames
     | _ => {}
-  let ctorScores : List (Name × Score) := ctorScheds.map fun (name, steps) =>
-    let stepScores := steps.map fun step => bundle.stepScorer key memoState inputVarSet step
-    (name, bundle.scheduleScorer stepScores)
+  let ctorScores : List (Name × Score) ← ctorScheds.mapM fun (name, steps) => do
+    let stepScores ← steps.mapM fun step => bundle.stepScorer key memoState inputVarSet step
+    return (name, bundle.scheduleScorer stepScores)
 
   -- Leaf + inductive aggregation
   let leafScores := leaves.map fun (_, rules) =>
@@ -404,14 +414,16 @@ info: === Strategy comparison for IsSorted (checker) ===
   [Scoring.DensityScore] { density := Scoring.Density.Checking, varDeps := 6, forChecker := true }
 
 === Strategy comparison for Typing (output type) ===
-  [Scoring.DefaultScore] { checks := 0, length := 3, unconstrained := 2 }
-  [Scoring.WorstLeafScore] { checks := 0, length := 3, unconstrained := 2 }
-  [Scoring.DensityScore] { density := Scoring.Density.Total, varDeps := 2, forChecker := false }
+  [Scoring.DefaultScore] { checks := 0, length := 1, unconstrained := 0 }
+  [Scoring.WorstLeafScore] { checks := 0, length := 1, unconstrained := 0 }
+  [Scoring.DensityScore] { density := Scoring.Density.Total, varDeps := 0, forChecker := false }
 
 -/
 #guard_msgs in
 #eval show TermElabM _ from do
-  let bundles ← scorerBundles.get
+  -- The three scorers this comparison was written for, so registering another does not change it.
+  let compared := ["Scoring.DefaultScore", "Scoring.WorstLeafScore", "Scoring.DensityScore"]
+  let bundles := (← scorerBundles.get).filter fun b => compared.contains (toString b.scoreTypeName)
   let mut output := "=== Strategy comparison for IsSorted (checker) ===\n"
   for bundle in bundles do
     output := output ++ (← testStrategy ``IsSorted [] bundle) ++ "\n"
@@ -442,9 +454,9 @@ Coverage tree:
   MyTyping(↓, ↑, ↑) : [tapp, tabs, tvar]
 
 Leaves (1):
-  MyTyping(↓, ↑, ↑) → [tapp({ density := Scoring.Density.Partial, varDeps := 3, forChecker := false }), tabs({ density := Scoring.Density.Partial, varDeps := 3, forChecker := false }), tvar({ density := Scoring.Density.Backtracking, varDeps := 1, forChecker := false })]
+  MyTyping(↓, ↑, ↑) → [tapp({ density := Scoring.Density.Partial, varDeps := 2, forChecker := false }), tabs({ density := Scoring.Density.Partial, varDeps := 2, forChecker := false }), tvar({ density := Scoring.Density.Backtracking, varDeps := 0, forChecker := false })]
 
-Inductive score: { density := Scoring.Density.Partial, varDeps := 3, forChecker := false }
+Inductive score: { density := Scoring.Density.Partial, varDeps := 2, forChecker := false }
 
 -/
 #guard_msgs in
@@ -458,6 +470,8 @@ set_option specimen.scoreType "Scoring.DensityScore" in
 -- Tests: the full derivation pipeline produces a working generator instance.
 deriving instance Plausible.Arbitrary for MyTy
 deriving instance DecidableEq for MyTy
+-- The Basalt counterpart, for `specimen.emitBasalt`.
+deriving instance Basalt.ArbitraryFueled for MyTy
 set_option specimen.autoDeriveDeps true
 set_option specimen.multiOutput true
 #guard_msgs(drop info) in
@@ -482,6 +496,9 @@ instance : Arbitrary Op where
     let n ← Plausible.Gen.choose Nat 0 7 (by omega)
     pure (#[Op.o0, Op.o1, Op.o2, Op.o3, Op.o4, Op.o5, Op.o6, Op.o7].getD n.1 Op.o0)
 
+-- The Basalt counterpart, for `specimen.emitBasalt`.
+deriving instance Basalt.ArbitraryFueled for Op
+
 /-- Inequality-guarded: `a`/`b` constrained ONLY by `≠`, which Specimen can
     only reject-sample. -/
 inductive HasValidReduceOp : Op → Op → Prop where
@@ -499,6 +516,18 @@ public instance a : ArbitrarySizedSuchThat _ (fun (l,r) => HasValidReduceOp l r)
     let a := ops.getD i.1 Op.o1
     let b := ops.getD j.1 Op.o2
     let b := if a == b then ops.getD ((j.1 + 1) % 7) Op.o2 else b
+    pure (a, b)
+
+/-- The same producer for the Basalt path, which looks sub-producers up through `BacktrackGenFor`. With
+    the flag off, the instance above wins. -/
+instance : BacktrackGenFor (Op × Op) (fun (l, r) => HasValidReduceOp l r) where
+  gen _ := do
+    let ops := #[Op.o1, Op.o2, Op.o3, Op.o4, Op.o5, Op.o6, Op.o7]
+    let i ← chooseNat 0 6
+    let j ← chooseNat 0 6
+    let a := ops.getD i Op.o1
+    let b := ops.getD j Op.o2
+    let b := if a == b then ops.getD ((j + 1) % 7) Op.o2 else b
     pure (a, b)
 
 structure R2 where
@@ -526,4 +555,8 @@ def drawIneqStructGen (n : Nat) (sz : Nat := 10) : IO (Nat × Nat × Nat) := do
 
 #eval do
   let (ok, got, fuel) ← drawIneqStructGen 200
-  IO.println s!"INEQ STRUCT + derive_generator: valid={ok}/200  succeeded={got}/200  fuelOut={fuel}/200"
+  -- Every value the generator produces must satisfy the relation, whatever the draw.
+  if ok != got then
+    throw <| IO.userError s!"INEQ STRUCT + derive_generator: valid={ok}/200  succeeded={got}/200  fuelOut={fuel}/200"
+
+end PatternCoverageTest
