@@ -2,12 +2,12 @@ import Specimen.Correctness.Semantics
 import Basalt.SPMF.Backtrack
 
 /-!
-# Generic relation-level generator interpreter, at Basalt's `SPMF` — no generator axioms
+# Generic relation-level generator interpreter, at Basalt's `SPMF`
 
 The randomized analogue of `decRel`/`enumRel`, and the third leg of the correctness development.
-`GenInterp` proved generic generator *soundness* over the real `Plausible.Gen`, but could not prove
-completeness: reachability over an opaque `StdGen` is not provable, so `GenAxioms` postulates two
-QuickChick-style support laws (`genSupportAt_bind`, `genSupportAt_backtrack`).
+`GenInterp` proves generic generator *soundness* over the real `Plausible.Gen` but not completeness,
+which needs the reverse support laws: `Plausible.Gen` threads its seed through `>>=` rather than
+splitting it, so those laws fail there (see `GenSupport`).
 
 A generator emitted under `specimen.emitBasalt` is polymorphic in Basalt's `Gen` class, so the same
 definition can be read at Basalt's `SPMF`, a sub-probability distribution, where its *support* — the
@@ -16,8 +16,8 @@ values it produces with nonzero probability — is what the theorems below are a
 * the bind law is `SPMF.mem_support_bind_iff`, and
 * the backtrack law is `BacktrackGen.mem_support_backtrack_ok_iff`.
 
-Both are theorems. So the results below — soundness **and** completeness — carry no generator axioms
-(their axioms are Lean's standard `propext`, `Classical.choice`, `Quot.sound`; `SPMF` is classical).
+Both are theorems, so the results below, soundness **and** completeness, use only Lean's standard
+axioms `propext`, `Classical.choice` and `Quot.sound` (`SPMF` is classical).
 `GenInterp` still says something this file does not: that soundness holds of the code as it actually
 runs under Plausible. The two are readings of the same emitted definition.
 

@@ -1,7 +1,7 @@
 import Specimen.Correctness.Combinators
 import Specimen.Correctness.Semantics
 import Specimen.Correctness.LazyListLemmas
-import Specimen.Correctness.GenAxioms
+import Specimen.Correctness.GenSupport
 import Specimen.Correctness.Reflect
 import Specimen.Correctness.CheckerInterp
 
@@ -23,8 +23,9 @@ Everything else — the combinator reasoning, the fuel recursion — is already 
 
 The file proves, in order: the checker sound, complete and monotone (directly, then again through the
 generic checker interpreter); the enumerator sound and complete, over a `List` core reached through
-`fromList`; the generator sound and complete at the real `Plausible.Gen`, which uses `GenAxioms`; and
-`Ev` as a `RelSpec`, with the adequacy proof that its `Provable` is `Ev`.
+`fromList`; the generator sound at the real `Plausible.Gen`; and `Ev` as a `RelSpec`, with the adequacy
+proof that its `Provable` is `Ev`. The generator's completeness is proved at Basalt's `SPMF`, in
+`EvGenSPMF`.
 -/
 
 open Plausible DecOpt Specimen.Correctness
@@ -334,10 +335,11 @@ theorem enumEv_complete : EnumComplete enumEv (fun n => Ev n) := by
   obtain ⟨budget, hb⟩ := enumEvL_complete hx
   exact ⟨budget, mem_enumEv.mpr hb⟩
 
-/-! ### Generator (real `Plausible.Gen`, QuickChick support axioms)
+/-! ### Generator (real `Plausible.Gen`, soundness)
 
-Same constructor structure over the *executed* `Plausible.Gen`. Completeness is not provable about
-the opaque `StdGen`, so we use the documented QuickChick support laws (`GenAxioms.lean`):
+Same constructor structure over the *executed* `Plausible.Gen`, proved sound through the support laws
+in `GenSupport.lean`. Completeness needs the reverse laws, which `Plausible.Gen` does not satisfy; it is
+proved at Basalt's `SPMF` in `EvGenSPMF`. The generator:
 * `z`  → `pure 0`;
 * `ss` → `pure (m + 2)` for a recursively-generated even `m`, sequenced with `>>=`;
 * branch choice via `GeneratorCombinators.backtrack`. -/
@@ -354,13 +356,6 @@ private theorem genEvG_succ (budget : Nat) :
       GeneratorCombinators.backtrack
         [(1, pure 0), (1, genEvG budget >>= fun m => pure (m + 2))] := rfl
 
-/-- The branch weights are positive — required by the backtrack support law. -/
-private theorem genEvG_hpos (budget : Nat) :
-    ∀ p ∈ ([(1, pure 0), (1, genEvG budget >>= fun m => pure (m + 2))] : List (Nat × Gen Nat)),
-      0 < p.1 := by
-  intro p hp
-  simp only [List.mem_cons, List.not_mem_nil, or_false] at hp
-  rcases hp with rfl | rfl <;> exact Nat.one_pos
 
 /-- Soundness at a fixed budget, with the size argument kept universally quantified (the budget, not
     the `Gen`-size, drives the recursion). Induction on the budget. -/
@@ -374,12 +369,13 @@ private theorem genEvG_supportAt_sound (budget : Nat) :
   | succ budget ih =>
     intro sz x h
     rw [genEvG_succ] at h
-    obtain ⟨p, hpmem, hp⟩ := (genSupportAt_backtrack _ (genEvG_hpos budget) sz x).mp h
+    obtain ⟨p, hpmem, hp⟩ := genSupportAt_backtrack_sub _ sz x h
     simp only [List.mem_cons, List.not_mem_nil, or_false] at hpmem
     rcases hpmem with rfl | rfl
     · simp only [genSupportAt_pure] at hp; subst hp; exact Ev.z
-    · simp only [genSupportAt_bind, genSupportAt_pure] at hp
-      obtain ⟨a, ha, rfl⟩ := hp
+    · obtain ⟨a, ha, hk⟩ := genSupportAt_bind_sub _ _ sz x hp
+      rw [genSupportAt_pure] at hk
+      subst hk
       exact Ev.ss (ih sz a ha)
 
 /-- **Generator soundness** against the `Semantics` target (real `Gen`). -/
@@ -388,28 +384,11 @@ theorem genEvG_sound : GenSound genEvG (fun n => Ev n) := by
   obtain ⟨sz, hs⟩ := hx
   exact genEvG_supportAt_sound sz sz x hs
 
-/-- Completeness: some budget makes an even `x` producible at every size. Induction on `Ev x`;
-    `backtrack`'s union support (the QuickChick axiom) lets the `ss` branch fire. -/
-private theorem genEvG_supportAt_complete {x : Nat} (h : Ev x) :
-    ∃ budget, ∀ sz, genSupportAt (genEvG budget) sz x := by
-  induction h with
-  | z =>
-    refine ⟨0, fun sz => ?_⟩
-    rw [show genEvG 0 = pure 0 from rfl, genSupportAt_pure]
-  | @ss n hm ih =>
-    obtain ⟨budget, hb⟩ := ih
-    refine ⟨budget + 1, fun sz => ?_⟩
-    rw [genEvG_succ]
-    refine (genSupportAt_backtrack _ (genEvG_hpos budget) sz _).mpr ?_
-    refine ⟨_, List.mem_cons_of_mem _ List.mem_cons_self, ?_⟩
-    simp only [genSupportAt_bind]
-    exact ⟨n, hb sz, (genSupportAt_pure _ _ _).mpr rfl⟩
+-- Pinned: the generator leg uses Lean's standard axioms only.
+/-- info: 'Specimen.Correctness.EvSlice.genEvG_sound' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms genEvG_sound
 
-/-- **Generator completeness** against the `Semantics` target (real `Gen`), via the QuickChick axiom. -/
-theorem genEvG_complete : GenComplete genEvG (fun n => Ev n) := by
-  intro x hx
-  obtain ⟨budget, hb⟩ := genEvG_supportAt_complete hx
-  exact ⟨budget, hb budget⟩
 
 /-! ### Reflection: `Ev` as a `RelSpec`, and adequacy
 

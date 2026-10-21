@@ -2,8 +2,8 @@
 -- never joined with it: these modules import Mathlib (through Basalt's `SPMF`), and Mathlib's
 -- root-level names (`Even`, `BinaryTree`, …) collide with the test suite's own at an import join.
 
--- The generator interpreter at `SPMF` — soundness AND completeness, no generator axioms — and the
--- `Ev` slice closed through it
+-- The generator interpreter at `SPMF`, soundness and completeness, and the `Ev` generator proved
+-- complete through it
 import Specimen.Correctness.GenInterpSPMF
 import Specimen.Correctness.EvGenSPMF
 -- `Producer` is shared across kinds, and the kinds stay distinct

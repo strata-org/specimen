@@ -3,7 +3,7 @@ import Specimen.Correctness.Combinators
 import Specimen.Correctness.Reflect
 import Specimen.Correctness.CheckerInterp
 import Specimen.Correctness.ProducerInterp
-import Specimen.Correctness.GenAxioms
+import Specimen.Correctness.GenSupport
 import Specimen.Correctness.GenInterp
 import Specimen.Correctness.EvSlice
 
@@ -22,13 +22,13 @@ Modules:
   soundness, and bounded refutation for structurally decreasing relations, proved once.
 * `ProducerInterp` — the same for enumerators, over `List`: soundness and completeness.
 * `GenInterp` — the same for generators at the real `Plausible.Gen`: soundness, with no axioms.
-* `GenAxioms` — two QuickChick-style support laws for `Plausible.Gen`, postulated; see the file for why
-  they are an idealization and which results use them.
-* `EvSlice` — evenness end to end: checker, enumerator and generator proved sound and complete, and
+* `GenSupport` — the support laws for `Plausible.Gen` in the soundness direction, proved. The reverse
+  direction does not hold there, because `>>=` threads the seed rather than splitting it.
+* `EvSlice` — evenness end to end: checker and enumerator sound and complete, generator sound, and
   `Ev` reflected as a `RelSpec`.
 * `GenInterpSPMF` / `EvGenSPMF` — the generator interpreter again, at Basalt's `SPMF`: soundness
-  **and** completeness with no generator axioms (the support laws are theorems there), and the `Ev`
-  slice closed through it. NOT imported here: `SPMF` sits on Mathlib, whose root-level names clash
+  **and** completeness (the support laws are theorems there), and the `Ev` generator proved complete
+  through it. NOT imported here: `SPMF` sits on Mathlib, whose root-level names clash
   with this test suite's at an import join, so the SPMF development is built from the separate
   `SpecimenTest.Proofs` root instead.
 
