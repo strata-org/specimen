@@ -4,6 +4,7 @@ import Specimen.DecOpt
 import Specimen.ArbitrarySizedSuchThat
 import Specimen.DeriveConstrainedProducer
 import SpecimenTest.CommonDefinitions.BinaryTree
+import Specimen.Basalt
 
 /-! Snapshot test: derived constrained generator for balanced binary trees. -/
 
@@ -23,6 +24,6 @@ inductive balancedTree : Nat → BinaryTree → Prop where
 set_option specimen.autoDeriveDeps true
 set_option specimen.multiOutput true
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual
  (fun n => ∃ (t : BinaryTree), balancedTree n t)

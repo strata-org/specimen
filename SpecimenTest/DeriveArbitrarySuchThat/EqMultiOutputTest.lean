@@ -14,6 +14,6 @@ set_option guard_msgs.diff true
 
 set_option specimen.multiOutput true in
 set_option specimen.autoDeriveDeps true in
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual
   (∃ (a : Nat) (b : Nat), @Eq Nat a b)

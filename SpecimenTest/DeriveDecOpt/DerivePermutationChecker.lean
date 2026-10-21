@@ -8,13 +8,13 @@ import SpecimenTest.DeriveEnumSuchThat.DerivePermutationEnumerator
 set_option specimen.autoDeriveDeps true
 set_option specimen.multiOutput true
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual checker
   (fun l l' => Permutation l l')
 
 
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_checker (fun l l' => Permutation l l')
 
 

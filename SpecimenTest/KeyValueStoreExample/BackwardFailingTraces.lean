@@ -150,12 +150,12 @@ set_option linter.unusedVariables false
 set_option match.ignoreUnusedAlts true
 
 -- Forward generator: fix start state, generate trace + end state.
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual
   generator (fun (s1 : KVState) => ∃ ops s2, Trace s1 ops s2)
 
 -- Backward generator: fix end state, generate trace + start state.
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual
   generator (fun (s3 : KVState) => ∃ ops s1, Trace s1 ops s3)
 

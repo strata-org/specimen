@@ -22,14 +22,14 @@ inductive square_of''' : Nat → _ → Prop where
   | sq : forall x, square_of''' x (fun (_ : Unit) => x)
 
 -- The input is a pair, and a pair's one constructor cannot fail to match, so no failure arm is emitted.
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun n => ∃ (m : Nat), square_of'' m n)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun n => ∃ (m : Nat), square_of' m n)
 
 /--error: exprToConstructorExpr can only handle free variables, constants, and applications. Attempted to convert: Unit → Nat-/
-#guard_msgs(error) in
+#guard_msgs(warning, error) in
 derive_generator (fun n => ∃ (m : Nat), square_of''' m n)
 
 example : Function.Injective (fun a => a * 1) := fun _ _ h => by exact Nat.add_left_cancel h

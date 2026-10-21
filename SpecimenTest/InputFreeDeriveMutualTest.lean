@@ -33,10 +33,10 @@ inductive InputFreeEven : Nat → Prop where
 inductive InputFreeIsFive : Nat → Prop where
   | mk : ∀ n, n = 5 → InputFreeIsFive n
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual generator (∃ n, InputFreeEven n)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual generator (∃ n, InputFreeIsFive n)
 
 -- The derived generators are not merely well-typed — they run and produce values satisfying their

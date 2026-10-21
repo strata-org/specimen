@@ -36,19 +36,19 @@ inductive TagSum : Tagged → Nat → Prop where
 inductive Pick : Option Nat → Nat → Prop where
   | some : ∀ n, Pick (.some n) n
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_checker (fun t => Inner t)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_checker (fun t => Pos t)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun t => ∃ m, TagSum t m)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_enumerator (fun t => ∃ m, TagSum t m)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_checker (fun o n => Pick o n)
 
 /-- info: [true, true, false] -/

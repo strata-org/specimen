@@ -27,7 +27,7 @@ inductive Cycle3 : Nat → Prop where
   | s : Cycle0 n → Cycle3 (n + 1)
 end
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual generator (∃ n, Cycle0 n)
 
 open Lean in

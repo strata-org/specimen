@@ -34,7 +34,7 @@ inductive Sorted : List Nat → Prop where
   | one  : ∀ x, Sorted [x]
   | cons : ∀ x y rest, x ≤ y → Sorted (y :: rest) → Sorted (x :: y :: rest)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_checker (fun xs => Sorted xs)
 
 /-- The emitted checker's one-level operator, transcribed from the derived source: size-indexed

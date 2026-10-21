@@ -22,9 +22,9 @@ combining them into the top level enumerator for an inductive family.
 
 -/
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_enumerator ∃ (n : _), onetrue n
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_enumerator ∃ (n : _), onetrue' n
 
 /--
