@@ -327,6 +327,9 @@ def mkConstrainedProducerMutualPieces
     let defTypeParamInstances ← mkTypeClassInstanceBinders typeParams typeClasses
 
     -- Emit the def with ∀ type (supports instance binders inline)
+    -- One ident for declaration and reference. `globalDefName` is a *simple* name with the declaring
+    -- namespace mangled in (see `specimenWorkerName`), so it is declared in the ambient namespace and an
+    -- unqualified reference cannot be captured by an imported copy — that copy has a different name.
     let defIdent := mkIdent globalDefName
     -- Build ∀ type with instance binders interleaved after Sort-typed params
     let mut defType ← pure optionTProducerType
