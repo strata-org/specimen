@@ -2,6 +2,7 @@ import Plausible.Arbitrary
 import Plausible.DeriveArbitrary
 import Specimen.DeriveChecker
 import Specimen.DeriveConstrainedProducer
+import Specimen.GeneratorCombinators
 import Specimen.EnumeratorCombinators
 
 open Plausible
@@ -68,6 +69,19 @@ instance (c : Nat) : ArbitrarySizedSuchThat (List String) (fun s => WithinCapaci
   arbitrarySizedST _ := do
     let n ← Gen.choose Nat 0 c (by omega)
     (List.range n.val).mapM (fun _ => Arbitrary.arbitrary)
+
+/-- Backward: given a list's length, produce a capacity that admits it.
+
+    Without it the backward generator below cannot choose a capacity: the deriver cannot invert
+    `s.length ≤ c` to *produce* `c`, so the `WF_Empty` rule has no way to pick one. Stated on a bare
+    `n ≤ b` because that is the shape the premise is scheduled at, after `WithinCapacity` is unfolded by
+    its `DecOpt`. The slack is bounded by the size parameter rather than drawn from an unbounded `Nat`, so
+    the capacity stays in the range of the lists being generated; an enormous capacity would satisfy the
+    constraint while making every `WithinCapacity` check trivially true. -/
+instance atLeast (n : Nat) : ArbitrarySizedSuchThat Nat (fun b => n ≤ b) where
+  arbitrarySizedST size := do
+    let slack ← Gen.choose Nat 0 size (by omega)
+    pure (n + slack.val)
 
 instance instArbitraryString : Arbitrary String where
   arbitrary := GeneratorCombinators.elementsWithDefault "A" ["A", "B", "C", "D", "E", "F", "G", "H", "I"]
@@ -205,15 +219,17 @@ def executeTrace (cb : ST.Ref IO.RealWorld CircularBuffer) (buggy : Bool := fals
     RNG the buggy run occasionally passes and CI flakes. This seed catches it. -/
 def traceSeed : Nat := 20260909
 
-/-- 1000 traces from one seeded stream, at sizes 5 to 1004. A draw that dead-ends is skipped. -/
+/-- Drawn from one seeded stream rather than the ambient `IO` RNG, so the run is reproducible.
+
+    `sampleWithSeed` rather than a loop of seeded runs: reseeding per iteration correlates the first draw
+    across samples, and that draw picks the trace's top-level constructor, so every trace comes out
+    empty. `Specimen/GeneratorCombinators.lean` has the detail. -/
 def differentialTest (buggy : Bool := false) : IO Unit := do
-  let mut g := mkStdGen traceSeed
-  for i in List.range 1000 do
-    let (r, g') := Gen.runFrom
-      (ArbitrarySizedSuchThat.arbitrarySizedST
-        (fun (t, s) => SafeBBTrace ([], 3) t s) 10) (i + 5) g
-    g := g'
-    if let .ok (trace, _) := r then
+  let samples ← Gen.sampleWithSeed 1000
+    (fun _ => ArbitrarySizedSuchThat.arbitrarySizedST
+      (fun (t, s) => SafeBBTrace ([], 3) t s) 10) 10 traceSeed
+  for sample in samples do
+    if let some (trace, _) := sample then
       let cb ← mkCircularBuffer 3 buggy
       executeTrace cb buggy trace
 
@@ -221,10 +237,17 @@ def differentialTest (buggy : Bool := false) : IO Unit := do
 #guard_msgs in
 #eval differentialTest
 
--- Buggy implementation is detected
-/--error: Size mismatch: expected 3, got 0-/
-#guard_msgs(error, drop info) in
-#eval differentialTest (buggy := true)
+-- Buggy implementation is detected: some generated trace fills the 3-slot buffer the seeded bug needs.
+-- Asserted on the outcome rather than on the error text, which depends on which trace fails first.
+/-- info: PASS: buggy implementation detected -/
+#guard_msgs in
+#eval (do
+  let outcome ← (differentialTest (buggy := true)).toBaseIO
+  if outcome.toOption.isSome then
+    IO.println "FAIL: no generated trace exposed the seeded bug (generator not reaching capacity)"
+  else
+    IO.println "PASS: buggy implementation detected"
+  : IO Unit)
 
 -- differential testing with error traces
 
