@@ -26,6 +26,16 @@ twice over, at two levels:
    `derive_mutual` actually emit, proved either by direct decomposition or by a *bridge* equating the
    emitted definition with the generic interpreter at a reconstructed step.
 
+## How the proofs are built
+
+The proofs are written by hand, but most of the work is done once. Generic results are proved a single
+time over relations reflected as data (`RelSpec`), and each relation inherits them by instantiation.
+What is written per relation is the connection to it: an adequacy lemma saying the reflected spec
+means the same as the inductive, and a bridge showing the emitted code equals the interpreter at one
+step (`lk_bridge`, `TypingBridge`). Some STLC results are proved instead by decomposing the emitted code
+directly. Unlike *Computing Correctly*, the deriver does not emit proofs, so a new relation needs its
+own adequacy lemma and bridge.
+
 ## The map
 
 ### Generic theory (`Specimen/Correctness/`)
@@ -46,21 +56,21 @@ twice over, at two levels:
   soundness, bounded refutation for structurally decreasing relations.
 - **`ProducerInterp.lean`** — the same for enumerators, over `List`.
 - **`GenInterp.lean`** — generic generator *soundness* at the real `Plausible.Gen`, axiom-free.
-- **`GenAxioms.lean`** — the two QuickChick-style support laws for `Plausible.Gen`
-  (`genSupportAt_bind`, `genSupportAt_backtrack`), postulated and documented. Completeness at
-  `Plausible.Gen` consumes them; nothing else does. The seed is threaded through `bind`, so the
-  reverse union law is genuinely unprovable there — QuickChick gets it from split-independence of
-  its seed, which Plausible's opaque `StdGen` does not expose.
+- **`GenSupport.lean`** — the support laws for `Plausible.Gen` in the soundness direction, proved:
+  a value produced by `m >>= k` comes from one `m` produces (`genSupportAt_bind_sub`), and one produced
+  by `backtrack` from one of its branches (`genSupportAt_backtrack_sub`). The reverse direction fails
+  there, because `>>=` threads one `StdGen` through both halves rather than splitting it as QuickChick's
+  bind does.
 - **`GenInterpSPMF.lean`** — the generator interpreter again, at Basalt's `SPMF`, where both support
   laws are *theorems* (`SPMF.mem_support_bind_iff`, `BacktrackGen.mem_support_backtrack_ok_iff`): the
   `Produces` algebra, soundness **and** measure-pair completeness, fuel monotonicity, refutation from
   a failed search (`refutes_of_not_produces`), and the mutually-recursive family form (`genRelFam`).
   A generator emitted under `specimen.emitBasalt` is polymorphic in Basalt's `Gen` class, so the same
   emitted definition is read at `SPMF` for reasoning and at `Plausible.Gen` for running.
-- **`EvSlice.lean`** — evenness end to end against the real relation: all three producers sound and
-  complete, plus `Ev` reflected as a `RelSpec` with its adequacy proof.
-- **`EvGenSPMF.lean`** — the `Ev` generator leg redone through `GenInterpSPMF`: the slice closes with
-  no generator axioms.
+- **`EvSlice.lean`** — evenness end to end against the real relation: checker and enumerator sound and
+  complete, generator sound at `Plausible.Gen`, plus `Ev` reflected as a `RelSpec` with its adequacy
+  proof.
+- **`EvGenSPMF.lean`** — the `Ev` generator proved sound and complete through `GenInterpSPMF`.
 
 ### Emitted code (`SpecimenTest/Correctness/`)
 
@@ -109,8 +119,11 @@ side conditions.
   `Quot.sound` only — Lean's standard three. `Classical.choice` enters through `SPMF` (classical
   measure-theoretic semantics) and through unfolding `partial_fixpoint` draws; checker/enumerator
   results that avoid `SPMF` use only `propext`/`Quot.sound`.
-- Generator *soundness* at `Plausible.Gen`: no axioms beyond the standard ones.
-- Generator *completeness* at `Plausible.Gen`: additionally the two `GenAxioms` postulates. The same
-  statements are theorems at `SPMF`, which is why the SPMF reading exists; the `Plausible.Gen` axioms
-  remain only for results about the exact executed interpretation. Every headline theorem carries a
-  `#guard_msgs`-pinned `#print axioms`, so an axiom regression fails the build.
+- Generator *soundness* at `Plausible.Gen`: the standard axioms only, through the proved support laws
+  in `GenSupport.lean`.
+- Generator *completeness* is proved at `SPMF` only. At `Plausible.Gen` it would need the reverse
+  support laws, which fail there: `>>=` threads its seed rather than splitting it, so not every
+  combination of outcomes is reachable. Nothing in the development is postulated.
+
+Every headline theorem carries a `#guard_msgs`-pinned `#print axioms`, so an axiom regression fails the
+build.

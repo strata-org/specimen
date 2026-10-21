@@ -8,11 +8,11 @@ one-level `GenStep` over the real `Plausible.Gen`, bottoming at `failGen` (`thro
 everything in the support satisfies `P` — is the assumption-free direction (mirrors `enumRel_sound`
 using the support predicate `genSupportAt` instead of `List` membership); it needs no RNG axiom.
 
-**Completeness is not proved at `Plausible.Gen`.** It is a reachability claim — some seed yields the
-value — and over Plausible's opaque `StdGen` the only route is `GenAxioms`' postulated support laws plus
-a size-monotonicity assumption (`SizedMonotone`). Completeness is instead proved for generators read at
-Basalt's `SPMF`, with no generator axioms, in `GenInterpSPMF` (the `proofs/` package, which needs
-Mathlib).
+**Completeness is not proved at `Plausible.Gen`.** It is a reachability claim, that some seed yields
+the value, and it needs the reverse support laws, which fail there: `Plausible.Gen` threads one `StdGen`
+through `>>=` instead of splitting it, so not every combination of outcomes is reachable (see
+`GenSupport`). Completeness is proved for generators read at Basalt's `SPMF` in `GenInterpSPMF`, built
+from the `SpecimenTest.Proofs` root because `SPMF` needs Mathlib.
 -/
 
 open Plausible

@@ -2,14 +2,12 @@ import Specimen.Correctness.GenInterpSPMF
 import Specimen.Correctness.EvSlice
 
 /-!
-# The `Ev` slice's generator, via the generic interpreter — no generator axioms
+# The `Ev` slice's generator, via the generic interpreter
 
-`EvSlice.lean` proves the `Ev` checker and enumerator sound and complete outright, but its generator
-results go through `GenAxioms.lean`'s two postulated support laws. This file redoes the generator leg
-at Basalt's `SPMF` through `GenInterpSPMF`, so **all three producers for `Ev` are now sound and
-complete with no generator axioms** — the slice closes. (`SPMF` is classical, so `Classical.choice`
-joins `propext` and `Quot.sound` in the axiom print; what is gone are the *postulates about
-generators*.)
+`EvSlice.lean` proves the `Ev` checker and enumerator sound and complete, and its generator sound at
+the real `Plausible.Gen`. This file proves the generator sound and complete at Basalt's `SPMF` through
+`GenInterpSPMF`, so all three producers for `Ev` are sound and complete. Only Lean's standard axioms
+are used: `SPMF` is classical, so `Classical.choice` joins `propext` and `Quot.sound`.
 
 It doubles as the validation that the generic interpreter is usable: the two `Step*` obligations are
 discharged from per-branch facts only, with no reasoning about `backtrack` or about the support monad.
@@ -86,8 +84,7 @@ theorem evGen_complete (n : Nat) (h : Ev n) :
 
 end Specimen.Correctness
 
--- Pinned: the whole `Ev` generator leg is free of the `GenAxioms` support postulates.
--- `Classical.choice` is `SPMF`'s, not a generator postulate.
+-- Pinned: the `Ev` generator leg uses only Lean's standard axioms. `Classical.choice` comes from `SPMF`.
 /-- info: 'Specimen.Correctness.evGen_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in
 #print axioms Specimen.Correctness.evGen_sound

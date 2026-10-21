@@ -99,7 +99,7 @@ strict subterm, so plain `term.rec` suffices.
 
 `[propext, Classical.choice, Quot.sound]` throughout: `SPMF` is classical, and the `TConst` branches
 unfold `Basalt.Nat.arbitraryGen`, a `partial_fixpoint`.  What matters is what is *absent*: no
-generator axioms — `GenAxioms`' postulated support laws are theorems at `SPMF`.
+custom axioms: the support laws these proofs use are theorems at `SPMF`.
 -/
 
 open Plausible Basalt Specimen.Correctness
@@ -459,8 +459,8 @@ example :
       (lookup.Later _ type.Nat 0 _ (lookup.Now (type.Fun type.Nat type.Nat) [])))
     2 (by decide) (by decide) (by decide) (by decide) (by decide)
 
--- Pinned: no generator axioms — `Classical.choice` is `SPMF`'s (and the `partial_fixpoint`
--- unfolding's), not a postulate about generators.
+-- Pinned: only Lean's standard axioms. `Classical.choice` comes from `SPMF` and the `partial_fixpoint`
+-- unfolding.
 /-- info: 'StlcCompleteness.stlc_gen_complete' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in
 #print axioms stlc_gen_complete
