@@ -133,6 +133,8 @@ import SpecimenTest.TypeAbbrevArgTest
 import SpecimenTest.IrrefutableMatchTest
 -- Pattern coverage: the input-space trie and per-leaf scoring
 import SpecimenTest.PatternCoverageTest
+-- …and `scoped derive_mutual`: instances visible only where their namespace is open
+import SpecimenTest.ScopedInstanceTest
 -- …and a constructor a mode was derived without is reported under `trace.specimen.droppedCtors`
 import SpecimenTest.DroppedCtorsTraceTest
 -- …and a large mutual block of workers recurses structurally on `fuel`, not by well-founded recursion
