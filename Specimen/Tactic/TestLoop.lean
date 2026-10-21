@@ -22,10 +22,16 @@ namespace Specimen.Tactic
     definitions emitted for this proposition; sizes ramp from `minSize` to `maxSize` across
     `numTests` runs. `richOutput` also enables collecting the shrink-diagnostic tree, which
     only the infoview widget consumes. Yields
-    `IO (message, shrinkCount, shrinkTree)`. -/
+    `IO (message, shrinkCount, shrinkTree)`.
+
+    The draws come from one stream started at `seed` and threaded through the run by
+    `Gen.runFrom`, so a run is reproducible from that number alone. `reportSeed` adds it to a
+    counterexample message, which is what a run with a drawn seed needs to be repeatable; a file
+    that fixes the seed already knows it, so its pinned messages stay stable. -/
 def buildTestExpr (varNames : List Name) (varTypes : List Expr)
     (checkerIdent shrinksIdent diagIdent : TSyntax `term)
-    (minSize maxSize numTests : Nat) (richOutput : Bool) :
+    (minSize maxSize numTests : Nat) (richOutput : Bool)
+    (seed : Nat) (reportSeed : Bool) :
     CommandElabM (TSyntax `term) := do
   -- Build per-variable labels: "  name : Type := " for the error message
   let varTypeSyntaxes ← liftTermElabM <| varTypes.mapM (fun ty => PrettyPrinter.delab ty)
@@ -95,16 +101,25 @@ def buildTestExpr (varNames : List Name) (varTypes : List Expr)
   let shrinkDepthLit := Syntax.mkNumLit (toString (Lean.Option.get (← getOptions) specimen.shrinkDepth))
   -- Diagnostic display cap: at most breadth candidates per variable.
   let diagCapLit := Syntax.mkNumLit (toString (shrinkBreadth * varNames.length + 1))
+  -- `_root_`-qualified, because the file being elaborated has `open Plausible`, where a bare
+  -- `Gen` is `Plausible.Gen` and these three names would not resolve.
+  let stdGenTy : TSyntax `term := mkIdent `_root_.StdGen
+  let mkStdGenFn : TSyntax `term := mkIdent `_root_.mkStdGen
+  let runFromFn : TSyntax `term := mkIdent `_root_.Gen.runFrom
+  let seedLit := Syntax.mkNumLit (toString seed)
+  -- A drawn seed is worth printing, since it is the only way back to the run that failed.
+  let seedNote := Syntax.mkStrLit (if reportSeed then s!", seed {seed}" else "")
   liftTermElabM <| `((do
     let mut successes : Nat := 0
     let mut discards : Nat := 0
+    -- One stream for the whole run, advanced by `Gen.runFrom` even when a draw dead-ends, so the
+    -- tests explore different inputs and the run is reproducible from the seed alone.
+    let mut specimen_rng : $stdGenTy := $mkStdGenFn $seedLit
     for i in List.range $numTestsLit do
       let sz := $minSizeLit + i * ($maxSizeLit - $minSizeLit) / $rampDenomLit
-      -- A dead-ended constrained generator throws (Gen.run turns GenError into an IO
-      -- exception); treat that as a discard rather than crashing the whole test.
-      let genResult ← try
-          (Except.ok <$> Plausible.Gen.run (($checkerIdent) sz sz sz) sz : IO (Except Plausible.GenError _))
-        catch _ => pure (Except.error (Plausible.GenError.genError "generation dead-ended"))
+      -- A constrained generator that dead-ends yields `.error`, which counts as a discard.
+      let (genResult, specimen_rng_next) := $runFromFn (($checkerIdent) sz sz sz) sz specimen_rng
+      specimen_rng := specimen_rng_next
       match genResult with
       | .ok (.ok (true, _)) => successes := successes + 1
       | .ok (.ok (false, specimen_cex_raw)) =>
@@ -150,7 +165,7 @@ def buildTestExpr (varNames : List Name) (varTypes : List Expr)
             t
           else []
         let details := $formatExpr
-        let msg := s!"Found counter-example!\n{details}\n({successes} tests passed, {discards} discarded, {shrinkCount} shrinks)"
+        let msg := s!"Found counter-example!\n{details}\n({successes} tests passed, {discards} discarded, {shrinkCount} shrinks{$seedNote})"
         return (msg, shrinkCount, shrinkTree)
       | .ok (.error _) => discards := discards + 1
       | .error _ => discards := discards + 1

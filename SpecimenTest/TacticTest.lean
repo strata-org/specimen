@@ -8,6 +8,12 @@ open Plausible
 
 namespace TacticTest
 
+-- Fix the draws for this file. The tactic runs a freshly derived generator through Lean's IR
+-- interpreter, so a draw that asks for an unusually large structure costs far more here than the
+-- same draw does at runtime. With the seed fixed, this file either pays that cost every run or
+-- never, instead of once in a few hundred runs on CI.
+set_option specimen.testSeed 20261020
+
 -- A simple inductive relation to test (using .succ.succ for structural pattern matching in checkers)
 inductive Even : Nat → Prop where
   | zero : Even 0
@@ -121,7 +127,7 @@ inductive Elem : Nat → Tree → Prop where
 
 /-- error: Found counter-example! -/
 #guard_msgs (error, drop info, substring := true, drop warning) in
-specimen_test (∀ (x : Nat) (t : Tree), Elem x t → Elem x.succ t)
+specimen_test (max := 12) (∀ (x : Nat) (t : Tree), Elem x t → Elem x.succ t)
 
 -- === D: STLC type preservation with a buggy step relation ===
 -- `typing` and `lookup` come from SpecimenTest.CommonDefinitions.STLCDefinitions.

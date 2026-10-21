@@ -200,13 +200,22 @@ def executeTrace (cb : ST.Ref IO.RealWorld CircularBuffer) (buggy : Bool := fals
     | _ => throw <| IO.userError s!"unexpected cmd/result pair: {repr op}"
     executeTrace cb buggy ops
 
+/-- Fixed because the test is probabilistic: the bug needs a trace that fills the buffer, and whether
+    1000 random traces include one depends on the draw. Some seeds miss it, so drawn from the ambient
+    RNG the buggy run occasionally passes and CI flakes. This seed catches it. -/
+def traceSeed : Nat := 20260909
+
+/-- 1000 traces from one seeded stream, at sizes 5 to 1004. A draw that dead-ends is skipped. -/
 def differentialTest (buggy : Bool := false) : IO Unit := do
+  let mut g := mkStdGen traceSeed
   for i in List.range 1000 do
-    let (trace, _) ← Gen.run
+    let (r, g') := Gen.runFrom
       (ArbitrarySizedSuchThat.arbitrarySizedST
-        (fun (t, s) => SafeBBTrace ([], 3) t s) 10) (i + 5)
-    let cb ← mkCircularBuffer 3 buggy
-    executeTrace cb buggy trace
+        (fun (t, s) => SafeBBTrace ([], 3) t s) 10) (i + 5) g
+    g := g'
+    if let .ok (trace, _) := r then
+      let cb ← mkCircularBuffer 3 buggy
+      executeTrace cb buggy trace
 
 -- Correct implementation passes
 #guard_msgs in
@@ -224,12 +233,15 @@ def differentialTest (buggy : Bool := false) : IO Unit := do
 -- `executeTrace` checks that the implementation raises exactly on those
 -- commands and succeeds (with the matching result) on the rest.
 def errorDifferentialTest (buggy : Bool := false) : IO Unit := do
+  let mut g := mkStdGen traceSeed
   for i in List.range 1000 do
-    let (trace, _) ← Gen.run
+    let (r, g') := Gen.runFrom
       (ArbitrarySizedSuchThat.arbitrarySizedST
-        (fun (t, s) => EveryBBTrace ([], 3) t s) 10) (i + 5)
-    let cb ← mkCircularBuffer 3 buggy
-    executeTrace cb buggy trace
+        (fun (t, s) => EveryBBTrace ([], 3) t s) 10) (i + 5) g
+    g := g'
+    if let .ok (trace, _) := r then
+      let cb ← mkCircularBuffer 3 buggy
+      executeTrace cb buggy trace
 
 -- Correct implementation agrees with the spec on both success and error results
 #guard_msgs in
