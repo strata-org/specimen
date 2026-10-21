@@ -3,6 +3,7 @@ import Specimen.DeriveConstrainedProducer
 import Specimen.EnumeratorCombinators
 import Specimen.DeriveChecker
 import Plausible.Attr
+import Specimen.Basalt
 
 /-! Tests for `derive_generator` on inductive relations with dependent arguments. -/
 

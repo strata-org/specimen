@@ -798,6 +798,20 @@ private def foldedWeight (weightFnIdent : Ident) (modifierIdent : Option Ident)
         if stx.isIdent && stx.getId == baseName then some base else none⟩
     `(have $baseIdent := $base; $modBody)
 
+/-- One weighted branch of a derived generator. Basalt's `BacktrackGen.backtrack` takes its branches as
+    functions (`Nat × (Unit → BacktrackGen G α)`), so under `specimen.emitBasalt` the producer is
+    wrapped in `fun (_ : Unit) => …` and only the branch `backtrack` selects is ever built. Plausible's
+    `backtrack` takes the generator itself.
+
+    The binder type is written out because under input dispatch the branch sits inside
+    `List.filterMap`, where it has no expected type, and `fun () => …` there leaves a universe
+    constraint unsolved (Cedar's `HasType`). -/
+private def weightedBranch (weight subProducer : TSyntax `term) : TermElabM (TSyntax `term) := do
+  if Lean.Option.get (← getOptions) specimen.emitBasalt then
+    `( ($weight, fun (_ : $(mkIdent ``Unit)) => $subProducer) )
+  else
+    `( ($weight, $subProducer) )
+
 /-- Whether this derive filters its generator branches by their input guard (`specimen.dispatchInputs`). -/
 private def dispatching (sort : DeriveSort) : CoreM Bool :=
   return sort == .Generator && specimen.dispatchInputs.get (← getOptions)
@@ -997,7 +1011,7 @@ def deriveConstrainedProducer
                   #[ctorNameLit, outputIndicesLit, deriveSortLit, (← `(0)), (← `(true)), freshSize',
                      numBaseLit, numRecLit, numRecCallsLit]
                 let finalWeight ← foldedWeight weightFnIdent modifierIdent args freshSizePrimeName
-                `( ($finalWeight, $subProducer) )
+                weightedBranch finalWeight subProducer
               | .Enumerator => pure subProducer
             recursiveProducers := recursiveProducers.push (← guardIf deriveSort schedule.1 subProducerTerm)
           else
@@ -1008,7 +1022,7 @@ def deriveConstrainedProducer
                   #[ctorNameLit, outputIndicesLit, deriveSortLit, (← `(0)), (← `(false)), (← `(0)),
                      numBaseLit, numRecLit, numRecCallsLit]
                 let finalWeight ← foldedWeight weightFnIdent modifierIdent args freshSizePrimeName
-                `( ($finalWeight, $subProducer) )
+                weightedBranch finalWeight subProducer
               | .Enumerator => pure subProducer
             nonRecursiveProducers := nonRecursiveProducers.push (← guardIf deriveSort schedule.1 subGeneratorTerm)
 
@@ -1070,7 +1084,7 @@ private def compileWeightedProducer
       #[ctorNameLit, outputIndicesLit, deriveSortLit, badnessLit, isRecLit, sizeArg,
          numBaseLit, numRecLit, numRecCallsLit]
     let finalWeight ← foldedWeight weightFnIdent modifierIdent args sizePrimeName
-    `( ($finalWeight, $subProducer) )
+    weightedBranch finalWeight subProducer
   | .Enumerator => pure subProducer
   | .Checker | .Theorem => `(fun (_ : Unit) => $subProducer)
 
@@ -1214,8 +1228,14 @@ def computeSpecConstraints (indSched : InductiveSchedule)
   for step in allSteps do
     match step with
     | .Unconstrained _ (.NonRec (indName, args)) ps =>
+      -- Under Basalt this becomes an instance *binder* on the emitted declaration, whose body calls
+      -- `Basalt.ArbitraryFueled.arbitraryFueled` on the parameter, so the binder is that class. A
+      -- `Plausible.Arbitrary` binder would leave the call unsatisfiable, and the error would name the
+      -- body's class, reading as a missing user instance rather than a wrong binder.
+      let emitBasalt := Lean.Option.get (← getOptions) specimen.emitBasalt
       let tcName := match ps with
-        | .Generator => ``Plausible.Arbitrary
+        | .Generator =>
+          if emitBasalt then Name.mkStr2 "Basalt" "ArbitraryFueled" else ``Plausible.Arbitrary
         | .Enumerator => ``Enum
       -- Check if any type param is referenced (directly or nested)
       let refs := args.foldl (fun acc a => acc.union (extractTypeParamRefs typeParamSet a)) ({} : Std.HashSet Name)
@@ -1929,7 +1949,7 @@ def deriveConstrainedProducerParts
                   #[ctorNameLit, outputIndicesLit, deriveSortLit, (← `(0)), (← `(true)), freshSize',
                      numBaseLit, numRecLit, numRecCallsLit]
                 let finalWeight ← foldedWeight weightFnIdent modifierIdent args freshSizePrimeName
-                `( ($finalWeight, $subProducer) )
+                weightedBranch finalWeight subProducer
               | .Enumerator => pure subProducer
             recursiveProducers := recursiveProducers.push (← guardIf deriveSort rewrittenSteps subProducerTerm)
           else
@@ -1939,7 +1959,7 @@ def deriveConstrainedProducerParts
                   #[ctorNameLit, outputIndicesLit, deriveSortLit, (← `(0)), (← `(false)), (← `(0)),
                      numBaseLit, numRecLit, numRecCallsLit]
                 let finalWeight ← foldedWeight weightFnIdent modifierIdent args freshSizePrimeName
-                `( ($finalWeight, $subProducer) )
+                weightedBranch finalWeight subProducer
               | .Enumerator => pure subProducer
             nonRecursiveProducers := nonRecursiveProducers.push (← guardIf deriveSort rewrittenSteps subGeneratorTerm)
         | none => throwError m!"Unable to derive producer schedule for constructor {ctorName}"

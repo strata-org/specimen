@@ -1,6 +1,7 @@
 import Plausible.Gen
 import Specimen.ArbitrarySizedSuchThat
 import Specimen.DeriveConstrainedProducer
+import Specimen.Basalt
 
 /-!
 # Forward-referencing variable lists

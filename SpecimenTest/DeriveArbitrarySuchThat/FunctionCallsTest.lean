@@ -3,6 +3,7 @@ import Specimen.ArbitrarySizedSuchThat
 import Specimen.DeriveConstrainedProducer
 import SpecimenTest.CommonDefinitions.FunctionCallInConclusion
 import Plausible.Attr
+import Specimen.Basalt
 
 /-! Tests for `derive_generator` on inductive relations with function calls in constructor conclusions. -/
 

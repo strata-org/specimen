@@ -11,6 +11,7 @@
 -/
 import Specimen.DeriveConstrainedProducer
 import Plausible.Attr
+import Specimen.Basalt
 
 structure TypeBox where
   ty : Type

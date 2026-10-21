@@ -131,6 +131,8 @@ import SpecimenTest.ArithIndexTest
 import SpecimenTest.TypeAbbrevArgTest
 -- …and a constructor a mode was derived without is reported under `trace.specimen.droppedCtors`
 import SpecimenTest.DroppedCtorsTraceTest
+-- …and a large mutual block of workers recurses structurally on `fuel`, not by well-founded recursion
+import SpecimenTest.StructuralFuelTest
 
 -- `specimen_test` command / `specimen` tactic
 import SpecimenTest.TacticTest
@@ -174,3 +176,12 @@ import SpecimenTest.Interp.BlameTest
 -- …and diagnose a constructor that rarely succeeds: localize its failing step, trace a blind choice to the
 -- premise that made it, and try the anchor move and size floor the diagnosis names
 import SpecimenTest.Interp.DiagnoseTest
+
+-- Generators emitted against Basalt under `specimen.emitBasalt`: run with the flag set in-file, so the
+-- default build covers the Basalt path too. Test files that derive generators import `Specimen.Basalt`
+-- so the whole library can also be built with the flag on (see the comment in `lakefile.toml`).
+import SpecimenTest.BasaltEmissionTest
+-- …and without `Specimen.Basalt`, Basalt stays unloaded and the flag asks for the import
+import SpecimenTest.BasaltNotImportedTest
+-- Constraint propagation for polymorphic dependencies (issue #38)
+import SpecimenTest.PolymorphicDepConstraints

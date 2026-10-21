@@ -33,6 +33,23 @@ register_option specimen.multiOutput : Bool := {
   descr := "allow multi-output production steps in derived generators"
 }
 
+/-- When true, derived **generators** are emitted against Basalt's generator algebra instead of
+    `Plausible.Gen`: the body is polymorphic in `{G : Type → Type} [Gen G]`, its type is
+    `BacktrackGen G α`, and the instance emitted is `BacktrackGenFor` rather than
+    `ArbitrarySizedSuchThat`. One derived body then elaborates at every `Gen` instance, not only the
+    one it runs at.
+
+    Requires `import Specimen.Basalt` in the deriving file: the emitted code names Basalt's classes, and
+    that module also supplies the bridge back to `ArbitrarySizedSuchThat`, so the `plausible` tactic and
+    existing call sites run Basalt-derived generators unchanged.
+
+    Generators only: enumerators and checkers keep their concrete fuel-indexed types.
+    See `Docs/Specimen-Basalt-port.md`. -/
+register_option specimen.emitBasalt : Bool := {
+  defValue := false
+  descr := "emit derived generators against Basalt's `Gen` algebra instead of `Plausible.Gen`"
+}
+
 /-- Fuel for derived generators (termination device). High values are fine; only decrease for testing. -/
 register_option specimen.fuel : Nat := {
   defValue := 10000

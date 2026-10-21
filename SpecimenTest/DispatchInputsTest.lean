@@ -1,4 +1,5 @@
 import Specimen
+import Specimen.Basalt
 
 /-!
 # `specimen.dispatchInputs`: a derived generator skips constructors its inputs cannot match
@@ -31,7 +32,8 @@ namespace Off
 set_option specimen.richOutput false in
 set_option specimen.textOutput 3 in
 set_option specimen.dispatchInputs false in
-/-- GeneratorCombinators.backtrack [ -/
+-- `backtrack [`, without the namespace, so the pin also holds under `specimen.emitBasalt`.
+/-- backtrack [ -/
 #guard_msgs (substring := true, whitespace := lax) in
 scoped derive_mutual (fun (b : Bool) => ∃ n, Kind b n)
 end Off

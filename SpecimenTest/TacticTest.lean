@@ -2,6 +2,7 @@ import Specimen
 import Plausible
 import SpecimenTest.CommonDefinitions.STLCDefinitions
 import Specimen.Scoring
+import Specimen.Basalt
 
 open Specimen.Tactic
 open Plausible
@@ -119,6 +120,10 @@ inductive Tree where
   | leaf : Tree
   | node : Tree → Nat → Tree → Tree
   deriving Repr, Arbitrary, Shrinkable
+
+-- The Basalt counterpart of `Arbitrary Tree`, for `specimen.emitBasalt`. Declared before the
+-- `specimen_test` below, which generates `Tree`s.
+deriving instance Basalt.ArbitraryFueled for Tree
 
 inductive Elem : Nat → Tree → Prop where
   | here  : Elem x (.node l x r)

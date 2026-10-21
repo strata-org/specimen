@@ -12,6 +12,27 @@ import Specimen.Debug
 open Lean Elab Command Meta Term Parser Std
 open Idents Schedules
 
+/-- The size-0 branch of a derived producer. At `size = 0` only the *non-recursive* constructors are
+    offered, so a failure of that list is not a refutation of the relation: a recursive constructor that
+    was never tried might have succeeded. Downgrade `refuted` to `exhausted` there — but only when
+    recursive constructors actually exist. For a wholly non-recursive relation the size-0 list is
+    complete, its refutation is genuine, and a checker's "no" depends on keeping it.
+
+    The condition is read off the two generator lists rather than threaded in: both are built from the
+    same `nonRecursiveProducers` array, as `[nonRec…]` and `[nonRec…, rec…]`, so they print identically
+    exactly when there are no recursive constructors. That keeps the decision local instead of widening
+    two tuples across the deriver.
+
+    Basalt path only (`useBasalt`): the Plausible path signals this through `GenError` strings and
+    re-classifying those is a separate change. -/
+private def wrapZeroCase (useBasalt : Bool) (baseGenerators inductiveGenerators : TSyntax `term)
+    (zeroBranch : TSyntax `term) : TermElabM (TSyntax `term) := do
+  let sameList :=
+    match baseGenerators.raw.reprint, inductiveGenerators.raw.reprint with
+    | some a, some b => a == b
+    | _, _ => false
+  if useBasalt && !sameList then `($backtrackGenRefutedToExhaustedFn $zeroBranch) else pure zeroBranch
+
 /-- Extracts the name of the induction relation and its arguments -/
 def parseInductiveApp (body : Term) :
   TermElabM (TSyntax `ident × TSyntaxArray `ident) := do
@@ -64,6 +85,20 @@ def findTargetVarIndex (targetVar : FVarId) (args : Array Expr) : (Option Nat) :
         return i
   none
 
+
+/-- Under `specimen.emitBasalt` the emitted code names Basalt's classes, which resolve only in a file
+    that imports `Specimen.Basalt` (the deriver itself does not import Basalt). Checked before emitting
+    anything, so a missing import is reported as such rather than as an unknown identifier somewhere
+    inside the generated code. -/
+def requireBasaltImport : CoreM Unit := do
+  unless ((← getEnv).getModuleIdx? `Specimen.BasaltBridge).isSome do
+    throwError "`specimen.emitBasalt` requires `import Specimen.Basalt` in this file: derived \
+      generators are emitted against Basalt's `Gen`, `BacktrackGen` and `BacktrackGenFor`"
+
+/-- Whether `stx` contains the identifier `x`, ignoring macro scopes. -/
+private def mentionsIdent (x : Name) (stx : Syntax) : Bool :=
+  (stx.find? fun s => s.isIdent && s.getId.eraseMacroScopes == x.eraseMacroScopes).isSome
+
 /-- Produces an instance of the `ArbitrarySizedSuchThat` / `EnumSizedSuchThat` typeclass containing the definition for a constrained generator.
     The arguments to this function are:
     - a list of `baseGenerators` (each represented as a Lean term), to be invoked when `size == 0`
@@ -90,15 +125,23 @@ def mkConstrainedProducerTypeClassInstance
     let freshSize' := mkFreshAccessibleIdent topLevelLocalCtx `size'
     let freshFuel' := mkFreshAccessibleIdent topLevelLocalCtx `fuel'
 
+    -- Whether to target Basalt's generator algebra (generators only; see `specimen.emitBasalt`).
+    let emitBasalt := Lean.Option.get (← getOptions) specimen.emitBasalt
+    let useBasalt := emitBasalt && producerSort matches .Generator
+    if useBasalt then requireBasaltImport
+
     -- The (backtracking) combinator to be invoked
     let combinatorFn :=
-      match producerSort with
+      if useBasalt then basaltBacktrackFn
+      else match producerSort with
       | .Generator => genBacktrackFn
       | .Enumerator => enumerateFn
 
     -- Create the inner match on size (base vs recursive constructors)
     let mut sizeCaseExprs := #[]
-    let zeroCase ← `(Term.matchAltExpr| | $(mkIdent ``Nat.zero) => $combinatorFn $baseGenerators)
+    let zeroCase ← `(Term.matchAltExpr|
+      | $(mkIdent ``Nat.zero) => $(← wrapZeroCase useBasalt baseGenerators inductiveGenerators
+          (← `($combinatorFn $baseGenerators))))
     sizeCaseExprs := sizeCaseExprs.push zeroCase
 
     let succCase ← `(Term.matchAltExpr| | $(mkIdent ``Nat.succ) $freshSize' => $combinatorFn $inductiveGenerators)
@@ -108,7 +151,12 @@ def mkConstrainedProducerTypeClassInstance
 
     -- Wrap with outer fuel match for termination
     let mut fuelCaseExprs := #[]
-    let fuelZeroCase ← `(Term.matchAltExpr| | $(mkIdent ``Nat.zero) => $failFn $outOfFuelError)
+    -- Running out of the termination counter is *inconclusive*, not a refutation: nothing was
+    -- determined. Under Basalt that is a distinct constructor rather than an error message that a
+    -- downstream string-matching predicate has to recognise.
+    let fuelZeroCase ←
+      if useBasalt then `(Term.matchAltExpr| | $(mkIdent ``Nat.zero) => $backtrackGenExhaustFn)
+      else `(Term.matchAltExpr| | $(mkIdent ``Nat.zero) => $failFn $outOfFuelError)
     fuelCaseExprs := fuelCaseExprs.push fuelZeroCase
     let fuelSuccCase ← `(Term.matchAltExpr| | $(mkIdent ``Nat.succ) $freshFuel' => $sizeMatchExpr)
     fuelCaseExprs := fuelCaseExprs.push fuelSuccCase
@@ -192,14 +240,17 @@ def mkConstrainedProducerTypeClassInstance
       | .Enumerator => mkFreshAccessibleIdent topLevelLocalCtx `aux_enum
 
     -- Determine the appropriate type of the final producer
-    -- (either `Plausible.Gen α` or `ExceptT GenError Enum α`)
+    -- (`BacktrackGen G α` under Basalt, else `Plausible.Gen α` or `ExceptT GenError Enum α`)
     let optionTProducerType ←
-      match producerSort with
+      if useBasalt then
+        `($backtrackGenTypeConstructor $basaltGenVar $targetTypeSyntax)
+      else match producerSort with
       | .Generator => `($genTypeConstructor $targetTypeSyntax)
       | .Enumerator => `($exceptTTypeConstructor $genErrorType $enumTypeConstructor $targetTypeSyntax)
 
     let producerUnconstrainedClass :=
-      match producerSort with
+      if useBasalt then Name.mkStr2 "Basalt" "ArbitraryFueled"
+      else match producerSort with
       | .Generator => ``Plausible.Arbitrary
       | .Enumerator => ``Enum
 
@@ -209,6 +260,20 @@ def mkConstrainedProducerTypeClassInstance
     let fuelLit := Syntax.mkNumLit (toString fuelVal)
 
     -- Produce an instance of the appropriate typeclass containing the definition for the derived producer
+    if useBasalt then
+      -- The generator monad is bound on the *inner function*, not on an enclosing lambda: `let rec`
+      -- is lifted to a top-level declaration and so cannot capture an implicit binder from its
+      -- surrounding scope — doing that leaves `G` as an unassigned metavariable and the lifted
+      -- `aux_arb` fails the kernel with "declaration has metavariables".
+      --
+      -- `BacktrackGenFor.gen` is itself `∀ {G} [Gen G], Nat → BacktrackGen G α`, so the field's own
+      -- implicit binders unify with the inner function's at the call below.
+      `(instance $arbitraryTypeParamInstances:bracketedBinder* : $backtrackGenForTypeclass $targetTypeSyntax (fun $targetVarPattern => @$(mkIdent inductiveName) $args*) where
+          $unqualifiedBacktrackGenForFn:ident :=
+            let rec $innerFunctionIdent:ident {$basaltGenVar : Type → Type} [$basaltGenClass $basaltGenVar] $innerParams* $arbitraryTypeParamInstances:bracketedBinder* : $optionTProducerType :=
+              $matchExpr
+            fun $freshSizeIdent => $innerFunctionIdent $fuelLit $freshSizeIdent $freshSizeIdent $outerParams*)
+    else
     `(instance $arbitraryTypeParamInstances:bracketedBinder* : $producerTypeClass $targetTypeSyntax (fun $targetVarPattern => @$(mkIdent inductiveName) $args*) where
         $producerTypeClassFunction:ident :=
           let rec $innerFunctionIdent:ident $innerParams* $arbitraryTypeParamInstances:bracketedBinder* : $optionTProducerType :=
@@ -233,18 +298,30 @@ def mkConstrainedProducerMutualPieces
     let freshSize' := mkFreshAccessibleIdent topLevelLocalCtx `size'
     let freshFuel' := mkFreshAccessibleIdent topLevelLocalCtx `fuel'
 
-    let combinatorFn := match deriveSort with
+    -- Whether to target Basalt's generator algebra (generators only; see `specimen.emitBasalt`).
+    let emitBasalt := Lean.Option.get (← getOptions) specimen.emitBasalt
+    let useBasalt := emitBasalt && deriveSort matches .Generator
+    if useBasalt then requireBasaltImport
+
+    let combinatorFn :=
+      if useBasalt then basaltBacktrackFn
+      else match deriveSort with
       | .Generator => genBacktrackFn
       | .Enumerator => enumerateFn
       | .Checker | .Theorem => checkerBacktrackFn
 
     let mut sizeCaseExprs := #[]
-    sizeCaseExprs := sizeCaseExprs.push (← `(Term.matchAltExpr| | $(mkIdent ``Nat.zero) => $combinatorFn $baseGenerators))
+    sizeCaseExprs := sizeCaseExprs.push (← `(Term.matchAltExpr|
+      | $(mkIdent ``Nat.zero) => $(← wrapZeroCase useBasalt baseGenerators inductiveGenerators
+          (← `($combinatorFn $baseGenerators)))))
     sizeCaseExprs := sizeCaseExprs.push (← `(Term.matchAltExpr| | $(mkIdent ``Nat.succ) $freshSize' => $combinatorFn $inductiveGenerators))
     let sizeMatchExpr ← mkMatchExpr sizeIdent sizeCaseExprs
 
     let mut fuelCaseExprs := #[]
-    fuelCaseExprs := fuelCaseExprs.push (← `(Term.matchAltExpr| | $(mkIdent ``Nat.zero) => $failFn $outOfFuelError))
+    -- Exhausting the termination counter is inconclusive, not a refutation.
+    fuelCaseExprs := fuelCaseExprs.push (←
+      if useBasalt then `(Term.matchAltExpr| | $(mkIdent ``Nat.zero) => $backtrackGenExhaustFn)
+      else `(Term.matchAltExpr| | $(mkIdent ``Nat.zero) => $failFn $outOfFuelError))
     fuelCaseExprs := fuelCaseExprs.push (← `(Term.matchAltExpr| | $(mkIdent ``Nat.succ) $freshFuel' => $sizeMatchExpr))
     let matchExpr ← mkMatchExpr fuelIdent fuelCaseExprs
 
@@ -296,7 +373,9 @@ def mkConstrainedProducerMutualPieces
           | v :: vs => do let rest ← mkProdPat vs; `(($(Lean.mkIdent v), $rest))
         mkProdPat targetVars
 
-    let optionTProducerType ← match deriveSort with
+    let optionTProducerType ←
+      if useBasalt then `($backtrackGenTypeConstructor $basaltGenVar $targetTypeSyntax)
+      else match deriveSort with
       | .Generator => `($genTypeConstructor $targetTypeSyntax)
       | .Enumerator => `($exceptTTypeConstructor $genErrorType $enumTypeConstructor $targetTypeSyntax)
       | .Checker | .Theorem => `($exceptTypeConstructor $genErrorType $boolIdent)
@@ -320,7 +399,13 @@ def mkConstrainedProducerMutualPieces
     let typeClasses := match requiredTypeClasses with
       | some tcs => tcs
       | none =>
-        let producerUnconstrainedClass := match producerSort with
+        -- Under Basalt a type parameter needs a `G`-polymorphic unconstrained generator, and the
+        -- *fueled* class specifically: a derived datatype only ever gets `Basalt.ArbitraryFueled`, and
+        -- Basalt's blanket `Arbitrary → ArbitraryFueled` instance means the fueled binder still accepts a
+        -- hand-written unfueled instance, so it is the weaker requirement.
+        let producerUnconstrainedClass :=
+          if useBasalt then Name.mkStr2 "Basalt" "ArbitraryFueled"
+          else match producerSort with
           | .Generator => ``Plausible.Arbitrary
           | .Enumerator => ``Enum
         #[producerUnconstrainedClass, ``DecidableEq]
@@ -343,11 +428,35 @@ def mkConstrainedProducerMutualPieces
     -- Add Sort-typed params + fuel/initSize/size (from right)
     for (name, ty) in allParamNamesAndTypes[:insertIdx].toArray.reverse do
       defType ← `(($name : $ty) → $defType)
+    -- Under Basalt the definition is polymorphic in the generator monad. These binders go
+    -- *outermost*, since the return type `BacktrackGen G α` mentions `G`. Mutually recursive
+    -- definitions in the block each carry their own `{G}`, which unify at the call sites, so the
+    -- whole SCC ends up at one interpretation without needing a shared section variable.
+    if useBasalt then
+      defType ← `(∀ {$basaltGenVar : Type → Type} [$basaltGenClass $basaltGenVar], $defType)
     -- Lambda includes instance binders at the same position
     let instParams : Array (TSyntax `term) := defTypeParamInstances.map (fun b => ⟨b.raw⟩)
     let allInnerParams := innerParamBinders[:insertIdx].toArray ++ instParams ++ innerParamBinders[insertIdx:].toArray
-    let lambdaBody ← `(fun $allInnerParams* => $matchExpr)
-    let defCmd ← `(command| def $defIdent : $defType := $lambdaBody)
+    let innerLambda ← `(fun $allInnerParams* => $matchExpr)
+    -- Bind the generator monad in an outer lambda rather than splicing binders into the parameter
+    -- array: `fun {G} [Gen G] => fun params => body` is the same term as one combined lambda, and
+    -- avoids having to name the implicit-binder parser category.
+    let lambdaBody ←
+      if useBasalt then
+        `(fun {$basaltGenVar : Type → Type} [$basaltGenClass $basaltGenVar] => $innerLambda)
+      else pure innerLambda
+    -- Name the recursive argument. Left to infer it, Lean's structural search over a large mutual block
+    -- with three `Nat` parameters per definition gives up and falls back to well-founded recursion, whose
+    -- eagerly proved unfolding lemma can exhaust the kernel's memory. Only a definition that passes
+    -- `fuel'` on (see `recCall`) recurses; the clause on any other draws an "unused" warning.
+    let recurses := [baseGenerators, inductiveGenerators].any (mentionsIdent freshFuel'.getId ·)
+    let defCmd ←
+      if !recurses then `(command| def $defIdent : $defType := $lambdaBody)
+      -- `termination_by` binds every parameter after the colon, so `_ _` skips `{G} [Gen G]`.
+      else if useBasalt then `(command| def $defIdent : $defType := $lambdaBody
+        termination_by structural _ _ $fuelIdent:ident => $fuelIdent)
+      else `(command| def $defIdent : $defType := $lambdaBody
+        termination_by structural $fuelIdent:ident => $fuelIdent)
 
     -- Emit the instance (differs by deriveSort)
     let fuelVal := Lean.Option.get (← getOptions) specimen.fuel
@@ -359,7 +468,14 @@ def mkConstrainedProducerMutualPieces
       | none => match deriveSort with
         | .Checker | .Theorem => #[``Enum, ``DecidableEq]
         | _ => match producerSort with
-          | .Generator => #[``Plausible.Arbitrary, ``DecidableEq]
+          -- Must agree with `defTypeParamInstances` above: under Basalt a type parameter needs a
+          -- `G`-polymorphic unconstrained generator, so the binder is `Basalt.ArbitraryFueled`. Emitting
+          -- `Plausible.Arbitrary` here while the body calls `Basalt.ArbitraryFueled.arbitraryFueled`
+          -- leaves the parameter's generator unsatisfiable — and the error names the *body's* class, so
+          -- it reads as a missing user instance rather than a mismatched binder.
+          | .Generator =>
+            if useBasalt then #[Name.mkStr2 "Basalt" "ArbitraryFueled", ``DecidableEq]
+            else #[``Plausible.Arbitrary, ``DecidableEq]
           | .Enumerator => #[``Enum, ``DecidableEq]
     let instCmd ← match deriveSort with
       | .Checker | .Theorem => do
@@ -368,10 +484,14 @@ def mkConstrainedProducerMutualPieces
           instance $arbitraryTypeParamInstances:bracketedBinder* : $decOptTypeclass (@$(mkIdent inductiveName) $args*) where
             $unqualifiedDecOptFn:ident := fun $freshSizeIdent => $callExpr)
       | _ => do
-        let producerTypeClass := match producerSort with
+        let producerTypeClass :=
+          if useBasalt then backtrackGenForTypeclass
+          else match producerSort with
           | .Generator => arbitrarySizedSuchThatTypeclass
           | .Enumerator => enumSizedSuchThatTypeclass
-        let producerTypeClassFunction := match producerSort with
+        let producerTypeClassFunction :=
+          if useBasalt then unqualifiedBacktrackGenForFn
+          else match producerSort with
           | .Generator => unqualifiedArbitrarySizedSTFn
           | .Enumerator => unqualifiedEnumSizedSTFn
         let arbitraryTypeParamInstances ← mkTypeClassInstanceBinders typeParams instTypeClasses
