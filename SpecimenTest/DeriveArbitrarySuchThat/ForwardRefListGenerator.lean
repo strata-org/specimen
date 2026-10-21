@@ -425,7 +425,9 @@ def checkInvariants (n : Nat) (size : Nat := 8) : IO Unit := do
     let ks := keys l
     unless ks.Nodup do badNodup := badNodup + 1
     unless l.all (fun p => ks.contains p.2) do badRefs := badRefs + 1
-  IO.println s!"checked {n} chains: {badNodup} with duplicate keys, {badRefs} with a dangling reference"
+  -- Every chain must satisfy both, whatever the draw, so this asserts rather than reports.
+  if badNodup + badRefs > 0 then
+    throw <| IO.userError s!"checked {n} chains: {badNodup} with duplicate keys, {badRefs} with a dangling reference"
 
 #eval checkInvariants 2000
 

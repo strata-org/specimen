@@ -555,6 +555,8 @@ def drawIneqStructGen (n : Nat) (sz : Nat := 10) : IO (Nat × Nat × Nat) := do
 
 #eval do
   let (ok, got, fuel) ← drawIneqStructGen 200
-  IO.println s!"INEQ STRUCT + derive_generator: valid={ok}/200  succeeded={got}/200  fuelOut={fuel}/200"
+  -- Every value the generator produces must satisfy the relation, whatever the draw.
+  if ok != got then
+    throw <| IO.userError s!"INEQ STRUCT + derive_generator: valid={ok}/200  succeeded={got}/200  fuelOut={fuel}/200"
 
 end PatternCoverageTest
