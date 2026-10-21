@@ -635,6 +635,13 @@ def collectNonRecDeps (steps : List ScheduleStep) : List ScheduleDep :=
              deriveSort := .Checker }
     | _ => none
 
+/-- Whether a schedule dependency is one the deriver may have to derive: a relation it produces from, or a
+    checker. A producer dependency with no output positions has nothing to produce (its outputs sit inside a
+    constructor of an argument, as in `e = .app x y`), and is served by an instance that already exists;
+    taking it as a spec only makes code generation fail on it, so it is left out. -/
+def needsDerivation (d : ScheduleDep) : Bool :=
+  d.kind == .checker || (d.kind == .relation && !d.outputIndices.isEmpty)
+
 /-- DFS from a root SpecKey through chosen schedules to find all actually-used dependencies. -/
 partial def collectUsedDeps (root : SpecKey) (memo : Std.HashMap SpecKey MemoEntry)
     (visited : Std.HashSet SpecKey := {}) : Std.HashSet SpecKey :=
@@ -645,7 +652,7 @@ partial def collectUsedDeps (root : SpecKey) (memo : Std.HashMap SpecKey MemoEnt
     | some (.done indSched) =>
       let allSchedules := indSched.baseSchedules ++ indSched.recSchedules
       let deps := allSchedules.flatMap (fun (_, (steps, _)) => collectNonRecDeps steps)
-      let relDeps := deps.filter (fun d => d.kind == .relation || d.kind == .checker)
+      let relDeps := deps.filter needsDerivation
       relDeps.foldl (fun acc dep =>
         let depKey : SpecKey := { inductiveName := dep.inductiveName, outputIndices := dep.outputIndices, deriveSort := dep.deriveSort }
         collectUsedDeps depKey memo acc) visited
@@ -659,7 +666,7 @@ def computeSpecSCC (usedKeys : List SpecKey) (memo : Std.HashMap SpecKey MemoEnt
     | some (.done indSched) =>
       let allScheds := indSched.baseSchedules ++ indSched.recSchedules
       let deps := allScheds.flatMap (fun (_, (steps, _)) => collectNonRecDeps steps)
-      let relDeps := deps.filter (fun d => d.kind == .relation || d.kind == .checker)
+      let relDeps := deps.filter needsDerivation
       let depKeys := relDeps.map (fun d => SpecKey.mk d.inductiveName d.outputIndices d.deriveSort [])
       depKeys.filter (usedKeys.contains ·)
     | _ => []
