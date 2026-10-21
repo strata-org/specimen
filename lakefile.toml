@@ -9,6 +9,9 @@ linter.missingDocs = false
 
 [[lean_lib]]
 name = "SpecimenTest"
+# `SpecimenTest.Proofs` (the SPMF correctness development) is a root of its own: it reaches Mathlib
+# through Basalt, and Mathlib's root-level names clash with the suite's at an import join.
+roots = ["SpecimenTest", "SpecimenTest.Proofs"]
 # To build the whole test library against Basalt, uncomment. It has to be library-wide, since a module
 # compiled with the flag off cannot serve one compiled with it on, and `weak.` is required for the modules
 # that never import the option. See Docs/Specimen-Basalt-port.md.

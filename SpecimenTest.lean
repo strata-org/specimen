@@ -185,3 +185,11 @@ import SpecimenTest.BasaltEmissionTest
 import SpecimenTest.BasaltNotImportedTest
 -- Constraint propagation for polymorphic dependencies (issue #38)
 import SpecimenTest.PolymorphicDepConstraints
+
+-- Soundness and completeness proofs for derived producers (Computing Correctly with Inductive Relations)
+import Specimen.Correctness
+-- …and the checker `derive_checker` really emits, proved sound through the generic two-counter theory
+import SpecimenTest.Correctness.DerivedCheckerSoundness
+-- The SPMF-based correctness files are NOT imported here: they sit on Mathlib (through Basalt's
+-- `SPMF`), whose root-level names (`Even`, `BinaryTree`, …) clash with this suite's at an import
+-- join. They are built from the separate `SpecimenTest.Proofs` root instead.
