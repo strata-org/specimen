@@ -57,6 +57,8 @@ derive_checker fun γ g p => Diag γ g p
 inductive usesVec : _ → Prop where
 | c {a b : Nat} : usesVec #v[a,b,a]
 
+-- Fails today: the emitted generator for the vector-literal pattern does not typecheck (application type
+-- mismatch). Kept to exercise the path; its errors are dropped.
 #guard_msgs(drop error, drop info, whitespace := lax) in
 derive_generator ∃ a, usesVec a
 
@@ -68,6 +70,8 @@ example : TypeChange (Nat × Nat) 1 := .ennd |>.change.change
 
 example : TypeChange Nat 0 := .ennd |>.change.change.change
 
+-- Fails today: the type index changes across the recursive call, which the emitted match cannot express
+-- (invalid pattern). Kept to exercise the path; its errors are dropped.
 #guard_msgs(drop error, drop info) in
 derive_generator fun α => ∃ n, TypeChange α n
 
@@ -151,5 +155,5 @@ inductive NotContains {α : Type} : List α → α → Prop where
 | empty : NotContains [] x
 | cons : x ≠ y → NotContains xs x → NotContains (y :: xs) x
 -- set_option trace.plausible.deriving.results true
-#guard_msgs(drop error, drop info) in
+#guard_msgs(drop info) in
 derive_generator fun α xs => ∃ x, @NotContains α xs x

@@ -168,7 +168,7 @@ set_option specimen.autoDeriveDeps true in
 set_option specimen.multiOutput true in
 set_option specimen.scoreType "Scoring.BoundedGradedScore" in
 set_option specimen.weightModifier "favorNonEmptyChain" in
-#guard_msgs(drop error, drop info) in
+#guard_msgs(drop info) in
 derive_mutual (∃ (l : List Var), Chain [] [] l)
 
 /-! ## Well-formedness theorems
