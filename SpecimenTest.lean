@@ -193,3 +193,23 @@ import SpecimenTest.Correctness.DerivedCheckerSoundness
 -- The SPMF-based correctness files are NOT imported here: they sit on Mathlib (through Basalt's
 -- `SPMF`), whose root-level names (`Even`, `BinaryTree`, …) clash with this suite's at an import
 -- join. They are built from the separate `SpecimenTest.Proofs` root instead.
+
+-- Size-graded enumeration (Basalt's `Graded`): the algebra pinned by its value, count and specification
+-- interpretations, STLC typing as a graded enumeration, and the carrier measurements
+import SpecimenTest.BasaltPort.GradedAlgebraTest
+import SpecimenTest.BasaltPort.GradedStlcTest
+import SpecimenTest.BasaltPort.GradedArityStressTest
+import SpecimenTest.BasaltPort.GradedDeadEndStressTest
+import SpecimenTest.BasaltPort.GradedCarrierComparison
+-- …and the graded STLC enumeration is exactly `typing` (sound, and complete given covering leaves), on the
+-- strict, lazy and chunked carriers
+import SpecimenTest.BasaltPort.GradedStlcAdequacy
+import SpecimenTest.BasaltPort.GradedStlcLazyAdequacy
+import SpecimenTest.BasaltPort.GradedStlcChunkedAdequacy
+-- …and adequacy proved once over rules-as-data, equal to the hand-written STLC result and instantiated at
+-- relations transcribed from Cedar (leaf premises, a recursive one, and a mutual family)
+import SpecimenTest.BasaltPort.GradedRuleAdequacy
+import SpecimenTest.BasaltPort.GradedCedarRuleAdequacy
+-- …and the deriver's own `Schedules.ScheduleStep` translated into those rules, with what that translation
+-- can and cannot be proved to preserve
+import SpecimenTest.BasaltPort.ScheduleTranslate

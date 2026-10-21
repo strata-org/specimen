@@ -17,3 +17,6 @@ jobs:
         with:
           lint: "false"
           test: "true"
+      # The benchmarks are compiled, which runs their correctness checks, but not timed.
+      - name: Compile benchmarks
+        run: lake build Bench
