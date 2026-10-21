@@ -190,6 +190,8 @@ import SpecimenTest.BasaltEmissionTest
 import SpecimenTest.BasaltEnumeratorTest
 -- …and without `Specimen.Basalt`, Basalt stays unloaded and the flag asks for the import
 import SpecimenTest.BasaltNotImportedTest
+-- …and a dependency with only a hand-written Plausible generator is derived for Basalt, not missed
+import SpecimenTest.BasaltDependencyLookupTest
 -- Constraint propagation for polymorphic dependencies (issue #38)
 import SpecimenTest.PolymorphicDepConstraints
 
