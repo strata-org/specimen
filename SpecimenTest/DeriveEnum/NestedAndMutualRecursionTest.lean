@@ -21,7 +21,7 @@ deriving instance Enum for NestedTree
 #guard_msgs(drop info) in
 #synth Enum NestedTree
 
-/-- info: [NestedTree.node 0 [], NestedTree.leaf] -/
+/-- info: [NestedTree.leaf, NestedTree.node 0 []] -/
 #guard_msgs in
 #eval (runEnum (α := NestedTree) 0)
 

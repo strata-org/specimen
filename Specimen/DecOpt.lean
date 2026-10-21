@@ -49,11 +49,24 @@ def checkerBacktrack (checkers : List (Unit → Except GenError Bool)) : Except 
   aux checkers false
 
 /-- Conjunction lifted to work over `Option Bool`
-    (corresponds to the `.&&` infix operator in section 2 of "Computing Correctly with Inductive Relations") -/
+    (corresponds to the `.&&` infix operator in section 2 of "Computing Correctly with Inductive Relations")
+
+    `false` annihilates conjunction, so an inconclusive left operand must not mask a
+    definitely-false right operand: `andOpt (.error _) (.ok false) = .ok false`. This holds
+    regardless of what the error meant (out-of-fuel or genuine failure), because the conjunction is
+    false on account of `b` alone. Returning `.error` there would report "cannot decide" about a
+    proposition we can refute, and `checkerBacktrack` propagates any sub-checker error as
+    inconclusive, so the imprecision poisons the enclosing existential fold.
+
+    Both operands are already-evaluated values (see `andOptList`), so inspecting `b` is free. -/
 def andOpt (a : Except GenError Bool) (b : Except GenError Bool) : Except GenError Bool :=
   match a with
   | .ok true => b
-  | _ => a
+  | .ok false => .ok false
+  | .error e =>
+    match b with
+    | .ok false => .ok false
+    | _ => .error e
 
 /-- Folds an optional conjunction operation `andOpt` over a list of `Except _ Bool`s,
     returning the resultant `Except _ Bool` -/

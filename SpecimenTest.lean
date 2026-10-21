@@ -114,6 +114,11 @@ import SpecimenTest.WeightPrecomputeTest
 -- `specimen.silent` output-suppression option tests
 import SpecimenTest.SilentOptionTest
 
+-- Inconclusive errors are classified the same way on every producer path
+import SpecimenTest.InconclusiveErrorTest
+-- …and `andOpt` is K3 conjunction: a definite `false` decides it even beside an inconclusive operand
+import SpecimenTest.AndOptTest
+
 -- `specimen_test` command / `specimen` tactic
 import SpecimenTest.TacticTest
 

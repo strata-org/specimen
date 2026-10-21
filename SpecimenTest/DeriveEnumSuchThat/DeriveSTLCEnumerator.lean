@@ -110,6 +110,17 @@ mutual
             match e_1 with
             | term.Var x => DecOpt.decOpt (lookup Γ_1 x τ_1) initSize
             | _ => .ok Bool.false,
+            -- `typing.TAdd`: a sum has type `Nat` exactly when both operands do, so this branch has
+            -- to be here for the checker to accept well-typed sums.
+            fun _ =>
+            match τ_1 with
+            | type.Nat =>
+              match e_1 with
+              | term.Add e1 e2 =>
+                DecOpt.andOptList
+                  [aux_dec initSize size' Γ_1 e2 (type.Nat), aux_dec initSize size' Γ_1 e1 (type.Nat)]
+              | _ => .ok Bool.false
+            | _ => .ok Bool.false,
             fun _ =>
             match τ_1 with
             | type.Fun u_3 τ2 =>

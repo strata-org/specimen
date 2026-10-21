@@ -1,5 +1,6 @@
 import Specimen.Enumerators
 import Specimen.LazyList
+import Specimen.GeneratorCombinators
 import Plausible.Gen
 import Plausible.ArbitraryFueled
 
@@ -24,7 +25,11 @@ def pickDrop (xs : List (ExceptT GenError Enumerator α)) (n : Nat) : ExceptT Ge
       let (x', xs') := pickDrop xs n'
       (x', x::xs')
 
-/-- Helper function for `backtrack` which picks one out of `total` enumerators with some initial amount of `fuel` -/
+/-- Picks one out of `total` enumerators, retrying with the rest on failure until `fuel` runs out.
+
+    Unused outside its own recursive call: `enumerate`, and so all derived enumerator code, goes
+    through `enumerateAll` instead, which concatenates every branch rather than picking one. Kept as
+    the enumerator counterpart of `GeneratorCombinators.backtrack`. -/
 def enumerateFuel (fuel : Nat) (total : Nat) (es : List (ExceptT GenError Enumerator α)) : ExceptT GenError Enumerator α :=
   match fuel with
   | .zero => throw (.genError "out of fuel")
@@ -35,12 +40,24 @@ def enumerateFuel (fuel : Nat) (total : Nat) (es : List (ExceptT GenError Enumer
     -- and pick one out of the `total - k` remaining enumerators
     tryCatch e (fun _ => enumerateFuel fuel' (total - 1) es')
 
-/-- Combines all enumerators into a single lazy list. -/
-def enumerateAll (es : List (ExceptT GenError Enumerator α)) (fuel : Nat) : LazyList (Except GenError α) :=
-  es.foldl (fun acc e => LazyList.append (e fuel) acc) .lnil
+/-- Combines all enumerators into a single lazy list, **preserving the order of `es`**.
 
-/-- Tries all enumerators from a list until one returns a `pure` value or all the enumerators have
-    failed once. -/
+    The fold has to be a `foldr`: a `foldl` builds
+    `append (e₃ …) (append (e₂ …) (append (e₁ …) lnil))`, putting the last branch first. Derived code
+    emits a relation's constructors in declaration order, so the cheap non-recursive base cases come
+    first and the failure-prone recursive ones last. Reversing that buries every success behind the
+    failures, and a consumer taking a prefix sees `.error` entries almost exclusively. -/
+def enumerateAll (es : List (ExceptT GenError Enumerator α)) (fuel : Nat) : LazyList (Except GenError α) :=
+  es.foldr (fun e acc => LazyList.append (e fuel) acc) .lnil
+
+/-- Concatenates *every* enumerator in `es`, in order, into a single lazy enumeration — each branch
+    contributes all of its values, and failures appear inline as `.error` entries rather than
+    causing a retry.
+
+    Note this is emphatically **not** "pick one branch, retrying on failure": that is
+    `enumerateFuel`, which nothing currently calls. Nor are branches weighted — unlike the
+    generator's `GeneratorCombinators.backtrack`, every branch is enumerated exactly once, so
+    constructor weights have no effect below the generator. -/
 def enumerate (es : List (ExceptT GenError Enumerator α)) : ExceptT GenError Enumerator α :=
   enumerateAll es
 
@@ -58,11 +75,12 @@ def lazyListBacktrack (l : LazyList α) (f : α → Except GenError Bool) (anyNo
 
 /-- An enumerator error is "inconclusive" (ran out of fuel / couldn't decide) vs
     "disproved" (this constructor path definitively doesn't apply).
-    Only the specific out-of-fuel error from Specimen's derived code is inconclusive. -/
-private def isInconclusiveError : GenError → Bool
-  | .genError "Specimen: out of fuel (termination limit reached)" => true
-  | .genError "out of fuel" => true
-  | _ => false
+
+    Delegates to `Gen.GenError.isInconclusive`, the one classifier all three producer sorts use, so
+    that an error means the same thing on every path. A sort-local copy would be free to disagree
+    about an error such as `"Gen.runUntil: Out of attempts"`, and a path that reads it as definite
+    turns something never determined into an `ok false`: a refutation of a true proposition. -/
+def isInconclusiveError : GenError → Bool := Gen.GenError.isInconclusive
 
 /-- Variant of `lazyListBacktrack` where the input `LazyList` contains `Except ε α` values instead of `α`.
 
