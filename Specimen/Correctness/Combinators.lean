@@ -277,7 +277,7 @@ private theorem squash_go_errors {α : Type} :
     have hp' : PendingOk p' := by
       intro e' h'
       by_cases hc : (p.isNone && Gen.GenError.isInconclusive e) = true
-      · simp only [p', hc, if_true, Option.some.injEq] at h'
+      · simp only [p', hc, ite_true, Option.some.injEq] at h'
         subst h'; simp only [Bool.and_eq_true] at hc; exact hc.2
       · simp only [p', hc] at h'; exact hp e' h'
     obtain ⟨ih1, ih2⟩ := squash_go_errors p' t.get hp'
