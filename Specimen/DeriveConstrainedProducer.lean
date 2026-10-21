@@ -482,6 +482,14 @@ def getScheduleForInductiveRelationConstructor
     -- Enter the updated `LocalContext` containing the fresh variable that was created when rewriting the conclusion
     withLCtx' updatedLocalCtx (do
       let hypothesisExprs := (← monadLift (updatedHypotheses.toList.mapM (exprToHypothesisExpr ctorName))).toArray
+      -- Where `linearizeAndFlatten`'s non-linearity equalities sit: straight after the declared premises,
+      -- before the function-call equalities. Told apart by their right-hand side — `fresh = original`
+      -- has a variable there, `fresh = f x` an application. Pinned and recorded premise orders are in
+      -- the interpreter's basis, which has no premise for these (see `searchBestScheduleM`).
+      let nonlinearBlock : Nat × Nat :=
+        let tail := (updatedHypotheses.toList.drop hypotheses.size)
+        let isNl := fun (e : Expr) => e.isAppOfArity ``Eq 3 && (e.getArg! 2).isFVar
+        (hypotheses.size, (tail.takeWhile isNl).length)
 
       trace[plausible.deriving.arbitrary] m!"Hypotheses to be ordered as HypothesisExprs: {updatedHypotheses}"
 
@@ -617,7 +625,7 @@ def getScheduleForInductiveRelationConstructor
             (recCall := recCall) (fixedVars := fixedVars) (recFnName := recFnName)
             (multiOutput := multiOutput) (bundle := bundle) (memo := ref)
             (key := key) (limit := limit) (deriveDep := deriveDep)
-            (delegableMap := delegableMap)
+            (delegableMap := delegableMap) (nonlinearBlock := nonlinearBlock)
           match result with
           | some (steps, score, count) => pure (steps, score, count)
           | none => throwError m!"Unable to compute any possible schedules (monadic path)"
@@ -1463,63 +1471,34 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
       key.inductiveName indLevels freshArgIdents freshenedOutputNames
       outputTypes producerSort (← getLCtx) globalName key.deriveSort (some paramInfo) requiredConstraints
 
-/-- Recursively derives the best schedule for a SpecKey, populating the memo with
-    all transitive dependencies. Returns the score for this spec.
+/-- Whether Lean can already synthesise the producer/checker instance for `key`, so the pipeline can
+    skip deriving it.
 
-    Follows QuickChick's `inductive_best_valid_schedule` pattern:
-    1. Check memo (return cached if found, or optimistic score if inProgress/cycle)
-    2. Check if instance already exists (return totalScore)
-    3. Insert inProgress placeholder
-    4. Derive schedules for each constructor
-    5. Collect NonRec deps from chosen schedules → recursively derive
-    6. Store result in memo -/
-partial def deriveBestInductiveSchedule (key : SpecKey)
-    (memo : IO.Ref (Std.HashMap SpecKey MemoEntry))
-    (scheduleRewriter : List ScheduleStep → List ScheduleStep := id) : TermElabM Score := do
-  -- 1. Check memo
-  let current ← memo.get
-  match current[key]? with
-  -- Both cases return `default` which is the empty/zero-cost score.
-  -- In-progress (mutual/recursive) and failed (must be user-provided) deps
-  -- have unknown quality, so we assign a neutral score rather than penalizing.
-  | some .inProgress => return default
-  | some (.done indSched) => return indSched.score
-  | some (.failed _) => return default
-  | none => pure ()
+    Extracted from `deriveBestInductiveSchedule`, which is its original and still its main caller, so
+    that the *interpreter* can ask the same question. `InterpEnv` registers leaves by hand
+    (`withArbitrary`, `addChecker`, `addProducer`), and nothing checked those against what the compiled
+    environment can actually synthesise. The two drifted, in both directions, with consequences that took
+    a long time to read back to their cause:
 
-  -- 2. Non-inductive heads (e.g. LE.le, Not) — try to find an existing instance
-  unless (← isInductive key.inductiveName) do
-    -- For non-inductives, check if a Decidable instance exists (gives DecOpt via [Decidable P] : DecOpt P)
-    let hasInstance ← try
-      Meta.withNewMCtxDepth do
-        -- Build a proposition with metavar args and check Decidable
-        let info ← getConstInfo key.inductiveName
-        let mut t := .const key.inductiveName (info.levelParams.map fun _ => .zero)
-        let arity := (← getComponentsOfArrowType info.type).size - 1
-        for _ in List.range arity do
-          let argTy := (← inferType t).bindingDomain!
-          let mv ← Meta.mkFreshExprMVar (some argTy)
-          t := .app t mv
-        let result ← Meta.synthInstance? (← mkAppM ``Decidable #[t])
-        pure result.isSome
-    catch _ => pure false
-    if hasInstance then
-      let trivialSched : InductiveSchedule := { key, argNames := [], recFnName := `_, baseSchedules := [], recSchedules := [], score := default, alreadyExists := true }
-      memo.modify (·.insert key (.done trivialSched))
-      let bundle ← Scoring.getActiveScorerBundle
-      return bundle.emptyScore
-    else
-      memo.modify (·.insert key (.failed s!"{key.inductiveName} is not inductive and has no Decidable instance"))
-      let bundle ← Scoring.getActiveScorerBundle
-      return bundle.penaltyScore
+  * `cedarLeaves` had no `ValidDatetime`/`ValidDuration` producer while `TypeOfLean.lean` has had
+    hand-written `ArbitrarySizedSuchThat` instances for both all along — so datetime and duration
+    expressions were unreachable in the interpreter only, silently biasing every Cedar measurement
+    against four extension-function families.
+  * `BSTInterpTest`'s `leaves` registers a checker for `Between`, which has no `DecOpt Between`
+    counterpart. The interpreter therefore satisfies `Between[1,2]` from a leaf and brings up **3**
+    modes; the compiled path must build `Between` from its definition, brings up **12**, and fails three
+    `LE.le` modes with "not inductive and has no Decidable instance". The failure then surfaced far
+    downstream as `failed to synthesize ArbitrarySizedSuchThat Nat (fun m => a_3 ≤ m)`, which names
+    neither `Between` nor the leaf that caused it.
 
-  -- Check if instance already exists — skip derivation if so
+    So: one predicate, asked by both sides. -/
+def instanceExistsFor (key : SpecKey) : TermElabM Bool := do
   let indInfo ← getConstInfoInduct key.inductiveName
   let indTypeComponents ← getComponentsOfArrowType indInfo.type
   let argTypes := indTypeComponents.pop
   let nonSortOutputIndices := key.outputIndices.filter (fun i =>
     match argTypes[i]? with | some ty => !ty.isSort | none => true)
-  let instanceExists ← Meta.withNewMCtxDepth do
+  Meta.withNewMCtxDepth do
     try
       if nonSortOutputIndices.isEmpty && key.outputIndices.length > 0 then pure true
       else if key.deriveSort == .Checker then
@@ -1610,6 +1589,64 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
                 buildAndCheck (idx + 1) (.app t fv) (fvars.push fv) instIdx
         buildAndCheck 0 (.const key.inductiveName indLevelsForCheck) #[] 0
     catch _ => pure false
+
+/-- Recursively derives the best schedule for a SpecKey, populating the memo with
+    all transitive dependencies. Returns the score for this spec.
+
+    Follows QuickChick's `inductive_best_valid_schedule` pattern:
+    1. Check memo (return cached if found, or optimistic score if inProgress/cycle)
+    2. Check if instance already exists (return totalScore)
+    3. Insert inProgress placeholder
+    4. Derive schedules for each constructor
+    5. Collect NonRec deps from chosen schedules → recursively derive
+    6. Store result in memo -/
+partial def deriveBestInductiveSchedule (key : SpecKey)
+    (memo : IO.Ref (Std.HashMap SpecKey MemoEntry))
+    (scheduleRewriter : List ScheduleStep → List ScheduleStep := id) : TermElabM Score := do
+  -- 1. Check memo
+  let current ← memo.get
+  match current[key]? with
+  -- Both cases return `default` which is the empty/zero-cost score.
+  -- In-progress (mutual/recursive) and failed (must be user-provided) deps
+  -- have unknown quality, so we assign a neutral score rather than penalizing.
+  | some .inProgress => return default
+  | some (.done indSched) => return indSched.score
+  | some (.failed _) => return default
+  | none => pure ()
+
+  -- 2. Non-inductive heads (e.g. LE.le, Not) — try to find an existing instance
+  unless (← isInductive key.inductiveName) do
+    -- For non-inductives, check if a Decidable instance exists (gives DecOpt via [Decidable P] : DecOpt P)
+    let hasInstance ← try
+      Meta.withNewMCtxDepth do
+        -- Build a proposition with metavar args and check Decidable
+        let info ← getConstInfo key.inductiveName
+        let mut t := .const key.inductiveName (info.levelParams.map fun _ => .zero)
+        let arity := (← getComponentsOfArrowType info.type).size - 1
+        for _ in List.range arity do
+          let argTy := (← inferType t).bindingDomain!
+          let mv ← Meta.mkFreshExprMVar (some argTy)
+          t := .app t mv
+        let result ← Meta.synthInstance? (← mkAppM ``Decidable #[t])
+        pure result.isSome
+    catch _ => pure false
+    if hasInstance then
+      let trivialSched : InductiveSchedule := { key, argNames := [], recFnName := `_, baseSchedules := [], recSchedules := [], score := default, alreadyExists := true }
+      memo.modify (·.insert key (.done trivialSched))
+      let bundle ← Scoring.getActiveScorerBundle
+      return bundle.emptyScore
+    else
+      memo.modify (·.insert key (.failed s!"{key.inductiveName} is not inductive and has no Decidable instance"))
+      let bundle ← Scoring.getActiveScorerBundle
+      return bundle.penaltyScore
+
+  -- Check if instance already exists — skip derivation if so
+  let indInfo ← getConstInfoInduct key.inductiveName
+  let indTypeComponents ← getComponentsOfArrowType indInfo.type
+  let argTypes := indTypeComponents.pop
+  let _ := argTypes
+  let _ := indInfo
+  let instanceExists ← instanceExistsFor key
   if instanceExists then
     let trivialSched : InductiveSchedule := { key, argNames := [], recFnName := `_, baseSchedules := [], recSchedules := [], score := default, alreadyExists := true }
     memo.modify (·.insert key (.done trivialSched))
@@ -2338,7 +2375,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
             let allScheds := indSched.baseSchedules ++ indSched.recSchedules
             let deps := allScheds.flatMap (fun (_, (steps, _)) => collectNonRecDeps steps)
             let relDeps := deps.filter (fun d => d.kind == .relation || d.kind == .checker)
-            let depKeys := relDeps.map (fun d => SpecKey.mk d.inductiveName d.outputIndices d.deriveSort)
+            let depKeys := relDeps.map (fun d => SpecKey.mk d.inductiveName d.outputIndices d.deriveSort [])
               |>.filter (usedKeys.contains ·) |>.eraseDups
             totalEdges := totalEdges + depKeys.length
           | _ => pure ()
@@ -2556,13 +2593,13 @@ def elabDeriveMutual : CommandElab := fun stx => do
                   let color := match step with
                     | .Check _ false => "hsl(0, 70%, 60%)"
                     | .Check (.NonRec (name, _)) true =>
-                      let depKey := SpecKey.mk name [] .Checker
+                      let depKey := SpecKey.mk name [] .Checker []
                       match finalMemo[depKey]? with
                       | some (.done depSched) => specColor depSched
                       | _ => "hsl(30, 70%, 60%)"
                     | .Check _ true => "hsl(30, 70%, 60%)"
                     | .Unconstrained _ (.NonRec (name, _)) _ =>
-                      let depKey := SpecKey.mk name [] .Generator
+                      let depKey := SpecKey.mk name [] .Generator []
                       match finalMemo[depKey]? with
                       | some (.done depSched) => specColor depSched
                       | _ => "hsl(60, 70%, 60%)"
@@ -2571,7 +2608,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
                       let outNames := vs.map Prod.fst
                       let outIdxs := computeOutputIndices args outNames
                       let ds := match ps with | .Generator => DeriveSort.Generator | .Enumerator => .Enumerator
-                      let depKey := SpecKey.mk name outIdxs ds
+                      let depKey := SpecKey.mk name outIdxs ds []
                       match finalMemo[depKey]? with
                       | some (.done depSched) => specColor depSched
                       | _ => "hsl(90, 70%, 60%)"
@@ -2697,7 +2734,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
                 let deps := collectNonRecDeps steps
                 let relDeps := deps.filter (fun d => d.kind == .relation || d.kind == .checker)
                 for d in relDeps do
-                  let dk := SpecKey.mk d.inductiveName d.outputIndices d.deriveSort
+                  let dk := SpecKey.mk d.inductiveName d.outputIndices d.deriveSort []
                   if usedKeys.contains dk then
                     let existing := depCtors.getD dk []
                     if ctorName ∉ existing then
@@ -2891,7 +2928,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
                   let deps := collectNonRecDeps steps
                   let relDeps := deps.filter (fun d => d.kind == .relation || d.kind == .checker)
                   for d in relDeps do
-                    let dk := SpecKey.mk d.inductiveName d.outputIndices d.deriveSort
+                    let dk := SpecKey.mk d.inductiveName d.outputIndices d.deriveSort []
                     if usedKeys.contains dk then
                       let existing := depCtors.getD dk []
                       if ctorName ∉ existing then

@@ -46,20 +46,20 @@ private def stepColor (bundle : Scoring.ScorerBundle)
     (finalMemo : Std.HashMap SpecKey MemoEntry) (step : ScheduleStep) : String :=
   match step with
   | .Check (.NonRec (name, _)) true =>
-    match finalMemo[SpecKey.mk name [] .Checker]? with
+    match finalMemo[SpecKey.mk name [] .Checker []]? with
     | some (.done depSched) => specColor bundle depSched
     | _ => "hsl(30, 70%, 60%)"
   | .Check _ false => "hsl(0, 70%, 60%)"
   | .Check _ true => "hsl(30, 70%, 60%)"
   | .Unconstrained _ (.NonRec (name, _)) _ =>
-    match finalMemo[SpecKey.mk name [] .Generator]? with
+    match finalMemo[SpecKey.mk name [] .Generator []]? with
     | some (.done depSched) => specColor bundle depSched
     | _ => "hsl(60, 70%, 60%)"
   | .Unconstrained _ _ _ => "hsl(60, 70%, 60%)"
   | .SuchThat vs (.NonRec (name, args)) ps =>
     let outIdxs := computeOutputIndices args (vs.map Prod.fst)
     let ds := match ps with | .Generator => DeriveSort.Generator | .Enumerator => .Enumerator
-    match finalMemo[SpecKey.mk name outIdxs ds]? with
+    match finalMemo[SpecKey.mk name outIdxs ds []]? with
     | some (.done depSched) => specColor bundle depSched
     | _ => "hsl(90, 70%, 60%)"
   | .SuchThat _ (.Rec ..) _ | .SuchThat _ (.MutRec ..) _ => "hsl(200, 50%, 60%)"
@@ -100,7 +100,7 @@ private def derivedSpecsSection (finalMemo : Std.HashMap SpecKey MemoEntry)
           -- Count edges for dep graph
           let deps := allScheds.flatMap (fun (_, (s, _)) => collectNonRecDeps s)
           let relDeps := deps.filter (fun d => d.kind == .relation || d.kind == .checker)
-          let depKeys := relDeps.map (fun d => SpecKey.mk d.inductiveName d.outputIndices d.deriveSort)
+          let depKeys := relDeps.map (fun d => SpecKey.mk d.inductiveName d.outputIndices d.deriveSort [])
             |>.filter (usedKeys.contains ·) |>.eraseDups
           totalEdges := totalEdges + depKeys.length
           let ctorItems : Array ProofWidgets.Html := Id.run do
@@ -191,7 +191,7 @@ private def depGraphSection (finalMemo : Std.HashMap SpecKey MemoEntry)
           let deps := collectNonRecDeps ctorSteps
           let relDeps := deps.filter (fun d => d.kind == .relation || d.kind == .checker)
           for d in relDeps do
-            let dk := SpecKey.mk d.inductiveName d.outputIndices d.deriveSort
+            let dk := SpecKey.mk d.inductiveName d.outputIndices d.deriveSort []
             if usedKeys.contains dk then
               let existing := depCtors.getD dk []
               if ctorName ∉ existing then

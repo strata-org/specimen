@@ -136,3 +136,41 @@ import SpecimenTest.DroppedCtorsTraceTest
 import SpecimenTest.TacticTest
 
 
+
+-- Runtime schedule interpreter: derive a mode from data, reorder premises, profile the discards
+import SpecimenTest.Interp.BSTInterpTest
+-- …and read the relation-as-data straight off the declaration with `derive_relspec`
+import SpecimenTest.Interp.ExtractTest
+-- …and keep a variable repeated inside one conclusion argument linear, as the deriver does
+import SpecimenTest.Interp.NonLinearConclusionTest
+-- …and attribute a discard to the premise that emitted it in the schedule actually installed
+import SpecimenTest.Interp.ProvenanceTest
+-- …and derive the `Val` bridge, so the interpreter can be pointed at a real project's own types
+import SpecimenTest.Interp.DerivingTest
+-- …and learn a whole generator from where it discards, stopping at the irreducible
+import SpecimenTest.Interp.LearnTest
+-- …and interpret the other two producer sorts (checker, enumerator) end-to-end
+import SpecimenTest.Interp.CheckEnumTest
+-- …and never mistake interpreter misconfiguration for a discard: `backtrack` absorbing it hid a rule
+-- that could never run
+import SpecimenTest.Interp.InternalErrorTest
+-- …and transfer a measured premise order back to the compile-time deriver, which only works if the two
+-- lowerings agree step for step
+import SpecimenTest.Interp.PinnedOrderTest
+-- …and start learning from the deriver's own branch-and-bound choice, so what learning changes reads as
+-- a diff against static
+import SpecimenTest.Interp.FromCompiledTest
+-- …and certify that the compiled start really runs what the deriver emitted, with a comparator that can
+-- call two equivalent schedules different but never two different ones the same
+import SpecimenTest.Interp.ScheduleEquivTest
+-- …and keep the interpreter's hand-registered leaves in step with the instances Lean can synthesise,
+-- since drifting either way makes a plan measurable here and unemittable there
+import SpecimenTest.Interp.CorrespondenceTest
+-- …and resolve leaves from the instances in scope, so the interpreter measures the compiled generator
+import SpecimenTest.Interp.InstanceLeavesTest
+-- …and follow blame from a measured rejection to the premises that could be reordered, including up into
+-- the caller when the inputs are what decided it
+import SpecimenTest.Interp.BlameTest
+-- …and diagnose a constructor that rarely succeeds: localize its failing step, trace a blind choice to the
+-- premise that made it, and try the anchor move and size floor the diagnosis names
+import SpecimenTest.Interp.DiagnoseTest
