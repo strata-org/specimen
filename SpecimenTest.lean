@@ -129,6 +129,8 @@ import SpecimenTest.InputFreeDeriveMutualTest
 import SpecimenTest.ArithIndexTest
 -- …and a type abbreviation used as a type argument is a type, not a function call
 import SpecimenTest.TypeAbbrevArgTest
+-- …and a match on a one-constructor structure emits no redundant failure arm
+import SpecimenTest.IrrefutableMatchTest
 -- …and a constructor a mode was derived without is reported under `trace.specimen.droppedCtors`
 import SpecimenTest.DroppedCtorsTraceTest
 -- …and a large mutual block of workers recurses structurally on `fuel`, not by well-founded recursion

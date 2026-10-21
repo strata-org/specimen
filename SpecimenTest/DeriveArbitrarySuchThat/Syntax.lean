@@ -33,15 +33,8 @@ derive_generator (∃ (b: Bar), Baz b)
 inductive Baz' : Bar → Bar → Prop where
 | isBar2 : Baz' .bar .bar
 
-/-- error: Redundant alternative: Any expression matching
-  _
-will match one of the preceding alternatives
----
-error: Redundant alternative: Any expression matching
-  _
-will match one of the preceding alternatives
--/
-#guard_msgs(error, drop info) in
+-- `Bar` has one constructor, so matching the input against `.bar` cannot fail and emits no failure arm.
+#guard_msgs(drop info) in
 derive_generator (fun a => ∃ b, Baz' a b)
 
 end

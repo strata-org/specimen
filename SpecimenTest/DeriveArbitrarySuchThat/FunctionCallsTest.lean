@@ -21,15 +21,8 @@ inductive square_of'' : Nat → _ → Prop where
 inductive square_of''' : Nat → _ → Prop where
   | sq : forall x, square_of''' x (fun (_ : Unit) => x)
 
-/--error: Redundant alternative: Any expression matching
-  _
-will match one of the preceding alternatives
----
-error: Redundant alternative: Any expression matching
-  _
-will match one of the preceding alternatives
--/
-#guard_msgs(error, drop info) in
+-- The input is a pair, and a pair's one constructor cannot fail to match, so no failure arm is emitted.
+#guard_msgs(drop info) in
 derive_generator (fun n => ∃ (m : Nat), square_of'' m n)
 
 #guard_msgs(drop info) in
