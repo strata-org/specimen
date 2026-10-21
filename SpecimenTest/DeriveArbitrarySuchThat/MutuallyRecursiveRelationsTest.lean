@@ -33,8 +33,8 @@ instance : ArbitrarySizedSuchThat Nat (fun n => Odd n) where
 instance : BacktrackGenFor Nat (fun n => Odd n) where
   gen (_ _ : Nat) := pure 1
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator ∃ (n : Nat), Even n
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator ∃ (n : Nat), Odd n

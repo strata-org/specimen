@@ -64,7 +64,7 @@ set_option linter.unusedSimpArgs false
 -- derivation of the same producers when the whole library is built under `specimen.emitBasalt`.
 namespace DerivedGeneratorViaInterp
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual generator (fun Γ τ => ∃ x, lookup Γ x τ)
 
 -- Reconstruct the emitted step, verbatim from the emitted code: input-dispatch guards, `filterMap`

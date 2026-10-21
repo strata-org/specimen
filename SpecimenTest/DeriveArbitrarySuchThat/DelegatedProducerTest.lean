@@ -51,7 +51,7 @@ inductive DHasTy : List Nat → DTm → Nat → Prop where
   | var : Γ[i]? = some τ → DHasTy Γ (.var i) τ
 
 -- Derivation succeeds with the delegated instance in scope.
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun Γ τ => ∃ e : DTm, DHasTy Γ e τ)
 
 -- With context `[7, 7, 7]` and target `7`, the delegated instance always
@@ -93,7 +93,7 @@ inductive DHasTyCtx : Nat → DTm → Nat → Prop where
 -- Derivation succeeds: `Γ` is produced by the first premise, `i` delegated by
 -- the second. (Before the per-premise fix this failed with `Unknown identifier
 -- i`, because `Γ` was wrongly treated as delegable via the indexing premise.)
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun x τ => ∃ e : DTm, DHasTyCtx x e τ)
 
 -- `x = 3` ⇒ `Γ = [7, 7, 7]`; with target `7` the delegated producer returns the

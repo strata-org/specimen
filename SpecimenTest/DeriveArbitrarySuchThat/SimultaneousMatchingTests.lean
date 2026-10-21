@@ -19,21 +19,21 @@ set_option guard_msgs.diff true
 -- what's under test here, so pin multi-output off.
 set_option specimen.multiOutput false
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun x => ∃ (l : List Nat), InList x l)
 
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun a => ∃ (l: List Nat), MinOk l a)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun n l' => ∃ (l : List Nat), MinEx n l l')
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun x l' => ∃ (l : List Nat), MinEx3 x l l')
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun x l => ∃ (l' : List Nat), MinEx2 x l l')
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun x l' => ∃ (l : List Nat), MinEx2 x l l')

@@ -60,7 +60,7 @@ set_option linter.unusedSimpArgs false
 -- derivation of the same producers when the whole library is built under `specimen.emitBasalt`.
 namespace TypingBridge
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual generator (fun G t => ∃ e, typing G e t)
 
 -- Reconstruct the emitted step, verbatim: input-dispatch guards, `filterMap` pool, weight literals,

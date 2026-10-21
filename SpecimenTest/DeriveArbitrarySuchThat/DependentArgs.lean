@@ -19,7 +19,7 @@ inductive HasDep {α : Type} (_ : List α) : Nat → Prop where
 
 -- The parameter is anonymous, so it elaborates to a binder with a hygienic name, as an unnamed premise
 -- does; it is still a variable, not a hypothesis.
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun α l => ∃ n, @HasDep α l n)
 
 /-- info: true -/
@@ -32,13 +32,13 @@ derive_generator (fun α l => ∃ n, @HasDep α l n)
 inductive HasClassDep {α : Type} [h : DecidableEq α] : Nat → Prop where
 | foo (a b : α) : a = b → HasClassDep 0
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun α inst => ∃ n, @HasClassDep α inst n)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_checker fun α inst n => @HasClassDep α inst n
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_enumerator (fun α inst => ∃ n, @HasClassDep α inst n)
 
 def f : Nat → Nat := fun _ => 0
@@ -46,8 +46,8 @@ def f : Nat → Nat := fun _ => 0
 inductive HasCall : Nat → Prop where
 | foo (n : Nat) : f n = 0 → HasCall n
 
-#guard_msgs(error, whitespace:=lax, drop info) in
+#guard_msgs(warning, error, whitespace:=lax, drop info) in
 derive_generator ∃ n, HasCall n
 
-#guard_msgs(error, whitespace:=lax, drop info) in
+#guard_msgs(warning, error, whitespace:=lax, drop info) in
 derive_enumerator ∃ n, HasCall n
