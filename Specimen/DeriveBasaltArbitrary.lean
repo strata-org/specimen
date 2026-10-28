@@ -2,7 +2,7 @@ import Specimen.BasaltBridge
 import Specimen.MakeConstrainedProducerInstance
 
 /-!
-# `deriving` handler for `Basalt.ArbitraryFueled`
+# `deriving` handlers for `Basalt.ArbitraryFueled` and `Specimen.EnumFueled`
 
 A generator emitted against Basalt is polymorphic in the generator monad, so when it needs an
 *unconstrained* value of a user datatype, that generator must be polymorphic too. Plausible's
@@ -12,6 +12,10 @@ A generator emitted against Basalt is polymorphic in the generator monad, so whe
 ```
 deriving instance Basalt.ArbitraryFueled for MyType
 ```
+
+`deriving instance Specimen.EnumFueled for MyType` derives the same shape for an enumerator's
+unconstrained values: at an enumeration, a choice among constructors lists each value up to the fuel
+once. It is derived separately, so tuning a type's generator never changes its enumeration.
 
 Basalt's Plausible bridge then supplies `Plausible.ArbitraryFueled` (hence `Plausible.Arbitrary`) at
 low priority, so a type derived this way is usable on both paths.
@@ -57,27 +61,49 @@ rather than emitting a call to an instance that cannot exist. -/
 private def mentionsTy (tyName : Name) (e : Expr) : Bool :=
   (e.find? fun s => match s with | .const n _ => n == tyName | _ => false).isSome
 
+/-- A fueled class this handler derives: `Basalt.ArbitraryFueled` for a generator's unconstrained
+values, `Specimen.EnumFueled` for an enumerator's. They are derived alike, a choice among constructors
+with the fuel decreasing, but separately, so that tuning one never changes the other. -/
+structure FueledClass where
+  /-- The class. -/
+  cls : Name
+  /-- Its method, `Nat → G α`. -/
+  method : Name
+  /-- The suffix of the emitted generator's name. -/
+  suffix : Name
+  /-- An unfueled method a field may fall back to, if its type has no instance of `cls`. -/
+  fallback : Option Name
+
+def basaltArbitraryFueledClass : FueledClass :=
+  ⟨`Basalt.ArbitraryFueled, `Basalt.ArbitraryFueled.arbitraryFueled, `basaltArbitraryFueled,
+    some `Basalt.Arbitrary.arbitrary⟩
+
+def enumFueledClass : FueledClass :=
+  ⟨`Specimen.EnumFueled, `Specimen.EnumFueled.enumFueled, `enumFueled, none⟩
+
 /-- The generator to use for one constructor field. `recCall` is the recursive generator applied to
 the decremented fuel; `fuelIdent` is the decremented fuel itself, for a fueled sibling. -/
-private def fieldGenerator (tyName : Name) (recCall fuelTerm : TSyntax `term) (fieldTy : Expr) :
-    TermElabM (TSyntax `term) := do
+private def fieldGenerator (c : FueledClass) (tyName : Name) (recCall fuelTerm : TSyntax `term)
+    (fieldTy : Expr) : TermElabM (TSyntax `term) := do
   if isDirectRec tyName fieldTy then
     return recCall
   if mentionsTy tyName fieldTy then
-    throwError "deriving Basalt.ArbitraryFueled: nested occurrence of {tyName} in a field of type \
+    throwError "deriving {c.cls}: nested occurrence of {tyName} in a field of type \
       {fieldTy} is not supported"
+  let method := mkIdent c.method
   -- A field whose type is one of the datatype's *parameters* is a free variable here, and the only
-  -- generator available for it is the `[Basalt.ArbitraryFueled α]` binder this handler emits — an
-  -- instance search would find nothing and wrongly fall through to the unfueled class.
+  -- generator available for it is the `[cls α]` binder this handler emits — an instance search
+  -- would find nothing and wrongly fall through to the unfueled class.
   if fieldTy.isFVar then
-    return ← `(Basalt.ArbitraryFueled.arbitraryFueled (α := $(← PrettyPrinter.delab fieldTy)) $fuelTerm)
+    return ← `($method (α := $(← PrettyPrinter.delab fieldTy)) $fuelTerm)
   -- Prefer a fueled sibling when one exists, so a datatype built from other recursive datatypes
   -- stays bounded; fall back to the unfueled class.
-  let fueledTy ← mkAppM `Basalt.ArbitraryFueled #[fieldTy]
+  let fueledTy ← mkAppM c.cls #[fieldTy]
   if (← Meta.synthInstance? fueledTy).isSome then
-    `(Basalt.ArbitraryFueled.arbitraryFueled (α := $(← PrettyPrinter.delab fieldTy)) $fuelTerm)
-  else
-    `(Basalt.Arbitrary.arbitrary (α := $(← PrettyPrinter.delab fieldTy)))
+    `($method (α := $(← PrettyPrinter.delab fieldTy)) $fuelTerm)
+  else match c.fallback with
+    | some f => `($(mkIdent f) (α := $(← PrettyPrinter.delab fieldTy)))
+    | none => throwError "deriving {c.cls}: no {c.cls} instance for the field type {fieldTy}"
 
 /-- Builds `g₀ >>= fun x₀ => … >>= fun xₙ => pure (Ctor x₀ … xₙ)`.
 
@@ -91,11 +117,11 @@ private def mkCtorGenerator (ctorName : Name) (fieldGens : Array (TSyntax `term)
     body ← `($(fieldGens[i]!) >>= fun $(names[i]!) => $body)
   return body
 
-/-- Derives `Basalt.ArbitraryFueled` for one non-indexed, non-parameterised inductive. -/
-private def deriveOne (tyName : Name) : CommandElabM Unit := do
+/-- Derives the fueled class `c` for one non-indexed inductive. -/
+private def deriveOne (c : FueledClass) (tyName : Name) : CommandElabM Unit := do
   let info ← getConstInfoInduct tyName
   unless info.numIndices == 0 do
-    throwError "deriving Basalt.ArbitraryFueled: {tyName} has indices, which are not supported yet"
+    throwError "deriving {c.cls}: {tyName} has indices, which are not supported yet"
   -- Type parameters become binders on both the generator and the instance, each demanding a
   -- `Basalt.ArbitraryFueled` of its own so a field of parameter type can be generated.
   -- The declaration's own parameter names, because a field of parameter type is delaborated using
@@ -107,7 +133,7 @@ private def deriveOne (tyName : Name) : CommandElabM Unit := do
   let tyIdent : TSyntax `term ←
     if paramIdents.isEmpty then liftTermElabM `($(mkIdent tyName))
     else liftTermElabM `($(mkIdent tyName) $paramIdents*)
-  let genName := tyName ++ `basaltArbitraryFueled
+  let genName := tyName ++ c.suffix
   let genIdent := mkIdent genName
   let fuelN := mkIdent `n
 
@@ -142,11 +168,11 @@ private def deriveOne (tyName : Name) : CommandElabM Unit := do
             -- plus a `BitVec n` vs `BitVec a0` mismatch, reported at the `deriving` line with no
             -- indication of which field is at fault.
             if fieldTy.hasAnyFVar (fun fvId => fvars.any (·.fvarId! == fvId)) then
-              throwError "deriving Basalt.ArbitraryFueled: constructor {ctorName} has a field of \
+              throwError "deriving {c.cls}: constructor {ctorName} has a field of \
                 type {fieldTy}, which depends on an earlier field of the same constructor. \
                 Dependent fields are not supported; write the instance by hand."
             if isDirectRec tyName fieldTy then anyRec := true
-            gens := gens.push (← fieldGenerator tyName recCall fuelTerm fieldTy)
+            gens := gens.push (← fieldGenerator c tyName recCall fuelTerm fieldTy)
           pure (← mkCtorGenerator ctorName gens, anyRec)
       allCtors := allCtors.push gen
       unless isRec do nonRec := nonRec.push gen
@@ -157,7 +183,7 @@ private def deriveOne (tyName : Name) : CommandElabM Unit := do
   let (_, allSucc) ← buildCtors fuelN
 
   if nonRecZero.isEmpty then
-    throwError "deriving Basalt.ArbitraryFueled: {tyName} has no non-recursive constructor, so no \
+    throwError "deriving {c.cls}: {tyName} has no non-recursive constructor, so no \
       generator can terminate"
 
   let zeroBranches ← liftTermElabM <| nonRecZero.mapM fun g => `(fun (_ : Unit) => $g)
@@ -170,26 +196,29 @@ private def deriveOne (tyName : Name) : CommandElabM Unit := do
   -- Reuse the helper the constrained-producer emitter already uses, so the binders come back in
   -- the `bracketedBinder` category the `def`/`instance` syntaxes expect.
   let paramBinders ← liftTermElabM <|
-    mkTypeClassInstanceBinders paramNames #[`Basalt.ArbitraryFueled]
+    mkTypeClassInstanceBinders paramNames #[c.cls]
   elabCommand (← `(command|
     def $genIdent $paramBinders:bracketedBinder* {G : Type → Type} [_root_.Gen G] :
         Nat → G $tyIdent
       | Nat.zero => _root_.oneOf [$zeroBranches,*]
       | Nat.succ $fuelN => _root_.oneOf [$succBranches,*]))
+  let clsIdent := mkIdent c.cls
+  let fieldIdent := mkIdent (Name.mkSimple c.method.getString!)
   elabCommand (← `(command|
-    instance $paramBinders:bracketedBinder* : Basalt.ArbitraryFueled $tyIdent where
-      arbitraryFueled := $genIdent))
+    instance $paramBinders:bracketedBinder* : $clsIdent $tyIdent where
+      $fieldIdent:ident := $genIdent))
 
-/-- `deriving` handler, so `deriving instance Basalt.ArbitraryFueled for T` and a `deriving` clause
+/-- `deriving` handler for the fueled class `c`, so `deriving instance c for T` and a `deriving` clause
 on the datatype both work. -/
-def mkBasaltArbitraryFueledHandler (declNames : Array Name) : CommandElabM Bool := do
+def mkFueledHandler (c : FueledClass) (declNames : Array Name) : CommandElabM Bool := do
   for n in declNames do
     unless (← getEnv).find? n matches some (.inductInfo _) do return false
   for n in declNames do
-    deriveOne n
+    deriveOne c n
   return true
 
 initialize
-  registerDerivingHandler ``Basalt.ArbitraryFueled mkBasaltArbitraryFueledHandler
+  registerDerivingHandler ``Basalt.ArbitraryFueled (mkFueledHandler basaltArbitraryFueledClass)
+  registerDerivingHandler ``Specimen.EnumFueled (mkFueledHandler enumFueledClass)
 
 end Specimen

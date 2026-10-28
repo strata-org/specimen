@@ -134,6 +134,12 @@ def backtrackGenForCall (prop : MExp) (fuel : MExp) : MExp :=
   .MApp .allExplicit (.MConst (Name.mkStr2 "BacktrackGenFor" "gen"))
     [.MHole, prop, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, fuel]
 
+/-- `MExp` representation of `EnumFor.enum`, the enumerator counterpart of `backtrackGenForCall`, with the
+    same binders. -/
+def enumForCall (prop : MExp) (fuel : MExp) : MExp :=
+  .MApp .allExplicit (.MConst (Name.mkStr2 "EnumFor" "enum"))
+    [.MHole, prop, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, fuel]
+
 /-- `ok x` is an `MExp` representing `Except.ok x`. -/
 def ok (x : MExp) : MExp :=
   .MApp .allowImplicit (.MConst ``Except.ok) [x]
@@ -328,23 +334,25 @@ def unconstrainedProducer (prodSort : ProducerSort) (ty : TSyntax `term)
   -- unconstrained generator for a *recursive* datatype ought to be bounded anyway: `initSize` is the
   -- right budget, being the allocation meant for independent dependencies.
   let useBasalt := (Lean.Option.get (← getOptions) specimen.emitBasalt)
-    && prodSort matches .Generator
   let typeClassName :=
-    if useBasalt then Name.mkStr2 "Basalt" "ArbitraryFueled"
-    else match prodSort with
-    | .Enumerator => ``Enum
-    | .Generator => ``Arbitrary
+    match useBasalt, prodSort with
+    | true, .Generator => Name.mkStr2 "Basalt" "ArbitraryFueled"
+    | true, .Enumerator => Name.mkStr2 "Specimen" "EnumFueled"
+    | false, .Enumerator => ``Enum
+    | false, .Generator => ``Arbitrary
   let typeClassInstance ← `( $(Lean.mkIdent typeClassName) $ty:term )
 
   -- Add the `typeClassInstance` for the unconstrained producer to the state,
   -- then obtain the `MExp` representing the unconstrained producer
   StateT.modifyGet $ fun instances =>
     let producerMExp :=
-      if useBasalt then
+      match useBasalt, prodSort with
+      | true, .Generator =>
         .MApp .allowImplicit (.MConst (Name.mkStr3 "Basalt" "ArbitraryFueled" "arbitraryFueled")) [fuel]
-      else match prodSort with
-      | .Enumerator => .MConst ``Enum.enum
-      | .Generator => .MConst ``Arbitrary.arbitrary
+      | true, .Enumerator =>
+        .MApp .allowImplicit (.MConst (Name.mkStr3 "Specimen" "EnumFueled" "enumFueled")) [fuel]
+      | false, .Enumerator => .MConst ``Enum.enum
+      | false, .Generator => .MConst ``Arbitrary.arbitrary
     (producerMExp, instances.push typeClassInstance)
 
 mutual
@@ -386,7 +394,7 @@ mutual
       -- Under Basalt one is a refutation (`Fail`) and the other a labelled failure (`FailWith`).
       do
       let useBasalt := (Lean.Option.get (← getOptions) specimen.emitBasalt)
-        && deriveSort matches .Generator
+        && (deriveSort matches .Generator || deriveSort matches .Enumerator)
       if useBasalt then
         match mexp with
         | .MOutOfFuel => `($backtrackGenExhaustFn)
@@ -424,7 +432,7 @@ mutual
         -- match on its result
         let trueCase ← `(Term.matchAltExpr| | $(mkIdent ``Except.ok) $(mkIdent ``true) => $k1)
         let useBasalt := (Lean.Option.get (← getOptions) specimen.emitBasalt)
-          && deriveSort matches .Generator
+          && (deriveSort matches .Generator || deriveSort matches .Enumerator)
         -- `DecOpt` is three-valued, and the two failures mean different things: `ok false` is a
         -- definite "this constructor does not apply", `error` only says the checker ran out of budget.
         --
@@ -510,15 +518,16 @@ mutual
       let typedArgs := List.zip args argTyExprs
       let argsTuple ← mkTuple typedArgs
       let propBody ← delabMexpAsExpr prop
-      -- Under Basalt a constrained sub-producer is looked up through `BacktrackGenFor` rather than
-      -- `ArbitrarySizedSuchThat`, both for the recorded instance constraint and for the call.
+      -- Under Basalt a constrained sub-producer is looked up through `BacktrackGenFor` (`EnumFor`)
+      -- rather than `ArbitrarySizedSuchThat` (`EnumSizedSuchThat`), both for the recorded instance
+      -- constraint and for the call.
       let useBasalt := (Lean.Option.get (← getOptions) specimen.emitBasalt)
-        && prodSort matches .Generator
       let typeClassName :=
-        if useBasalt then Name.mkStr1 "BacktrackGenFor"
-        else match prodSort with
-        | .Enumerator => ``EnumSizedSuchThat
-        | .Generator => ``ArbitrarySizedSuchThat
+        match useBasalt, prodSort with
+        | true, .Generator => Name.mkStr1 "BacktrackGenFor"
+        | true, .Enumerator => Name.mkStr1 "EnumFor"
+        | false, .Enumerator => ``EnumSizedSuchThat
+        | false, .Generator => ``ArbitrarySizedSuchThat
       let typeClassInstance ← `($(mkIdent typeClassName) `_ (fun $argsTuple:term => $propBody))
 
       -- Add the `typeClassInstance` for the constrained producer to the state,
@@ -526,10 +535,11 @@ mutual
       StateT.modifyGet $ fun instances =>
         let producerWithArgs := MExp.MFun typedArgs prop
         let producerMExp :=
-          if useBasalt then backtrackGenForCall producerWithArgs fuel
-          else match prodSort with
-          | .Enumerator => enumSizedST producerWithArgs fuel
-          | .Generator => arbitrarySizedST producerWithArgs fuel
+          match useBasalt, prodSort with
+          | true, .Generator => backtrackGenForCall producerWithArgs fuel
+          | true, .Enumerator => enumForCall producerWithArgs fuel
+          | false, .Enumerator => enumSizedST producerWithArgs fuel
+          | false, .Generator => arbitrarySizedST producerWithArgs fuel
         (producerMExp, instances.push typeClassInstance)
 
 end

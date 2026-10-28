@@ -141,6 +141,12 @@ def basaltForall (ty : TSyntax `term) : MacroM (TSyntax `term) := do
     itself quantified over `{G}` and `basaltInstBinders`. -/
 def backtrackGenForTypeclass : Ident := mkIdent $ Name.mkStr1 "BacktrackGenFor"
 
+/-- `EnumFor α P`, the Basalt counterpart of `EnumSizedSuchThat`: the same binders as `BacktrackGenFor`. -/
+def enumForTypeclass : Ident := mkIdent $ Name.mkStr1 "EnumFor"
+
+/-- The field name of `EnumFor`. -/
+def unqualifiedEnumForFn : Ident := mkIdent $ Name.mkStr1 "enum"
+
 /-- The field name of `BacktrackGenFor`. -/
 def unqualifiedBacktrackGenForFn : Ident := mkIdent $ Name.mkStr1 "gen"
 

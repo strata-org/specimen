@@ -13,6 +13,13 @@ open Lean Elab Command Meta Term Parser Std
 open Idents Schedules
 
 
+/-- The class a derived producer's unconstrained values, and its type parameters, are drawn through:
+    under Basalt `Basalt.ArbitraryFueled` for a generator and `Specimen.EnumFueled` for an enumerator,
+    each finite at a size where it has to be; otherwise Plausible's `Arbitrary` and Specimen's `Enum`. -/
+def basaltUnconstrainedClass (useBasalt : Bool) : ProducerSort → Name
+  | .Generator => if useBasalt then Name.mkStr2 "Basalt" "ArbitraryFueled" else ``Plausible.Arbitrary
+  | .Enumerator => if useBasalt then Name.mkStr2 "Specimen" "EnumFueled" else ``Enum
+
 /-- Extracts the name of the induction relation and its arguments -/
 def parseInductiveApp (body : Term) :
   TermElabM (TSyntax `ident × TSyntaxArray `ident) := do
@@ -107,7 +114,7 @@ def mkConstrainedProducerTypeClassInstance
 
     -- Whether to target Basalt's generator algebra (generators only; see `specimen.emitBasalt`).
     let emitBasalt := Lean.Option.get (← getOptions) specimen.emitBasalt
-    let useBasalt := emitBasalt && producerSort matches .Generator
+    let useBasalt := emitBasalt && (producerSort matches .Generator || producerSort matches .Enumerator)
     if useBasalt then requireBasaltImport
 
     -- The (backtracking) combinator to be invoked
@@ -227,11 +234,7 @@ def mkConstrainedProducerTypeClassInstance
       | .Generator => `($genTypeConstructor $targetTypeSyntax)
       | .Enumerator => `($exceptTTypeConstructor $genErrorType $enumTypeConstructor $targetTypeSyntax)
 
-    let producerUnconstrainedClass :=
-      if useBasalt then Name.mkStr2 "Basalt" "ArbitraryFueled"
-      else match producerSort with
-      | .Generator => ``Plausible.Arbitrary
-      | .Enumerator => ``Enum
+    let producerUnconstrainedClass := basaltUnconstrainedClass useBasalt producerSort
 
     let arbitraryTypeParamInstances ← mkTypeClassInstanceBinders typeParams #[producerUnconstrainedClass, ``DecidableEq]
 
@@ -249,8 +252,11 @@ def mkConstrainedProducerTypeClassInstance
       -- [MonoBacktrack G], Nat → G α`,
       -- so the field's own binders unify with the inner function's at the call below.
       let basaltBinders ← liftMacroM basaltInstBinders
-      `(instance $arbitraryTypeParamInstances:bracketedBinder* : $backtrackGenForTypeclass $targetTypeSyntax (fun $targetVarPattern => @$(mkIdent inductiveName) $args*) where
-          $unqualifiedBacktrackGenForFn:ident :=
+      let (basaltClass, basaltField) := match producerSort with
+        | .Generator => (backtrackGenForTypeclass, unqualifiedBacktrackGenForFn)
+        | .Enumerator => (enumForTypeclass, unqualifiedEnumForFn)
+      `(instance $arbitraryTypeParamInstances:bracketedBinder* : $basaltClass $targetTypeSyntax (fun $targetVarPattern => @$(mkIdent inductiveName) $args*) where
+          $basaltField:ident :=
             let rec $innerFunctionIdent:ident {$basaltGenVar : Type → Type} $basaltBinders:bracketedBinder* $innerParams* $arbitraryTypeParamInstances:bracketedBinder* : $optionTProducerType :=
               $matchExpr
             fun $freshSizeIdent => $innerFunctionIdent $fuelLit $freshSizeIdent $freshSizeIdent $outerParams*)
@@ -281,7 +287,7 @@ def mkConstrainedProducerMutualPieces
 
     -- Whether to target Basalt's generator algebra (generators only; see `specimen.emitBasalt`).
     let emitBasalt := Lean.Option.get (← getOptions) specimen.emitBasalt
-    let useBasalt := emitBasalt && deriveSort matches .Generator
+    let useBasalt := emitBasalt && (deriveSort matches .Generator || deriveSort matches .Enumerator)
     if useBasalt then requireBasaltImport
 
     let combinatorFn :=
@@ -383,11 +389,7 @@ def mkConstrainedProducerMutualPieces
         -- *fueled* class specifically: a derived datatype only ever gets `Basalt.ArbitraryFueled`, and
         -- Basalt's blanket `Arbitrary → ArbitraryFueled` instance means the fueled binder still accepts a
         -- hand-written unfueled instance, so it is the weaker requirement.
-        let producerUnconstrainedClass :=
-          if useBasalt then Name.mkStr2 "Basalt" "ArbitraryFueled"
-          else match producerSort with
-          | .Generator => ``Plausible.Arbitrary
-          | .Enumerator => ``Enum
+        let producerUnconstrainedClass := basaltUnconstrainedClass useBasalt producerSort
         #[producerUnconstrainedClass, ``DecidableEq]
     let defTypeParamInstances ← mkTypeClassInstanceBinders typeParams typeClasses
 
@@ -454,10 +456,8 @@ def mkConstrainedProducerMutualPieces
           -- `Plausible.Arbitrary` here while the body calls `Basalt.ArbitraryFueled.arbitraryFueled`
           -- leaves the parameter's generator unsatisfiable — and the error names the *body's* class, so
           -- it reads as a missing user instance rather than a mismatched binder.
-          | .Generator =>
-            if useBasalt then #[Name.mkStr2 "Basalt" "ArbitraryFueled", ``DecidableEq]
-            else #[``Plausible.Arbitrary, ``DecidableEq]
-          | .Enumerator => #[``Enum, ``DecidableEq]
+          | .Generator => #[basaltUnconstrainedClass useBasalt .Generator, ``DecidableEq]
+          | .Enumerator => #[basaltUnconstrainedClass useBasalt .Enumerator, ``DecidableEq]
     let instCmd ← match deriveSort with
       | .Checker | .Theorem => do
         let arbitraryTypeParamInstances ← mkTypeClassInstanceBinders typeParams instTypeClasses
@@ -466,15 +466,17 @@ def mkConstrainedProducerMutualPieces
             $unqualifiedDecOptFn:ident := fun $freshSizeIdent => $callExpr)
       | _ => do
         let producerTypeClass :=
-          if useBasalt then backtrackGenForTypeclass
-          else match producerSort with
-          | .Generator => arbitrarySizedSuchThatTypeclass
-          | .Enumerator => enumSizedSuchThatTypeclass
+          match useBasalt, producerSort with
+          | true, .Generator => backtrackGenForTypeclass
+          | true, .Enumerator => enumForTypeclass
+          | false, .Generator => arbitrarySizedSuchThatTypeclass
+          | false, .Enumerator => enumSizedSuchThatTypeclass
         let producerTypeClassFunction :=
-          if useBasalt then unqualifiedBacktrackGenForFn
-          else match producerSort with
-          | .Generator => unqualifiedArbitrarySizedSTFn
-          | .Enumerator => unqualifiedEnumSizedSTFn
+          match useBasalt, producerSort with
+          | true, .Generator => unqualifiedBacktrackGenForFn
+          | true, .Enumerator => unqualifiedEnumForFn
+          | false, .Generator => unqualifiedArbitrarySizedSTFn
+          | false, .Enumerator => unqualifiedEnumSizedSTFn
         let arbitraryTypeParamInstances ← mkTypeClassInstanceBinders typeParams instTypeClasses
         `(command|
           instance $arbitraryTypeParamInstances:bracketedBinder* : $producerTypeClass $targetTypeSyntax (fun $targetVarPattern => @$(mkIdent inductiveName) $args*) where

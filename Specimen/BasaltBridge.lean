@@ -4,6 +4,8 @@ import Basalt.PlausibleGen
 import Plausible.Arbitrary
 import Plausible.ArbitraryFueled
 import Specimen.ArbitrarySizedSuchThat
+import Specimen.Enumerators
+import Specimen.GeneratorCombinators
 import Specimen.BasaltClasses
 
 /-!
@@ -60,6 +62,26 @@ instance (priority := low) [Basalt.Arbitrary α] : Plausible.Arbitrary α where
 instance (priority := low) [Basalt.ArbitraryFueled α] : Plausible.ArbitraryFueled α where
   arbitraryFueled n := Basalt.ArbitraryFueled.arbitraryFueled (G := Plausible.Gen) n
 
+/-- A Basalt-derived enumerator's run at `ExceptT Exhaustion Finite`, as the lazy list Specimen's
+enumerator consumers read: each success, and each label as `Gen.outOfFuelError`, which a checker reads
+as inconclusive. An undefined run (infinite, which a derived enumerator over `EnumFueled` leaves is not)
+is one inconclusive entry. -/
+def Specimen.toEnumeratorEntries (x : Specimen.Finite (Except Specimen.Exhaustion α)) :
+    LazyList (Except GenError α) :=
+  match x.toList? with
+  | none => LazyList.fromList [.error Gen.outOfFuelError]
+  | some l => LazyList.fromList (l.map fun
+      | .ok a => .ok a
+      | .error _ => .error Gen.outOfFuelError)
+
+/-- A Basalt-derived enumerator runs as an `EnumSizedSuchThat`, read at `ExceptT Exhaustion Finite`:
+everything up to the size, by its law exactly what the enumerator can succeed with. A derived
+checker's premise is enumerated this way, at the checker's budget. Low priority, as above. -/
+instance (priority := low) {α : Type} {P : α → Prop} [EnumFor α P] : EnumSizedSuchThat α P where
+  enumSizedST size := fun _ =>
+    Specimen.toEnumeratorEntries
+      (EnumFor.enum (P := P) (G := ExceptT Specimen.Exhaustion Specimen.Finite) size).run
+
 /-! ## Leaf instances for equality constraints
 
 Derived schedules bottom out in premises `x = e` (or `e = x`) whenever an output is determined by
@@ -76,10 +98,22 @@ an equality premise. -/
 instance instBacktrackGenForEqLeft {α : Type} {val : α} : BacktrackGenFor α (fun x => val = x) where
   gen _ := pure val
 
+instance instEnumForEqRight {α : Type} {val : α} : EnumFor α (fun x => x = val) where
+  enum _ := pure val
+
+instance instEnumForEqLeft {α : Type} {val : α} : EnumFor α (fun x => val = x) where
+  enum _ := pure val
+
 /-- A pair constrained to be equal: generate one value and duplicate it. The counterpart of Specimen's
 `ArbitrarySizedSuchThat (α × α) (fun (l, r) => l = r)`. -/
 instance instBacktrackGenForEqPair {α : Type} [Basalt.Arbitrary α] :
     BacktrackGenFor (α × α) (fun (l, r) => l = r) where
   gen _ := do
     let a ← Basalt.Arbitrary.arbitrary
+    pure (a, a)
+
+instance instEnumForEqPair {α : Type} [Specimen.EnumFueled α] :
+    EnumFor (α × α) (fun (l, r) => l = r) where
+  enum n := do
+    let a ← Specimen.EnumFueled.enumFueled n
     pure (a, a)

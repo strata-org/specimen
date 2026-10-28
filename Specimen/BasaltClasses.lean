@@ -174,3 +174,65 @@ instance [ArbitraryFueled α] [ArbitraryFueled β] : ArbitraryFueled (α ⊕ β)
     fun () => Sum.inr <$> ArbitraryFueled.arbitraryFueled (α := β) n]
 
 end Basalt
+
+/-- An enumerator for `α` whose successes satisfy `P`, taking a size: the Basalt counterpart of
+`EnumSizedSuchThat`. The same code as a generator's, over the same classes, written with the
+enumerator's schedule; which reading it runs at is the caller's (`Specimen.BasaltBridge` reads it at
+`ExceptT Exhaustion Finite`, everything up to the size). -/
+class EnumFor (α : Type) (P : α → Prop) where
+  enum : ∀ {G : Type → Type} [Gen G] [Specimen.Fail G] [Specimen.FailWith Specimen.Exhaustion G]
+    [Specimen.Backtrack G] [Specimen.MonoBacktrack G], Nat → G α
+
+namespace Specimen
+
+open RandomChoice
+
+/-- Every value of `α` up to a size, for a derived enumerator's unconstrained values: finitely many at
+each size, each once, at an enumeration. Not `Basalt.ArbitraryFueled`, whose base generators are
+geometric (infinite at an enumeration) or weighted (each value once per unit of weight); a datatype gets
+one with `deriving instance Specimen.EnumFueled for T`. -/
+class EnumFueled (α : Type) where
+  enumFueled : ∀ {G : Type → Type} [Gen G], Nat → G α
+
+instance : EnumFueled Nat := ⟨fun n => chooseNat 0 n⟩
+
+instance : EnumFueled Bool := ⟨fun _ => do pure ((← chooseNat 0 1) == 0)⟩
+
+instance : EnumFueled Unit := ⟨fun _ => pure ()⟩
+
+instance : EnumFueled (Fin (n + 1)) := ⟨fun _ => do
+  let m ← choose 0 n (Nat.zero_le n)
+  pure ⟨m.down.val, Nat.lt_succ_of_le m.down.property.2⟩⟩
+
+/-- `-n` to `n`. -/
+instance : EnumFueled Int := ⟨fun n => do pure ((← chooseNat 0 (2 * n) : Nat) - (n : Int))⟩
+
+/-- Printable ASCII, `' '` through `'~'`, at every size. -/
+instance : EnumFueled Char := ⟨fun _ => do pure (Char.ofNat (← chooseNat 32 126))⟩
+
+instance [EnumFueled α] : EnumFueled (Option α) where
+  enumFueled n := oneOf [fun () => pure none, fun () => some <$> EnumFueled.enumFueled n]
+
+instance [EnumFueled α] [EnumFueled β] : EnumFueled (α × β) where
+  enumFueled n := do
+    let a ← EnumFueled.enumFueled n
+    let b ← EnumFueled.enumFueled n
+    pure (a, b)
+
+instance [EnumFueled α] [EnumFueled β] : EnumFueled (α ⊕ β) where
+  enumFueled n := oneOf [fun () => Sum.inl <$> EnumFueled.enumFueled n,
+    fun () => Sum.inr <$> EnumFueled.enumFueled n]
+
+/-- Lists of length at most the size, each element up to the size. -/
+protected def List.enumFueledGen [Gen G] [EnumFueled α] (m : Nat) : Nat → G (List α)
+  | 0 => pure []
+  | k + 1 => oneOf [fun () => pure [], fun () => do
+      let x ← EnumFueled.enumFueled m
+      let xs ← List.enumFueledGen m k
+      pure (x :: xs)]
+
+instance [EnumFueled α] : EnumFueled (List α) := ⟨fun n => List.enumFueledGen n n⟩
+
+instance : EnumFueled String := ⟨fun n => do pure (String.ofList (← EnumFueled.enumFueled (α := List Char) n))⟩
+
+end Specimen

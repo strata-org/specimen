@@ -812,6 +812,12 @@ private def weightedBranch (weight subProducer : TSyntax `term) : TermElabM (TSy
   else
     `( ($weight, $subProducer) )
 
+/-- An enumerator's branch: under `specimen.emitBasalt` a weighted function like a generator's, weight
+`1` since an enumeration reads only whether a weight is zero; otherwise the producer itself. -/
+private def enumeratorBranch (subProducer : TSyntax `term) : TermElabM (TSyntax `term) := do
+  if Lean.Option.get (← getOptions) specimen.emitBasalt then weightedBranch (← `(1)) subProducer
+  else pure subProducer
+
 /-- Whether this derive filters its generator branches by their input guard (`specimen.dispatchInputs`). -/
 private def dispatching (sort : DeriveSort) : CoreM Bool :=
   return sort == .Generator && specimen.dispatchInputs.get (← getOptions)
@@ -833,7 +839,8 @@ private def guardIf (sort : DeriveSort) (steps : List ScheduleStep) (t : TSyntax
     the non-recursive constructors alone. -/
 private def truncationBranch (sort : DeriveSort) (steps : List ScheduleStep) (outputType : Expr)
     (fuelPrimeName targetInductive : Name) : TermElabM (Option (TSyntax `term)) := do
-  unless Lean.Option.get (← getOptions) specimen.emitBasalt && sort == .Generator do return none
+  unless Lean.Option.get (← getOptions) specimen.emitBasalt && (sort == .Generator || sort == .Enumerator) do
+    return none
   let (body, _) ← StateT.run (s := #[]) (do
     let mexp ← MExp.truncationToMExp steps (.MId `initSize) outputType
       (fuelPrimeName := fuelPrimeName) (targetInductive := targetInductive)
@@ -1028,7 +1035,7 @@ def deriveConstrainedProducer
                      numBaseLit, numRecLit, numRecCallsLit]
                 let finalWeight ← foldedWeight weightFnIdent modifierIdent args freshSizePrimeName
                 weightedBranch finalWeight subProducer
-              | .Enumerator => pure subProducer
+              | .Enumerator => enumeratorBranch subProducer
             recursiveProducers := recursiveProducers.push (← guardIf deriveSort schedule.1 subProducerTerm)
             if let some t ← truncationBranch deriveSort schedule.1 outputType freshFuelPrimeName inductiveName then
               truncationProducers := truncationProducers.push t
@@ -1041,7 +1048,7 @@ def deriveConstrainedProducer
                      numBaseLit, numRecLit, numRecCallsLit]
                 let finalWeight ← foldedWeight weightFnIdent modifierIdent args freshSizePrimeName
                 weightedBranch finalWeight subProducer
-              | .Enumerator => pure subProducer
+              | .Enumerator => enumeratorBranch subProducer
             nonRecursiveProducers := nonRecursiveProducers.push (← guardIf deriveSort schedule.1 subGeneratorTerm)
 
         | none => throwError m!"Unable to derive producer schedule for constructor {ctorName}"
@@ -1103,7 +1110,7 @@ private def compileWeightedProducer
          numBaseLit, numRecLit, numRecCallsLit]
     let finalWeight ← foldedWeight weightFnIdent modifierIdent args sizePrimeName
     weightedBranch finalWeight subProducer
-  | .Enumerator => pure subProducer
+  | .Enumerator => enumeratorBranch subProducer
   | .Checker | .Theorem => `(fun (_ : Unit) => $subProducer)
 
 /-- Walk a ConstructorExpr tree and collect which type params it references. -/
@@ -1495,8 +1502,12 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
           let failsafe ← `((fun (_ : Unit) => $failFn $(mkIdent ``Gen.outOfFuelError)))
           pure (nonRecursiveProducers.push failsafe)
         | .Enumerator =>
-          let failsafe ← `($failFn $(mkIdent ``Gen.outOfFuelError))
-          pure (nonRecursiveProducers.push failsafe)
+          -- Under Basalt the truncation branches say what this failsafe says, per constructor.
+          if Lean.Option.get (← getOptions) specimen.emitBasalt then
+            pure (nonRecursiveProducers ++ truncationProducers)
+          else
+            let failsafe ← `($failFn $(mkIdent ``Gen.outOfFuelError))
+            pure (nonRecursiveProducers.push failsafe)
         | .Generator => pure (nonRecursiveProducers ++ truncationProducers)
       else
         pure nonRecursiveProducers
@@ -1977,7 +1988,7 @@ def deriveConstrainedProducerParts
                      numBaseLit, numRecLit, numRecCallsLit]
                 let finalWeight ← foldedWeight weightFnIdent modifierIdent args freshSizePrimeName
                 weightedBranch finalWeight subProducer
-              | .Enumerator => pure subProducer
+              | .Enumerator => enumeratorBranch subProducer
             recursiveProducers := recursiveProducers.push (← guardIf deriveSort rewrittenSteps subProducerTerm)
             if let some t ← truncationBranch deriveSort rewrittenSteps _outputType freshFuelPrimeName
                 inductiveName then
@@ -1990,7 +2001,7 @@ def deriveConstrainedProducerParts
                      numBaseLit, numRecLit, numRecCallsLit]
                 let finalWeight ← foldedWeight weightFnIdent modifierIdent args freshSizePrimeName
                 weightedBranch finalWeight subProducer
-              | .Enumerator => pure subProducer
+              | .Enumerator => enumeratorBranch subProducer
             nonRecursiveProducers := nonRecursiveProducers.push (← guardIf deriveSort rewrittenSteps subGeneratorTerm)
         | none => throwError m!"Unable to derive producer schedule for constructor {ctorName}"
       if nonRecursiveProducers.isEmpty && recursiveProducers.isEmpty then
@@ -2493,9 +2504,13 @@ def elabDeriveMutual : CommandElab := fun stx => do
                   | _ => false
                 let isInternal := usedKeys.toList.any (·.inductiveName == indName)
                 if !hasTP && !isInternal then
-                  let tcName := match ps with
-                    | .Generator => ``Plausible.Arbitrary
-                    | .Enumerator => ``Enum
+                  -- Under Basalt, the classes the emitted code draws unconstrained values through.
+                  let basalt := Lean.Option.get (← getOptions) specimen.emitBasalt
+                  let tcName := match basalt, ps with
+                    | true, .Generator => Name.mkStr2 "Basalt" "ArbitraryFueled"
+                    | true, .Enumerator => Name.mkStr2 "Specimen" "EnumFueled"
+                    | false, .Generator => ``Plausible.Arbitrary
+                    | false, .Enumerator => ``Enum
                   let instExists ← liftTermElabM <| Meta.withNewMCtxDepth do
                     try
                       let depInfo ← getConstInfoInduct indName
