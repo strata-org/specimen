@@ -1,8 +1,8 @@
 import Specimen.Correctness.Semantics
 import Specimen.BasaltClasses
-import Basalt.BacktrackWith
+import Specimen.Enum.BacktrackWith
 import Basalt.OptionT
-import Basalt.Enum.BacktrackWithLaws
+import Specimen.Enum.Laws.BacktrackWith
 
 /-!
 # Generic relation-level generator interpreter, at Basalt's `SPMF`
@@ -19,7 +19,7 @@ definition can be read at `SGen`, Basalt's `SPMF` with a refutation (`OptionT`) 
 There:
 
 * the bind law is `SPMF.mem_support_bind_iff`, through the two transformers, and
-* the backtrack law is `Basalt.Backtrack.mem_support_searchWith_ok` and its converse.
+* the backtrack law is `Specimen.Backtrack.mem_support_searchWith_ok` and its converse.
 
 Both are theorems, so the results below, soundness **and** completeness, use only Lean's standard
 axioms `propext`, `Classical.choice` and `Quot.sound` (`SPMF` is classical).
@@ -104,14 +104,14 @@ transformers' short-circuiting, and it is why branch proofs never mention a fail
 /-- Decompose a successful `bind`. -/
 theorem produces_bind {A B : Type} {g : SGen A} {f : A → SGen B} {b : B}
     (h : Produces (g >>= f) b) : ∃ a, Produces g a ∧ Produces (f a) b := by
-  rcases (Basalt.EnumeratesWith.mem_support_run_bind (.ok b)).mp h with h | ⟨_, _, h⟩
+  rcases (Specimen.EnumeratesWith.mem_support_run_bind (.ok b)).mp h with h | ⟨_, _, h⟩
   · exact h
   · cases h
 
 /-- Build a successful `bind`. -/
 theorem produces_bind_of {A B : Type} {g : SGen A} {f : A → SGen B} {a : A} {b : B}
     (ha : Produces g a) (hb : Produces (f a) b) : Produces (g >>= f) b :=
-  (Basalt.EnumeratesWith.mem_support_run_bind (.ok b)).mpr (.inl ⟨a, ha, hb⟩)
+  (Specimen.EnumeratesWith.mem_support_run_bind (.ok b)).mpr (.inl ⟨a, ha, hb⟩)
 
 @[simp] theorem produces_bind_iff {A B : Type} {g : SGen A} {f : A → SGen B} {b : B} :
     Produces (g >>= f) b ↔ ∃ a, Produces g a ∧ Produces (f a) b :=
@@ -125,22 +125,22 @@ theorem produces_bind_of {A B : Type} {g : SGen A} {f : A → SGen B} {a : A} {b
 
 /-- What `backtrack` can produce is what its branches of positive weight can. -/
 theorem produces_backtrack_iff (gs : List (Nat × (Unit → SGen A))) (x : A) :
-    Produces (Basalt.Backtrack.backtrack gs) x ↔ ∃ p ∈ gs, 0 < p.1 ∧ Produces (p.2 ()) x :=
-  ⟨Basalt.Backtrack.mem_support_searchWith_ok gs.length gs none x,
-   fun ⟨p, hp, hk, h⟩ => Basalt.Backtrack.mem_support_searchWith_ok_of_branch gs.length gs none
+    Produces (Specimen.Backtrack.backtrack gs) x ↔ ∃ p ∈ gs, 0 < p.1 ∧ Produces (p.2 ()) x :=
+  ⟨Specimen.Backtrack.mem_support_searchWith_ok gs.length gs none x,
+   fun ⟨p, hp, hk, h⟩ => Specimen.Backtrack.mem_support_searchWith_ok_of_branch gs.length gs none
      p hp hk (List.length_pos_of_mem hp) x h⟩
 
 /-- A success of `backtrack` came from a branch of positive weight: `pickDrop` only ever selects an
 entry `n` fell strictly below, so the witness is live. -/
 theorem produces_backtrack_ok (gs : List (Nat × (Unit → SGen A))) (x : A)
-    (h : Produces (Basalt.Backtrack.backtrack gs) x) : ∃ p ∈ gs, 0 < p.1 ∧ Produces (p.2 ()) x :=
+    (h : Produces (Specimen.Backtrack.backtrack gs) x) : ∃ p ∈ gs, 0 < p.1 ∧ Produces (p.2 ()) x :=
   (produces_backtrack_iff gs x).mp h
 
 /-- A success of a branch of positive weight is one of `backtrack`; a zero-weight branch is never
 drawn. -/
 theorem produces_backtrack_of_branch (gs : List (Nat × (Unit → SGen A))) (p : Nat × (Unit → SGen A))
     (hp : p ∈ gs) (hk : 0 < p.1) (x : A) (h : Produces (p.2 ()) x) :
-    Produces (Basalt.Backtrack.backtrack gs) x :=
+    Produces (Specimen.Backtrack.backtrack gs) x :=
   (produces_backtrack_iff gs x).mpr ⟨p, hp, hk, h⟩
 
 /-! The failures as `simp` facts, so that `simp` closes a branch that ends in one — the `size = 0`
@@ -214,13 +214,13 @@ theorem neverFails_bind {A B : Type} {g : SGen A} {f : A → SGen B} (hg : Never
   · rcases mem_support_run_bind_none.mp ho with h | ⟨a, ha, h⟩
     · obtain ⟨_, h⟩ := hg _ h; cases h
     · obtain ⟨_, h⟩ := hf a ha _ h; cases h
-  · rcases (Basalt.EnumeratesWith.mem_support_run_bind r).mp ho with ⟨a, ha, h⟩ | ⟨e, he, rfl⟩
+  · rcases (Specimen.EnumeratesWith.mem_support_run_bind r).mp ho with ⟨a, ha, h⟩ | ⟨e, he, rfl⟩
     · exact hf a ha _ h
     · obtain ⟨_, h⟩ := hg _ he; cases h
 
 section search
 
-open Basalt.Backtrack
+open Specimen.Backtrack
 
 variable {β : Type}
 
@@ -323,7 +323,7 @@ theorem refutes_searchWith : ∀ (fuel : Nat) (gs : List (Nat × (Unit → SGen 
 
 /-- What `backtrack` refutes, every branch of positive weight can refute. -/
 theorem refutes_backtrack {gs : List (Nat × (Unit → SGen A))}
-    (h : Refutes (Basalt.Backtrack.backtrack gs)) : ∀ p ∈ gs, 0 < p.1 → Refutes (p.2 ()) :=
+    (h : Refutes (Specimen.Backtrack.backtrack gs)) : ∀ p ∈ gs, 0 < p.1 → Refutes (p.2 ()) :=
   (refutes_searchWith gs.length gs none (Nat.le_refl _) h).2
 
 @[simp] theorem refutes_truncated_iff : Refutes (Specimen.truncated : SGen A) ↔ False :=
@@ -372,7 +372,7 @@ theorem neverFails_searchWith : ∀ (fuel : Nat) (gs : List (Nat × (Unit → SG
 /-- `backtrack` with a branch of positive weight that cannot fail cannot fail. -/
 theorem neverFails_backtrack (gs : List (Nat × (Unit → SGen A))) (p : Nat × (Unit → SGen A))
     (hp : p ∈ gs) (hk : 0 < p.1) (h : NeverFails (p.2 ())) :
-    NeverFails (Basalt.Backtrack.backtrack gs) :=
+    NeverFails (Specimen.Backtrack.backtrack gs) :=
   neverFails_searchWith gs.length gs none p hp hk h (Nat.le_refl _)
 
 end search
@@ -521,7 +521,7 @@ theorem genRelB_fuel_mono {step : SGenStep I A} (h : StepGenMono step) :
 
 /-! ## Relation-level assembly
 
-The emitted code is always `Basalt.Backtrack.backtrack` over one branch per constructor, each a function
+The emitted code is always `Specimen.Backtrack.backtrack` over one branch per constructor, each a function
 of `Unit` so only the selected branch is built, so the two `Step*` obligations above reduce to
 per-branch obligations. This is the generator counterpart of `stepBacktrack_sound`/`stepBacktrack_refute`
 in `CheckerInterp.lean`.
@@ -536,7 +536,7 @@ abbrev BranchList (I A : Type) := (Nat → I → SGen A) → Nat → I → List 
 
 /-- The step built by backtracking over the branch list. -/
 noncomputable def stepBacktrackB (branches : BranchList I A) : SGenStep I A :=
-  fun prev sz i => Basalt.Backtrack.backtrack (branches prev sz i)
+  fun prev sz i => Specimen.Backtrack.backtrack (branches prev sz i)
 
 /-- Soundness reduces to: *every* branch is sound. -/
 theorem stepBacktrackB_sound {branches : BranchList I A} {P : I → A → Prop}

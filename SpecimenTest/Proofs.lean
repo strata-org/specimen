@@ -17,3 +17,9 @@ import SpecimenTest.Correctness.DerivedGeneratorViaInterp
 import SpecimenTest.Correctness.TypingBridge
 -- …and the three-valued verdict discipline: an inconclusive premise never becomes a refutation
 import SpecimenTest.Correctness.VerdictFidelity
+-- The enumeration readings' laws, hosted in `Specimen.Enum`, walked for Basalt's generators, at each
+-- reading's choice among branches, and for a derived generator
+import Specimen.Enum.Laws
+import SpecimenTest.Correctness.EnumLaws
+import SpecimenTest.Correctness.EnumBacktrackingTest
+import SpecimenTest.Correctness.DerivedEnumLaw

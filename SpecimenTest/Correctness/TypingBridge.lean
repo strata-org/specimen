@@ -69,7 +69,7 @@ noncomputable def typStep (iS : Nat) : SGenStep (List type × type) term :=
   fun prev sz i =>
     match sz with
     | 0 =>
-      Basalt.Backtrack.backtrack
+      Specimen.Backtrack.backtrack
         (List.filterMap (fun o => o)
           [if (match i.2 with | type.Nat => true | _ => false) then
               some (4, fun (_ : Unit) =>
@@ -80,7 +80,7 @@ noncomputable def typStep (iS : Nat) : SGenStep (List type × type) term :=
                 | _ => Specimen.refute)
             else none,
             some (3, fun (_ : Unit) =>
-              @BacktrackGenFor.gen _ (fun (x : Nat) => @lookup i.1 x i.2) _ SGen _ _ _ _ iS >>=
+              @BacktrackGenFor.gen _ (fun (x : Nat) => @lookup i.1 x i.2) _ SGen _ _ _ _ _ iS >>=
                 fun x => pure (term.Var x)),
             if (match i.2 with | type.Nat => true | _ => false) then
               some (1, fun (_ : Unit) =>
@@ -96,7 +96,7 @@ noncomputable def typStep (iS : Nat) : SGenStep (List type × type) term :=
             else none,
             some (1, fun (_ : Unit) => Specimen.truncated)])
     | Nat.succ size' =>
-      Basalt.Backtrack.backtrack
+      Specimen.Backtrack.backtrack
         (List.filterMap (fun o => o)
           [if (match i.2 with | type.Nat => true | _ => false) then
               some (4, fun (_ : Unit) =>
@@ -107,7 +107,7 @@ noncomputable def typStep (iS : Nat) : SGenStep (List type × type) term :=
                 | _ => Specimen.refute)
             else none,
             some (3, fun (_ : Unit) =>
-              @BacktrackGenFor.gen _ (fun (x : Nat) => @lookup i.1 x i.2) _ SGen _ _ _ _ iS >>=
+              @BacktrackGenFor.gen _ (fun (x : Nat) => @lookup i.1 x i.2) _ SGen _ _ _ _ _ iS >>=
                 fun x => pure (term.Var x)),
             if (match i.2 with | type.Nat => true | _ => false) then
               some (3, fun (_ : Unit) =>
@@ -172,7 +172,7 @@ theorem typStep_sound (iS : Nat) (hlk : LookupSound iS) : StepGenSoundB (typStep
     cases produces_pure_iff.mp he
     exact typing.TConst Γ n
   have tvar : ∀ τ,
-      Produces ((@BacktrackGenFor.gen _ (fun (x : Nat) => @lookup Γ x τ) _ SGen _ _ _ _ iS >>=
+      Produces ((@BacktrackGenFor.gen _ (fun (x : Nat) => @lookup Γ x τ) _ SGen _ _ _ _ _ iS >>=
         fun x => pure (term.Var x)) : SGen term) x → typing Γ x τ := by
     intro τ hqa
     obtain ⟨n, hn, he⟩ := produces_bind_iff.mp hqa
@@ -292,7 +292,7 @@ theorem typStep_complete (iS : Nat) (hlkc : LookupComplete iS) :
   | TVar =>
     rename_i x hlkd
     simp only [varBound] at hv hlf
-    have body : Produces ((@BacktrackGenFor.gen _ (fun (x : Nat) => @lookup Γ x τ) _ SGen _ _ _ _ iS >>=
+    have body : Produces ((@BacktrackGenFor.gen _ (fun (x : Nat) => @lookup Γ x τ) _ SGen _ _ _ _ _ iS >>=
         fun x => pure (term.Var x)) : SGen term) (term.Var x) :=
       produces_bind_of (hlkc Γ τ x hlkd (by omega) (by omega)) (produces_pure_iff.mpr rfl)
     cases τ with

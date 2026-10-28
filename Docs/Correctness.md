@@ -70,6 +70,11 @@ own adequacy lemma and bridge.
   `GenRel`, so `walk fixpoint` proves it per leaf), and the base `Nat` generator's completeness.
   A generator emitted under `specimen.emitBasalt` is polymorphic in Basalt's `Gen` class, so the same
   emitted definition is read at `SPMF` for reasoning and at `Plausible.Gen` for running.
+- **`Specimen.Enum.Laws`** — the laws of the enumeration readings hosted in `Specimen.Enum`: at
+  `Finite`, `WFinite` and `CostGraded Finite`, with and without failure and labels, a run is related to
+  the generator's `SPMF` meaning by a `GenRel`, so `walk` proves it per generator.
+  `SpecimenTest/Correctness/EnumLaws.lean` and `EnumBacktrackingTest.lean` are their regression tests;
+  `DerivedEnumLaw.lean` walks one for a derived generator (`EnumeratesWith` for `Between`).
 - **`EvSlice.lean`** — evenness end to end against the real relation: checker and enumerator sound and
   complete, generator sound at `Plausible.Gen`, plus `Ev` reflected as a `RelSpec` with its adequacy
   proof.

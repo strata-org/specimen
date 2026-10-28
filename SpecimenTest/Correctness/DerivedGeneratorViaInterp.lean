@@ -73,7 +73,7 @@ noncomputable def lkStep (iS : Nat) : SGenStep (List type × type) Nat :=
   fun prev sz i =>
     match sz with
     | 0 =>
-      Basalt.Backtrack.backtrack
+      Specimen.Backtrack.backtrack
         (List.filterMap (fun o => o)
           [if (match i.1 with | List.cons _ _ => true | _ => false) then
               some (1, fun (_ : Unit) =>
@@ -92,7 +92,7 @@ noncomputable def lkStep (iS : Nat) : SGenStep (List type × type) Nat :=
                 | _ => Specimen.refute)
             else none])
     | Nat.succ size' =>
-      Basalt.Backtrack.backtrack
+      Specimen.Backtrack.backtrack
         (List.filterMap (fun o => o)
           [if (match i.1 with | List.cons _ _ => true | _ => false) then
               some (1, fun (_ : Unit) =>

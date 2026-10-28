@@ -34,7 +34,7 @@ theorem bind {x : SPMF α} {y : SGen α} {k : α → SPMF β} {k' : α → SGen 
 
 theorem map {x : SPMF α} {y : SGen α} (f : α → β) (hx : ReachesAll x y) :
     ReachesAll (f <$> x) (f <$> y) := by
-  rw [← LawfulMonad.bind_pure_comp, Basalt.EnumeratesWith.map_eq_bind]
+  rw [← LawfulMonad.bind_pure_comp, Specimen.EnumeratesWith.map_eq_bind]
   exact bind (fun a => pure (f a)) hx
 
 theorem default (y : SGen α) : ReachesAll Inhabited.default y := fun a ha => by
