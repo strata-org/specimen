@@ -1661,7 +1661,7 @@ def instanceExistsFor (key : SpecKey) (plausible : Bool := false) : TermElabM Bo
             let basaltParams := !plausible && key.deriveSort == .Generator
               && Lean.Option.get (← getOptions) specimen.emitBasalt && (← getEnv).contains `BacktrackGenFor
             if basaltParams && argTy.isSort then
-              discard <| Meta.isDefEq argTy (mkSort levelOne)
+              discard <| Meta.isDefEq argTy (mkSort Level.one)
             let argTy ← instantiateMVars argTy
             withLocalDecl name bi argTy fun fv => do
               -- If Sort-typed, add Arbitrary + DecidableEq instance fvars
