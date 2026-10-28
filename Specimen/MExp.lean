@@ -600,6 +600,26 @@ def scheduleStepToMExp (step : ScheduleStep) (defFuel : MExp) (k : MExp) (output
   | .Match explicit scrutinee pattern =>
     pure $ .MMatch explicit (.MId scrutinee) [(pattern, k), (wildCardPattern, .MFail)]
 
+/-- The steps of a recursive constructor's schedule that decide whether its conclusion applies to the
+    inputs: its leading input matches, and the checks on inputs alone that follow them (a non-linear
+    conclusion's equalities among them). -/
+def conclusionSteps (steps : List ScheduleStep) : List ScheduleStep :=
+  steps.takeWhile fun
+    | .Match .. => true
+    | .Check (.NonRec _) _ => true
+    | _ => false
+
+/-- The `size = 0` stand-in for a recursive constructor: its conclusion is matched against the inputs
+    (`conclusionSteps`), and where it matches the constructor is cut off with `Specimen.truncated`
+    rather than refuted, since it would apply at a larger size. Where it does not match, the match
+    fails and refutes, so a disjunction none of whose recursive constructors could apply is still
+    refuted. Nothing after the conclusion is run, so no size is spent. -/
+def truncationToMExp (steps : List ScheduleStep) (defFuel : MExp) (recType : Expr)
+    (fuelPrimeName : Name := `fuel') (targetInductive : Name := `_unknown) : CompileScheduleM MExp :=
+  List.foldrM (fun step acc => scheduleStepToMExp step defFuel acc recType fuelPrimeName
+      (.MLit (.natVal 0)) targetInductive)
+    (.MConst (Name.mkStr2 "Specimen" "truncated")) (conclusionSteps steps)
+
 /-- Converts a `Schedule` (a list of `ScheduleStep`s along with a `ScheduleSort`,
     which acts as the conclusion of the schedule) to an `MExp`.
     - `mfuel` and `defFuel` are auxiliary `MExp`s representing the fuel

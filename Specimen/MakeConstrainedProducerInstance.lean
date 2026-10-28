@@ -12,28 +12,6 @@ import Specimen.Debug
 open Lean Elab Command Meta Term Parser Std
 open Idents Schedules
 
-/-- The size-0 branch of a derived producer. At `size = 0` only the *non-recursive* constructors are
-    offered, so a failure of that list is not a refutation of the relation: a recursive constructor that
-    was never tried might have succeeded. Downgrade `refuted` to `exhausted` there — but only when
-    recursive constructors actually exist. For a wholly non-recursive relation the size-0 list is
-    complete, its refutation is genuine, and a checker's "no" depends on keeping it.
-
-    The condition is read off the two generator lists rather than threaded in: both are built from the
-    same `nonRecursiveProducers` array, as `[nonRec…]` and `[nonRec…, rec…]`, so they print identically
-    exactly when there are no recursive constructors. That keeps the decision local instead of widening
-    two tuples across the deriver.
-
-    Basalt path only (`useBasalt`): the Plausible path signals this through `GenError` strings and
-    re-classifying those is a separate change. -/
-private def wrapZeroCase (useBasalt : Bool) (baseGenerators inductiveGenerators : TSyntax `term)
-    (combinatorFn : Ident) : TermElabM (TSyntax `term) := do
-  let sameList :=
-    match baseGenerators.raw.reprint, inductiveGenerators.raw.reprint with
-    | some a, some b => a == b
-    | _, _ => false
-  if useBasalt && !sameList then
-    `($combinatorFn ($baseGenerators ++ [(1, fun (_ : $(mkIdent ``Unit)) => $basaltTruncatedFn)]))
-  else `($combinatorFn $baseGenerators)
 
 /-- Extracts the name of the induction relation and its arguments -/
 def parseInductiveApp (body : Term) :
@@ -142,7 +120,7 @@ def mkConstrainedProducerTypeClassInstance
     -- Create the inner match on size (base vs recursive constructors)
     let mut sizeCaseExprs := #[]
     let zeroCase ← `(Term.matchAltExpr|
-      | $(mkIdent ``Nat.zero) => $(← wrapZeroCase useBasalt baseGenerators inductiveGenerators combinatorFn))
+      | $(mkIdent ``Nat.zero) => $combinatorFn $baseGenerators)
     sizeCaseExprs := sizeCaseExprs.push zeroCase
 
     let succCase ← `(Term.matchAltExpr| | $(mkIdent ``Nat.succ) $freshSize' => $combinatorFn $inductiveGenerators)
@@ -314,7 +292,7 @@ def mkConstrainedProducerMutualPieces
 
     let mut sizeCaseExprs := #[]
     sizeCaseExprs := sizeCaseExprs.push (← `(Term.matchAltExpr|
-      | $(mkIdent ``Nat.zero) => $(← wrapZeroCase useBasalt baseGenerators inductiveGenerators combinatorFn)))
+      | $(mkIdent ``Nat.zero) => $combinatorFn $baseGenerators))
     sizeCaseExprs := sizeCaseExprs.push (← `(Term.matchAltExpr| | $(mkIdent ``Nat.succ) $freshSize' => $combinatorFn $inductiveGenerators))
     let sizeMatchExpr ← mkMatchExpr sizeIdent sizeCaseExprs
 

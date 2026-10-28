@@ -145,10 +145,6 @@ def unqualifiedBacktrackGenForFn : Ident := mkIdent $ Name.mkStr1 "gen"
     built. -/
 def basaltBacktrackFn : Ident := mkIdent $ Name.mkStr3 "Basalt" "Backtrack" "backtrack"
 
-/-- `Specimen.truncated`: at `size = 0`, where the recursive constructors were withheld, a branch that
-    fails without refuting, so a search whose other branches all refute is not reported refuted. -/
-def basaltTruncatedFn : Ident := mkIdent $ Name.mkStr2 "Specimen" "truncated"
-
 /-- `Specimen.outOfFuel`, replacing `throw Gen.outOfFuelError`. -/
 def backtrackGenExhaustFn : Ident := mkIdent $ Name.mkStr2 "Specimen" "outOfFuel"
 
