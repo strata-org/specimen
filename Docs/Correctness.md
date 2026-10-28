@@ -61,10 +61,13 @@ own adequacy lemma and bridge.
   by `backtrack` from one of its branches (`genSupportAt_backtrack_sub`). The reverse direction fails
   there, because `>>=` threads one `StdGen` through both halves rather than splitting it as QuickChick's
   bind does.
-- **`GenInterpSPMF.lean`** — the generator interpreter again, at Basalt's `SPMF`, where both support
-  laws are *theorems* (`SPMF.mem_support_bind_iff`, `BacktrackGen.mem_support_backtrack_ok_iff`): the
-  `Produces` algebra, soundness **and** measure-pair completeness, fuel monotonicity, refutation from
-  a failed search (`refutes_of_not_produces`), and the mutually-recursive family form (`genRelFam`).
+- **`GenInterpSPMF.lean`** — the generator interpreter again, at `SGen` (`SPMF` under the sampler's
+  `OptionT` and `ExceptT Exhaustion`), where both support laws are *theorems*
+  (`SPMF.mem_support_bind_iff`, Basalt's `mem_support_searchWith_ok`): the `Produces` and `Refutes`
+  algebra, soundness **and** measure-pair completeness, fuel monotonicity, refutation from a failed
+  search (`refutes_of_not_produces`), and the mutually-recursive family form (`genRelFam`).
+- **`LeafSPMF.lean`** — an unconstrained draw at `SGen` reaches its `SPMF` support (`ReachesAll`, a
+  `GenRel`, so `walk fixpoint` proves it per leaf), and the base `Nat` generator's completeness.
   A generator emitted under `specimen.emitBasalt` is polymorphic in Basalt's `Gen` class, so the same
   emitted definition is read at `SPMF` for reasoning and at `Plausible.Gen` for running.
 - **`EvSlice.lean`** — evenness end to end against the real relation: checker and enumerator sound and
@@ -80,9 +83,6 @@ emitter, the scorer's schedule, the dispatch guards or the weights, and they sto
 
 - **`DerivedCheckerSoundness.lean`** — the checker `derive_checker` emits for `Sorted`, proved sound
   through the generic two-counter theory.
-- **`ProducerKindSharing.lean`** — pins that the interpreter is kind-polymorphic (generator theorems
-  apply verbatim at the `enum` kind) while the kinds stay distinct (`backtrack` at the `enum` kind is
-  a type error).
 - **`StlcMeasures.lean`** — the budget measures for the derived STLC generators (`budget`, `tdepth`,
   `varBound`, and the type-draw budget `tyNeed` through `outTy`), plus completeness of the derived
   unconstrained `type` generator.
@@ -100,7 +100,8 @@ emitter, the scorer's schedule, the dispatch guards or the weights, and they sto
   budgets.
 - **`VerdictFidelity.lean`** — the three-valued verdict discipline: a generator whose premise checker
   can only run out of budget can never report a definite refutation. The statement is false of any
-  emission that collapses `error` into `refute`; `Outcome` separates them precisely so it holds.
+  emission that collapses `error` into `refute`; `Fail` and `FailWith` separate them precisely so it
+  holds.
 
 ## Budgets, and why completeness is conditional
 

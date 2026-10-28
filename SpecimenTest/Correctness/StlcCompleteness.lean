@@ -4,7 +4,7 @@ import SpecimenTest.Correctness.StlcMeasures
 import Specimen
 import Specimen.Basalt
 import Specimen.Correctness.GenInterpSPMF
-import Basalt.SPMF.Arbitrary
+
 
 /-!
 # Conditional completeness of the derived STLC well-typed-term generator
@@ -155,7 +155,7 @@ theorem lookup_gen_complete :
     ∀ (Γ : List type) (x : Nat) (τ : type), lookup Γ x τ →
       ∀ (iS fuel sz : Nat), x < fuel → x < sz →
       Produces (specimen_gen_lookup_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness
-        (G := SPMF) fuel iS sz Γ τ) x := by
+        (G := SGen) fuel iS sz Γ τ) x := by
   intro Γ x τ hlk
   induction hlk with
   | Now τ' Γ' =>
@@ -167,7 +167,7 @@ theorem lookup_gen_complete :
       | zero => exact absurd hs (by omega)
       | succ sz =>
         simp only [specimen_gen_lookup_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness]
-        refine BacktrackGen.mem_support_backtrack_of_branch _ _ (List.Mem.head _)
+        refine produces_backtrack_of_branch _ _ (List.Mem.head _)
           (by dsimp only; decide) _ ?_
         -- The `DecOpt` side condition `τ' = τ'` answers `.ok true`, so the branch is a `pure`.
         simp only [DecOpt.decOpt]
@@ -181,7 +181,7 @@ theorem lookup_gen_complete :
       | zero => exact absurd hs (by omega)
       | succ sz =>
         simp only [specimen_gen_lookup_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness]
-        refine BacktrackGen.mem_support_backtrack_of_branch _ _
+        refine produces_backtrack_of_branch _ _
           (List.Mem.tail _ (List.Mem.head _)) (by dsimp only; decide) _ ?_
         exact produces_bind_of (ih iS fuel sz (by omega) (by omega))
           (produces_pure_iff.mpr rfl)
@@ -195,7 +195,7 @@ def Reach (e : term) : Prop :=
     budget e ≤ sz → varBound e ≤ iS → varBound e ≤ 10000 →
     tyNeed Γ e ≤ iS → tdepth e < fuel →
     Produces (specimen_gen_typing_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness
-      (G := SPMF) fuel iS sz Γ τ) e
+      (G := SGen) fuel iS sz Γ τ) e
 
 /-- **Conditional completeness of the derived well-typed-term generator.**
 
@@ -212,20 +212,19 @@ theorem stlc_gen_complete_mutual (e : term) : Reach e := by
       cases fuel with
       | zero => exact absurd hf (Nat.not_lt_zero _)
       | succ fuel =>
-        have body : Produces ((BacktrackGen.liftGen (G := SPMF)
-            (Basalt.ArbitraryFueled.arbitraryFueled iS) >>= fun n => pure (term.Const n))
-            : BacktrackGen SPMF term) (term.Const n) :=
-          produces_bind_of (produces_liftGen_iff.mpr (nat_arbitraryGen_support n))
+        have body : Produces (((Basalt.ArbitraryFueled.arbitraryFueled iS) >>= fun n => pure (term.Const n))
+            : SGen term) (term.Const n) :=
+          produces_bind_of (produces_arbitraryFueled_nat _ n)
             (produces_pure_iff.mpr rfl)
         cases sz with
         | zero =>
           simp only [specimen_gen_typing_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness]
-          refine (BacktrackGen.mem_support_refutedToExhausted_ok_iff _ _).mpr ?_
-          exact BacktrackGen.mem_support_backtrack_of_branch _ _ (List.Mem.head _)
+          refine (produces_backtrack_truncated_iff _ _).mpr ?_
+          exact produces_backtrack_of_branch _ _ (List.Mem.head _)
             (by dsimp only; decide) _ body
         | succ sz =>
           simp only [specimen_gen_typing_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness]
-          exact BacktrackGen.mem_support_backtrack_of_branch _ _ (List.Mem.head _)
+          exact produces_backtrack_of_branch _ _ (List.Mem.head _)
             (by dsimp only; decide) _ body
   | Var x =>
     intro Γ τ iS fuel sz hty _ hv hlf _ hf
@@ -237,7 +236,7 @@ theorem stlc_gen_complete_mutual (e : term) : Reach e := by
       | zero => exact absurd hf (Nat.not_lt_zero _)
       | succ fuel =>
         have body : Produces ((BacktrackGenFor.gen (α := Nat) (P := fun x => lookup Γ x τ)
-            (G := SPMF) iS >>= fun x => pure (term.Var x)) : BacktrackGen SPMF term)
+            (G := SGen) iS >>= fun x => pure (term.Var x)) : SGen term)
             (term.Var x) := by
           refine produces_bind_of ?_ (produces_pure_iff.mpr rfl)
           simp only [BacktrackGenFor.gen]
@@ -248,23 +247,23 @@ theorem stlc_gen_complete_mutual (e : term) : Reach e := by
           cases sz with
           | zero =>
             simp only [specimen_gen_typing_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness]
-            refine (BacktrackGen.mem_support_refutedToExhausted_ok_iff _ _).mpr ?_
-            exact BacktrackGen.mem_support_backtrack_of_branch _ _
+            refine (produces_backtrack_truncated_iff _ _).mpr ?_
+            exact produces_backtrack_of_branch _ _
               (List.Mem.tail _ (List.Mem.head _)) (by dsimp only; decide) _ body
           | succ sz =>
             simp only [specimen_gen_typing_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness]
-            exact BacktrackGen.mem_support_backtrack_of_branch _ _
+            exact produces_backtrack_of_branch _ _
               (List.Mem.tail _ (List.Mem.head _)) (by dsimp only; decide) _ body
         | Fun τ1 τ2 =>
           cases sz with
           | zero =>
             simp only [specimen_gen_typing_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness]
-            refine (BacktrackGen.mem_support_refutedToExhausted_ok_iff _ _).mpr ?_
-            exact BacktrackGen.mem_support_backtrack_of_branch _ _ (List.Mem.head _)
+            refine (produces_backtrack_truncated_iff _ _).mpr ?_
+            exact produces_backtrack_of_branch _ _ (List.Mem.head _)
               (by dsimp only; decide) _ body
           | succ sz =>
             simp only [specimen_gen_typing_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness]
-            exact BacktrackGen.mem_support_backtrack_of_branch _ _ (List.Mem.head _)
+            exact produces_backtrack_of_branch _ _ (List.Mem.head _)
               (by dsimp only; decide) _ body
   | Add a b iha ihb =>
     intro Γ τ iS fuel sz hty hs hv hlf ht hf
@@ -282,7 +281,7 @@ theorem stlc_gen_complete_mutual (e : term) : Reach e := by
           simp only [tyNeed] at ht
           simp only [tdepth] at hf
           simp only [specimen_gen_typing_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness]
-          refine BacktrackGen.mem_support_backtrack_of_branch _ _
+          refine produces_backtrack_of_branch _ _
             (List.Mem.tail _ (List.Mem.tail _ (List.Mem.head _))) (by dsimp only; decide) _ ?_
           refine produces_bind_of
             (iha Γ type.Nat iS fuel (sz / 2) h1 (need_rec_left hs) (by omega) (by omega)
@@ -303,7 +302,7 @@ theorem stlc_gen_complete_mutual (e : term) : Reach e := by
         | zero => exact absurd hs (by simp only [budget]; omega)
         | succ sz =>
           simp only [specimen_gen_typing_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness]
-          refine BacktrackGen.mem_support_backtrack_of_branch _ _
+          refine produces_backtrack_of_branch _ _
             (List.Mem.tail _ (List.Mem.head _)) (by dsimp only; decide) _ ?_
           refine produces_bind_of
             (ih (t :: Γ) τ2 iS fuel sz hbody (need_abs_body hs)
@@ -326,17 +325,15 @@ theorem stlc_gen_complete_mutual (e : term) : Reach e := by
           simp only [tyNeed, typing_outTy h2, Option.elim] at ht
           simp only [tdepth] at hf
           -- The drawn argument type is exactly the one the derivation assigns to `b`.
-          have hdraw : Produces (BacktrackGen.liftGen (G := SPMF)
-              (Basalt.ArbitraryFueled.arbitraryFueled iS) : BacktrackGen SPMF type) τ1 :=
-            produces_liftGen_iff.mpr (type_gen_complete τ1 iS (by omega))
+          have hdraw : Produces ((Basalt.ArbitraryFueled.arbitraryFueled iS) : SGen type) τ1 :=
+            type_gen_produces τ1 iS (by omega)
           have hbody :
-              Produces ((BacktrackGen.liftGen (G := SPMF)
-                  (Basalt.ArbitraryFueled.arbitraryFueled iS) >>= fun τ1 =>
+              Produces (((Basalt.ArbitraryFueled.arbitraryFueled iS) >>= fun τ1 =>
                 specimen_gen_typing_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness
-                  (G := SPMF) fuel iS (sz / 2) Γ (type.Fun τ1 τ) >>= fun e1 =>
+                  (G := SGen) fuel iS (sz / 2) Γ (type.Fun τ1 τ) >>= fun e1 =>
                 specimen_gen_typing_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness
-                  (G := SPMF) fuel iS (sz / 2) Γ τ1 >>= fun e2 =>
-                pure (term.App e1 e2)) : BacktrackGen SPMF term) (term.App a b) := by
+                  (G := SGen) fuel iS (sz / 2) Γ τ1 >>= fun e2 =>
+                pure (term.App e1 e2)) : SGen term) (term.App a b) := by
             refine produces_bind_of hdraw ?_
             refine produces_bind_of
               (iha Γ (type.Fun τ1 τ) iS fuel (sz / 2) h1 (need_rec_left hs) (by omega)
@@ -349,12 +346,12 @@ theorem stlc_gen_complete_mutual (e : term) : Reach e := by
           cases τ with
           | Nat =>
             simp only [specimen_gen_typing_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness]
-            exact BacktrackGen.mem_support_backtrack_of_branch _ _
+            exact produces_backtrack_of_branch _ _
               (List.Mem.tail _ (List.Mem.tail _ (List.Mem.tail _ (List.Mem.head _))))
               (by dsimp only; decide) _ hbody
           | Fun _ _ =>
             simp only [specimen_gen_typing_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness]
-            exact BacktrackGen.mem_support_backtrack_of_branch _ _
+            exact produces_backtrack_of_branch _ _
               (List.Mem.tail _ (List.Mem.tail _ (List.Mem.head _)))
               (by dsimp only; decide) _ hbody
 
@@ -363,7 +360,7 @@ theorem stlc_gen_complete_worker (Γ : List type) (e : term) (τ : type) (h : ty
     (iS fuel sz : Nat) (hs : budget e ≤ sz) (hv : varBound e ≤ iS) (hlf : varBound e ≤ 10000)
     (ht : tyNeed Γ e ≤ iS) (hf : tdepth e < fuel) :
     Produces (specimen_gen_typing_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness
-      (G := SPMF) fuel iS sz Γ τ) e :=
+      (G := SGen) fuel iS sz Γ τ) e :=
   stlc_gen_complete_mutual e Γ τ iS fuel sz h hs hv hlf ht hf
 
 /-! ## At the emitted `BacktrackGenFor` instance
@@ -376,7 +373,7 @@ hard-wires `fuel := 10000`.  So the axes collapse onto `sz` plus two constant si
 theorem stlc_gen_complete (Γ : List type) (e : term) (τ : type) (h : typing Γ e τ) (sz : Nat)
     (hs : budget e ≤ sz) (hv : varBound e ≤ sz) (ht : tyNeed Γ e ≤ sz)
     (hlf : varBound e ≤ 10000) (hfd : tdepth e < 10000) :
-    Produces (BacktrackGenFor.gen (α := term) (P := fun e => typing Γ e τ) (G := SPMF) sz) e := by
+    Produces (BacktrackGenFor.gen (α := term) (P := fun e => typing Γ e τ) (G := SGen) sz) e := by
   simp only [BacktrackGenFor.gen]
   exact stlc_gen_complete_worker Γ e τ h sz 10000 sz hs hv hlf ht hfd
 
@@ -385,7 +382,7 @@ theorem stlc_gen_complete (Γ : List type) (e : term) (τ : type) (h : typing Γ
 theorem stlc_gen_complete_depth (Γ : List type) (e : term) (τ : type) (h : typing Γ e τ) (sz : Nat)
     (hs : sizeMeasure e ≤ sz + 1) (hv : varBound e ≤ sz) (ht : tyNeed Γ e ≤ sz)
     (hlf : varBound e ≤ 10000) (hfd : tdepth e < 10000) :
-    Produces (BacktrackGenFor.gen (α := term) (P := fun e => typing Γ e τ) (G := SPMF) sz) e := by
+    Produces (BacktrackGenFor.gen (α := term) (P := fun e => typing Γ e τ) (G := SGen) sz) e := by
   have hdom := budget_lt_sizeMeasure e
   exact stlc_gen_complete Γ e τ h sz (by omega) hv ht hlf hfd
 
@@ -423,7 +420,7 @@ derived generator's support.  The sizes used are the `budget` values pinned just
 /-- `Abs Nat (Var 0) : Nat → Nat` at exactly `budget = 2`. -/
 example :
     Produces (BacktrackGenFor.gen (α := term)
-      (P := fun e => typing [] e (type.Fun type.Nat type.Nat)) (G := SPMF) 2)
+      (P := fun e => typing [] e (type.Fun type.Nat type.Nat)) (G := SGen) 2)
       (term.Abs type.Nat (term.Var 0)) :=
   stlc_gen_complete [] _ _
     (typing.TAbs [] (term.Var 0) type.Nat type.Nat
@@ -433,7 +430,7 @@ example :
 /-- `Add (Const 0) (Const 0) : Nat` — a halving branch — at exactly `budget = 2`. -/
 example :
     Produces (BacktrackGenFor.gen (α := term) (P := fun e => typing [] e type.Nat)
-      (G := SPMF) 2) (term.Add (term.Const 0) (term.Const 0)) :=
+      (G := SGen) 2) (term.Add (term.Const 0) (term.Const 0)) :=
   stlc_gen_complete [] _ _
     (typing.TAdd [] (term.Const 0) (term.Const 0) (typing.TConst [] 0) (typing.TConst [] 0))
     2 (by decide) (by decide) (by decide) (by decide) (by decide)
@@ -442,7 +439,7 @@ example :
 exactly `budget = 5`. -/
 example :
     Produces (BacktrackGenFor.gen (α := term) (P := fun e => typing [] e type.Nat)
-      (G := SPMF) 5) (term.App (term.Abs type.Nat (term.Const 0)) (term.Const 0)) :=
+      (G := SGen) 5) (term.App (term.Abs type.Nat (term.Const 0)) (term.Const 0)) :=
   stlc_gen_complete [] _ _
     (typing.TApp [] (term.Abs type.Nat (term.Const 0)) (term.Const 0) type.Nat type.Nat
       (typing.TConst [] 0)
@@ -453,7 +450,7 @@ example :
 example :
     Produces (BacktrackGenFor.gen (α := term)
       (P := fun e => typing [type.Nat, type.Fun type.Nat type.Nat] e
-        (type.Fun type.Nat type.Nat)) (G := SPMF) 2) (term.Var 1) :=
+        (type.Fun type.Nat type.Nat)) (G := SGen) 2) (term.Var 1) :=
   stlc_gen_complete _ _ _
     (typing.TVar _ 1 _
       (lookup.Later _ type.Nat 0 _ (lookup.Now (type.Fun type.Nat type.Nat) [])))

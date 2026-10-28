@@ -5,9 +5,8 @@
 -- The generator interpreter at `SPMF`, soundness and completeness, and the `Ev` generator proved
 -- complete through it
 import Specimen.Correctness.GenInterpSPMF
+import Specimen.Correctness.LeafSPMF
 import Specimen.Correctness.EvGenSPMF
--- `Producer` is shared across kinds, and the kinds stay distinct
-import SpecimenTest.Correctness.ProducerKindSharing
 -- The derived STLC producers proved sound and complete, directly against the emitted code
 -- (each runs its own `derive_mutual`, namespaced so flag-on builds cannot collide)
 import SpecimenTest.Correctness.StlcMeasures

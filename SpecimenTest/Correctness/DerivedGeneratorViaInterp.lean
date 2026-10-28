@@ -42,9 +42,9 @@ where each earns its keep:
 1. **The input index.** `lookup` recurses on `Γ`'s tail, so the step's `prev` has to be a family over
    inputs as well as size. An interpreter that closed over its arguments could not state the bridge
    at all.
-2. **`produces_refutedToExhausted_iff`.** The emitted `size = 0` case wraps its truncated branch list
-   in `refutedToExhausted`. That wrapper is invisible to success, but it is syntactically present, so
-   the bridge does not typecheck without a lemma to see through it.
+2. **`produces_backtrack_truncated_iff`.** The emitted `size = 0` case adds a `Specimen.truncated`
+   branch to its truncated branch list. That branch is invisible to success, but it is syntactically
+   present, so the bridge does not typecheck without a lemma to see through it.
 3. **The measure pair.** `lkPhi`/`lkSigma` unfold to exactly `x < fuel` and `x < sz` — the same two
    side conditions the hand-rolled `lookup_gen_complete` in `StlcCompleteness.lean` arrived at
    independently. That agreement is the cross-check that the generic route computes the right budgets
@@ -72,31 +72,31 @@ noncomputable def lkStep (iS : Nat) : SGenStep (List type × type) Nat :=
   fun prev sz i =>
     match sz with
     | 0 =>
-      Producer.refutedToExhausted
-        (BacktrackGen.backtrack
-          (List.filterMap (fun o => o)
+      Basalt.Backtrack.backtrack
+        ((List.filterMap (fun o => o)
             [if (match i.1 with | List.cons _ _ => true | _ => false) then
                 some (1, fun (_ : Unit) =>
                   match i.1 with
                   | List.cons τ_1 _ =>
                     match @DecOpt.decOpt (@Eq (@type) τ_1 i.2) _ iS with
-                    | Except.ok Bool.true => (return Nat.zero : BacktrackGen SPMF Nat)
-                    | Except.ok Bool.false => BacktrackGen.refute
-                    | _ => BacktrackGen.exhaust
-                  | _ => BacktrackGen.refute)
-              else none]))
+                    | Except.ok Bool.true => (return Nat.zero : SGen Nat)
+                    | Except.ok Bool.false => Specimen.refute
+                    | _ => Specimen.inconclusive
+                  | _ => Specimen.refute)
+              else none]) ++
+          [(1, fun (_ : Unit) => Specimen.truncated)])
     | Nat.succ size' =>
-      BacktrackGen.backtrack
+      Basalt.Backtrack.backtrack
         (List.filterMap (fun o => o)
           [if (match i.1 with | List.cons _ _ => true | _ => false) then
               some (1, fun (_ : Unit) =>
                 match i.1 with
                 | List.cons τ_1 _ =>
                   match @DecOpt.decOpt (@Eq (@type) τ_1 i.2) _ iS with
-                  | Except.ok Bool.true => (return Nat.zero : BacktrackGen SPMF Nat)
-                  | Except.ok Bool.false => BacktrackGen.refute
-                  | _ => BacktrackGen.exhaust
-                | _ => BacktrackGen.refute)
+                  | Except.ok Bool.true => (return Nat.zero : SGen Nat)
+                  | Except.ok Bool.false => Specimen.refute
+                  | _ => Specimen.inconclusive
+                | _ => Specimen.refute)
             else none,
             if (match i.1 with | List.cons _ _ => true | _ => false) then
               some (3, fun (_ : Unit) =>
@@ -104,14 +104,14 @@ noncomputable def lkStep (iS : Nat) : SGenStep (List type × type) Nat :=
                 | List.cons _ Γ => do
                   let n ← prev size' (Γ, i.2)
                   return Nat.succ n
-                | _ => BacktrackGen.refute)
+                | _ => Specimen.refute)
             else none])
 
 /-- **Adequacy bridge**: the emitted generator IS the generic interpreter at `lkStep`. -/
 theorem lk_bridge (iS : Nat) :
     ∀ (fuel sz : Nat) (Γ : List type) (τ : type),
       (specimen_gen_lookup_1__SpecimenTest_Correctness_DerivedGeneratorViaInterp_DerivedGeneratorViaInterp
-          (G := SPMF) fuel iS sz Γ τ)
+          (G := SGen) fuel iS sz Γ τ)
         = genRelB (lkStep iS) fuel sz (Γ, τ) := by
   intro fuel
   induction fuel with
@@ -136,9 +136,9 @@ theorem lkNow_sound (iS : Nat) (Γ : List type) (τ : type) (x : Nat)
        | List.cons τ_1 _ =>
          match @DecOpt.decOpt (@Eq (@type) τ_1 τ) _ iS with
          | Except.ok Bool.true => (return Nat.zero : SGen Nat)
-         | Except.ok Bool.false => BacktrackGen.refute
-         | _ => BacktrackGen.exhaust
-       | _ => BacktrackGen.refute) x) :
+         | Except.ok Bool.false => Specimen.refute
+         | _ => Specimen.inconclusive
+       | _ => Specimen.refute) x) :
     lookup Γ x τ := by
   cases Γ with
   | nil => exact absurd hx (not_produces_refute x)
@@ -161,26 +161,26 @@ theorem lkStep_sound (iS : Nat) : StepGenSoundB (lkStep iS) lkSpec := by
     cases sz with
     | zero =>
       simp only [lkStep] at hx
-      rw [produces_refutedToExhausted_iff] at hx
-      obtain ⟨p, hp, _, _⟩ := BacktrackGen.mem_support_backtrack_ok _ _ hx
+      rw [produces_backtrack_truncated_iff] at hx
+      obtain ⟨p, hp, _, _⟩ := produces_backtrack_ok _ _ hx
       simp at hp
     | succ sz =>
       simp only [lkStep] at hx
-      obtain ⟨p, hp, _, _⟩ := BacktrackGen.mem_support_backtrack_ok _ _ hx
+      obtain ⟨p, hp, _, _⟩ := produces_backtrack_ok _ _ hx
       simp at hp
   | cons τ_1 Γ' =>
     cases sz with
     | zero =>
       simp only [lkStep] at hx
-      rw [produces_refutedToExhausted_iff] at hx
-      obtain ⟨p, hp, _, hpx⟩ := BacktrackGen.mem_support_backtrack_ok _ _ hx
+      rw [produces_backtrack_truncated_iff] at hx
+      obtain ⟨p, hp, _, hpx⟩ := produces_backtrack_ok _ _ hx
       simp only [List.filterMap_cons, List.filterMap_nil, Bool.false_eq_true, eq_self_iff_true,
         ite_false, ite_true, List.mem_cons, List.not_mem_nil, or_false] at hp
       rcases hp with rfl
       exact lkNow_sound iS _ τ x hpx
     | succ sz =>
       simp only [lkStep] at hx
-      obtain ⟨p, hp, _, hpx⟩ := BacktrackGen.mem_support_backtrack_ok _ _ hx
+      obtain ⟨p, hp, _, hpx⟩ := produces_backtrack_ok _ _ hx
       simp only [List.filterMap_cons, List.filterMap_nil, Bool.false_eq_true, eq_self_iff_true,
         ite_false, ite_true, List.mem_cons, List.not_mem_nil, or_false] at hp
       rcases hp with rfl | rfl
@@ -200,14 +200,14 @@ theorem lkStep_complete (iS : Nat) : StepGenCompleteB (lkStep iS) lkSpec lkPhi l
     cases hP with
     | Now τ' Γ' =>
       simp only [lkStep]
-      refine BacktrackGen.mem_support_backtrack_of_branch _ _ (List.Mem.head _)
+      refine produces_backtrack_of_branch _ _ (List.Mem.head _)
         (by dsimp only; decide) _ ?_
       simp only [DecOpt.decOpt, decide_true]
       exact produces_pure_iff.mpr rfl
     | Later τ' τ'' n Γ' hn =>
       simp only [lkStep]
       -- `lkSigma _ (n+1) = n+2 ≤ sz+1` gives `n+1 ≤ sz`, which the recursive appeal needs.
-      refine BacktrackGen.mem_support_backtrack_of_branch _ _
+      refine produces_backtrack_of_branch _ _
         (List.Mem.tail _ (List.Mem.head _)) (by dsimp only; decide) _ ?_
       exact produces_bind_of
         (hrec (Γ', τ) n hn (by simp only [lkPhi]; omega) sz (by simp only [lkSigma] at hsz ⊢; omega))
@@ -217,7 +217,7 @@ theorem lkStep_complete (iS : Nat) : StepGenCompleteB (lkStep iS) lkSpec lkPhi l
 theorem lookup_emitted_sound (iS fuel sz : Nat) (Γ : List type) (τ : type) (x : Nat)
     (hx : Produces
       (specimen_gen_lookup_1__SpecimenTest_Correctness_DerivedGeneratorViaInterp_DerivedGeneratorViaInterp
-        (G := SPMF) fuel iS sz Γ τ) x) :
+        (G := SGen) fuel iS sz Γ τ) x) :
     lookup Γ x τ := by
   rw [Produces, lk_bridge] at hx
   exact genRelB_produces_sound (lkStep_sound iS) fuel sz (Γ, τ) x hx
@@ -230,19 +230,19 @@ theorem lookup_emitted_complete (iS : Nat) (Γ : List type) (τ : type) (x : Nat
     (h : lookup Γ x τ) (fuel sz : Nat) (hf : x < fuel) (hs : x < sz) :
     Produces
       (specimen_gen_lookup_1__SpecimenTest_Correctness_DerivedGeneratorViaInterp_DerivedGeneratorViaInterp
-        (G := SPMF) fuel iS sz Γ τ) x := by
+        (G := SGen) fuel iS sz Γ τ) x := by
   rw [Produces, lk_bridge]
   exact genRelB_complete (lkStep_complete iS) fuel (Γ, τ) x h
     (by simp only [lkPhi]; omega) sz (by simp only [lkSigma]; omega)
 
 /-! ## Decisiveness: the generator does not merely *can* succeed, it *cannot* fail
 
-Completeness says `Outcome.ok x` is in the support — the generator **can** produce `x`. That is an `∃`
+Completeness says a success `x` is in the support — the generator **can** produce `x`. That is an `∃`
 over executions and it is what the support interpretation gives cheaply. It leaves open whether some
 other execution fails, which for a *randomized* producer is the question you actually care about: an
-unlucky draw returning `refuted` would make the verdict uninformative.
+unlucky draw ending in a refutation would make the verdict uninformative.
 
-`BacktrackGen.NeverFails` is the dual claim, a `∀` over the support, and it holds here for a
+`NeverFails` is the dual claim, a `∀` over the support, and it holds here for a
 structural reason: `backtrack` retries, dropping failed branches, starting with `fuel = gs.length` —
 so as long as *one* branch cannot fail, the disjunction cannot. For `lookup` that branch is `Now` when
 the head matches (a deterministic `pure`), and `Later` otherwise (a `bind` of the recursive call,
@@ -251,9 +251,9 @@ which the induction hypothesis covers). -/
 theorem lookup_emitted_neverFails (iS : Nat) :
     ∀ (Γ : List type) (x : Nat) (τ : type), lookup Γ x τ →
       ∀ (fuel sz : Nat), x < fuel → x < sz →
-      BacktrackGen.NeverFails
+      NeverFails
         (specimen_gen_lookup_1__SpecimenTest_Correctness_DerivedGeneratorViaInterp_DerivedGeneratorViaInterp
-          (G := SPMF) fuel iS sz Γ τ) := by
+          (G := SGen) fuel iS sz Γ τ) := by
   intro Γ x τ hlk
   induction hlk with
   | Now τ' Γ' =>
@@ -266,10 +266,10 @@ theorem lookup_emitted_neverFails (iS : Nat) :
       | succ sz =>
         simp only
           [specimen_gen_lookup_1__SpecimenTest_Correctness_DerivedGeneratorViaInterp_DerivedGeneratorViaInterp]
-        refine BacktrackGen.neverFails_backtrack _ _ (List.Mem.head _) (by dsimp only; decide) ?_
+        refine neverFails_backtrack _ _ (List.Mem.head _) (by dsimp only; decide) ?_
         -- the head matches, so `decOpt` is `ok true` and the branch is a bare `pure`
         simp only [DecOpt.decOpt, decide_true]
-        exact BacktrackGen.neverFails_pure _
+        exact neverFails_pure _
   | Later τ' τ'' n Γ' hn ih =>
     intro fuel sz hf hs
     cases fuel with
@@ -280,10 +280,10 @@ theorem lookup_emitted_neverFails (iS : Nat) :
       | succ sz =>
         simp only
           [specimen_gen_lookup_1__SpecimenTest_Correctness_DerivedGeneratorViaInterp_DerivedGeneratorViaInterp]
-        refine BacktrackGen.neverFails_backtrack _ _ (List.Mem.tail _ (List.Mem.head _))
+        refine neverFails_backtrack _ _ (List.Mem.tail _ (List.Mem.head _))
           (by dsimp only; decide) ?_
-        exact BacktrackGen.neverFails_bind (ih fuel sz (by omega) (by omega))
-          (fun _ _ => BacktrackGen.neverFails_pure _)
+        exact neverFails_bind (ih fuel sz (by omega) (by omega))
+          (fun _ _ => neverFails_pure _)
 
 /-! ## Refutation-soundness: a `refuted` verdict is a proof of uninhabitedness
 
@@ -292,8 +292,8 @@ satisfies the relation. That makes the generator usable as a refutation procedur
 
 Two things are worth being precise about.
 
-First, why randomness does not weaken it. `backtrack` reports `refuted` only when **every** branch does
-(`mem_support_backtrack_refuted`), so a *possible* refutation is already a statement about all branches
+First, why randomness does not weaken it. `backtrack` ends refuted only when **every** branch of
+positive weight can (`refutes_backtrack`), so a *possible* refutation is already a statement about all branches
 at once — the `∃`-over-executions reading is strong enough here, unlike for `NeverFails`.
 
 Second, the scope of the `MExp.lean` fix that keeps `DecOpt`'s inconclusive answer separate from its
@@ -303,8 +303,8 @@ collapsed `error` into `refute`. The distinction matters where a premise is disc
 recursive* checker, which genuinely can run out of budget: an emission that collapsed the two would
 turn "I could not tell" into a definite refutation, and the corresponding theorem would be false
 (`VerdictFidelity.lean` is that case). So this proof does not exercise the distinction; it is the
-shape a relation with a recursive premise would follow, and the `refute`/`exhaust` split is what makes
-the shape sound there.
+shape a relation with a recursive premise would follow, and the `refute`/`inconclusive` split is what
+makes the shape sound there.
 
 One wrinkle input dispatch adds: at `Γ = []` the guards fail and the pool is **empty**, and
 `backtrack []` refutes outright. That refutation is still sound — nothing is derivable from an empty
@@ -312,53 +312,48 @@ context — but it is established from the pool being empty, not from any branch
 
 theorem lookup_emitted_refute (iS : Nat) :
     ∀ (fuel sz : Nat) (Γ : List type) (τ : type),
-      Outcome.refuted ∈
-        (specimen_gen_lookup_1__SpecimenTest_Correctness_DerivedGeneratorViaInterp_DerivedGeneratorViaInterp
-          (G := SPMF) fuel iS sz Γ τ).run.support →
+      Refutes (specimen_gen_lookup_1__SpecimenTest_Correctness_DerivedGeneratorViaInterp_DerivedGeneratorViaInterp
+          (G := SGen) fuel iS sz Γ τ) →
       ∀ x, ¬ lookup Γ x τ := by
   intro fuel
   induction fuel with
   | zero =>
-    -- out of fuel is `exhaust`, never `refuted`
+    -- out of fuel is a labelled failure, never a refutation
     intro sz Γ τ h
-    exact absurd (SPMF.mem_support_pure_iff.mp h) (by simp)
+    simp only [specimen_gen_lookup_1__SpecimenTest_Correctness_DerivedGeneratorViaInterp_DerivedGeneratorViaInterp] at h
+    exact absurd h not_refutes_outOfFuel
   | succ fuel ih =>
     intro sz Γ τ h
     cases sz with
     | zero =>
-      -- the truncated pool is wrapped in `refutedToExhausted`, so it cannot refute at all
-      simp only
-        [specimen_gen_lookup_1__SpecimenTest_Correctness_DerivedGeneratorViaInterp_DerivedGeneratorViaInterp]
-        at h
-      exact absurd h (BacktrackGen.not_mem_support_refutedToExhausted _)
+      -- the truncated pool has a branch that fails without refuting, so it cannot refute at all
+      simp only [specimen_gen_lookup_1__SpecimenTest_Correctness_DerivedGeneratorViaInterp_DerivedGeneratorViaInterp] at h
+      exact absurd h (not_refutes_backtrack_truncated _)
     | succ sz =>
-      simp only
-        [specimen_gen_lookup_1__SpecimenTest_Correctness_DerivedGeneratorViaInterp_DerivedGeneratorViaInterp]
-        at h
-      have hall := BacktrackGen.mem_support_backtrack_refuted _ h
+      simp only [specimen_gen_lookup_1__SpecimenTest_Correctness_DerivedGeneratorViaInterp_DerivedGeneratorViaInterp] at h
+      have hall := refutes_backtrack h
       cases Γ with
       | nil =>
         -- `lookup` needs a cons, so nothing is derivable and the refutation is correct
         intro x hx; cases hx
       | cons τ_1 Γ' =>
-        have hNow := hall _ (List.Mem.head _)
-        have hLater := hall _ (List.Mem.tail _ (List.Mem.head _))
+        have hNow := hall _ (List.Mem.head _) (by dsimp only; decide)
+        have hLater := hall _ (List.Mem.tail _ (List.Mem.head _)) (by dsimp only; decide)
         -- `Now` refuting tells us the head does not match ...
         simp only [DecOpt.decOpt] at hNow
         have hne : τ_1 ≠ τ := by
           intro heq
           subst heq
           simp only [decide_true] at hNow
-          exact absurd (SPMF.mem_support_pure_iff.mp hNow) (by simp)
+          exact not_refutes_pure _ hNow
         -- ... and `Later` refuting hands the tail to the induction hypothesis
-        rcases mem_support_run_bind.mp hLater with ⟨n, _, hres⟩ | ⟨ho, _⟩ | ⟨_, h⟩
-        · exact absurd (SPMF.mem_support_pure_iff.mp hres) (by simp)
+        rcases refutes_bind_iff.mp hLater with ho | ⟨_, _, hres⟩
         · have htail := ih sz Γ' τ ho
           intro x hx
           cases hx with
           | Now => exact hne rfl
           | Later => rename_i n hn; exact htail n hn
-        · cases h
+        · exact absurd hres (not_refutes_pure _)
 
 -- Pinned: the generic route introduces no axioms beyond `SPMF`'s classicality.
 /-- info: 'DerivedGeneratorViaInterp.lookup_emitted_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/

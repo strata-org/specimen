@@ -69,33 +69,33 @@ noncomputable def typStep (iS : Nat) : SGenStep (List type × type) term :=
   fun prev sz i =>
     match sz with
     | 0 =>
-      Producer.refutedToExhausted
-        (BacktrackGen.backtrack
-          (List.filterMap (fun o => o)
+      Basalt.Backtrack.backtrack
+        ((List.filterMap (fun o => o)
             [if (match i.2 with | type.Nat => true | _ => false) then
                 some (4, fun (_ : Unit) =>
                   match i.2 with
                   | type.Nat =>
-                    BacktrackGen.liftGen (Basalt.ArbitraryFueled.arbitraryFueled iS) >>=
+                    (Basalt.ArbitraryFueled.arbitraryFueled iS) >>=
                       fun n => pure (term.Const n)
-                  | _ => BacktrackGen.refute)
+                  | _ => Specimen.refute)
               else none,
               some (3, fun (_ : Unit) =>
-                @BacktrackGenFor.gen _ (fun (x : Nat) => @lookup i.1 x i.2) _ SPMF _ iS >>=
-                  fun x => pure (term.Var x))]))
+                @BacktrackGenFor.gen _ (fun (x : Nat) => @lookup i.1 x i.2) _ SGen _ _ _ _ iS >>=
+                  fun x => pure (term.Var x))]) ++
+          [(1, fun (_ : Unit) => Specimen.truncated)])
     | Nat.succ size' =>
-      BacktrackGen.backtrack
+      Basalt.Backtrack.backtrack
         (List.filterMap (fun o => o)
           [if (match i.2 with | type.Nat => true | _ => false) then
               some (4, fun (_ : Unit) =>
                 match i.2 with
                 | type.Nat =>
-                  BacktrackGen.liftGen (Basalt.ArbitraryFueled.arbitraryFueled iS) >>=
+                  (Basalt.ArbitraryFueled.arbitraryFueled iS) >>=
                     fun n => pure (term.Const n)
-                | _ => BacktrackGen.refute)
+                | _ => Specimen.refute)
             else none,
             some (3, fun (_ : Unit) =>
-              @BacktrackGenFor.gen _ (fun (x : Nat) => @lookup i.1 x i.2) _ SPMF _ iS >>=
+              @BacktrackGenFor.gen _ (fun (x : Nat) => @lookup i.1 x i.2) _ SGen _ _ _ _ iS >>=
                 fun x => pure (term.Var x)),
             if (match i.2 with | type.Nat => true | _ => false) then
               some (3, fun (_ : Unit) =>
@@ -104,7 +104,7 @@ noncomputable def typStep (iS : Nat) : SGenStep (List type × type) term :=
                   prev (Nat.div size' 2) (i.1, type.Nat) >>= fun e1 =>
                     prev (Nat.div size' 2) (i.1, type.Nat) >>= fun e2 =>
                       pure (term.Add e1 e2)
-                | _ => BacktrackGen.refute)
+                | _ => Specimen.refute)
             else none,
             if (match i.2 with | type.Fun _ _ => true | _ => false) then
               some (3, fun (_ : Unit) =>
@@ -112,10 +112,10 @@ noncomputable def typStep (iS : Nat) : SGenStep (List type × type) term :=
                 | type.Fun τ1 τ2 =>
                   prev size' (List.cons τ1 i.1, τ2) >>= fun e =>
                     pure (term.Abs τ1 e)
-                | _ => BacktrackGen.refute)
+                | _ => Specimen.refute)
             else none,
             some (3, fun (_ : Unit) =>
-              BacktrackGen.liftGen (Basalt.ArbitraryFueled.arbitraryFueled iS) >>=
+              (Basalt.ArbitraryFueled.arbitraryFueled iS) >>=
                 fun τ1 =>
                   prev (Nat.div size' 2) (i.1, type.Fun τ1 i.2) >>= fun e1 =>
                     prev (Nat.div size' 2) (i.1, τ1) >>= fun e2 =>
@@ -125,7 +125,7 @@ noncomputable def typStep (iS : Nat) : SGenStep (List type × type) term :=
 theorem typ_bridge (iS : Nat) :
     ∀ (fuel sz : Nat) (Γ : List type) (τ : type),
       (specimen_gen_typing_1__SpecimenTest_Correctness_TypingBridge_TypingBridge
-          (G := SPMF) fuel iS sz Γ τ)
+          (G := SGen) fuel iS sz Γ τ)
         = genRelB (typStep iS) fuel sz (Γ, τ) := by
   intro fuel
   induction fuel with
@@ -145,23 +145,23 @@ def typSpec : (List type × type) → term → Prop := fun i e => typing i.1 e i
 `DerivedGeneratorViaInterp.lean` discharges exactly this statement for its own derivation. -/
 def LookupSound (iS : Nat) : Prop :=
   ∀ (Γ : List type) (τ : type) (x : Nat),
-    Produces (BacktrackGenFor.gen (α := Nat) (P := fun x => lookup Γ x τ) (G := SPMF) iS) x →
+    Produces (BacktrackGenFor.gen (α := Nat) (P := fun x => lookup Γ x τ) (G := SGen) iS) x →
     lookup Γ x τ
 
 theorem typStep_sound (iS : Nat) (hlk : LookupSound iS) : StepGenSoundB (typStep iS) typSpec := by
   intro prev hprev sz i x hx
   obtain ⟨Γ, τ⟩ := i
   -- The two unguarded-or-`Nat`-guarded base branches, shared by every pool that contains them.
-  have tconst : ∀ (g : SPMF Nat),
-      Produces ((BacktrackGen.liftGen g >>= fun n => pure (term.Const n))
-        : BacktrackGen SPMF term) x → typing Γ x type.Nat := by
+  have tconst : ∀ (g : SGen Nat),
+      Produces ((g >>= fun n => pure (term.Const n))
+        : SGen term) x → typing Γ x type.Nat := by
     intro g hqa
     obtain ⟨n, _, he⟩ := produces_bind_iff.mp hqa
     cases produces_pure_iff.mp he
     exact typing.TConst Γ n
   have tvar : ∀ τ,
-      Produces ((@BacktrackGenFor.gen _ (fun (x : Nat) => @lookup Γ x τ) _ SPMF _ iS >>=
-        fun x => pure (term.Var x)) : BacktrackGen SPMF term) x → typing Γ x τ := by
+      Produces ((@BacktrackGenFor.gen _ (fun (x : Nat) => @lookup Γ x τ) _ SGen _ _ _ _ iS >>=
+        fun x => pure (term.Var x)) : SGen term) x → typing Γ x τ := by
     intro τ hqa
     obtain ⟨n, hn, he⟩ := produces_bind_iff.mp hqa
     cases produces_pure_iff.mp he
@@ -171,8 +171,8 @@ theorem typStep_sound (iS : Nat) (hlk : LookupSound iS) : StepGenSoundB (typStep
     cases sz with
     | zero =>
       simp only [typStep] at hx
-      rw [produces_refutedToExhausted_iff] at hx
-      obtain ⟨p, hp, _, hpx⟩ := BacktrackGen.mem_support_backtrack_ok _ _ hx
+      rw [produces_backtrack_truncated_iff] at hx
+      obtain ⟨p, hp, _, hpx⟩ := produces_backtrack_ok _ _ hx
       simp only [List.filterMap_cons, List.filterMap_nil, Bool.false_eq_true, eq_self_iff_true,
         ite_false, ite_true, List.mem_cons, List.not_mem_nil, or_false] at hp
       rcases hp with rfl | rfl
@@ -180,7 +180,7 @@ theorem typStep_sound (iS : Nat) (hlk : LookupSound iS) : StepGenSoundB (typStep
       · exact tvar _ hpx
     | succ sz =>
       simp only [typStep] at hx
-      obtain ⟨p, hp, _, hpx⟩ := BacktrackGen.mem_support_backtrack_ok _ _ hx
+      obtain ⟨p, hp, _, hpx⟩ := produces_backtrack_ok _ _ hx
       simp only [List.filterMap_cons, List.filterMap_nil, Bool.false_eq_true, eq_self_iff_true,
         ite_false, ite_true, List.mem_cons, List.not_mem_nil, or_false] at hp
       rcases hp with rfl | rfl | rfl | rfl
@@ -201,15 +201,15 @@ theorem typStep_sound (iS : Nat) (hlk : LookupSound iS) : StepGenSoundB (typStep
     cases sz with
     | zero =>
       simp only [typStep] at hx
-      rw [produces_refutedToExhausted_iff] at hx
-      obtain ⟨p, hp, _, hpx⟩ := BacktrackGen.mem_support_backtrack_ok _ _ hx
+      rw [produces_backtrack_truncated_iff] at hx
+      obtain ⟨p, hp, _, hpx⟩ := produces_backtrack_ok _ _ hx
       simp only [List.filterMap_cons, List.filterMap_nil, Bool.false_eq_true, eq_self_iff_true,
         ite_false, ite_true, List.mem_cons, List.not_mem_nil, or_false] at hp
       rcases hp with rfl
       exact tvar _ hpx
     | succ sz =>
       simp only [typStep] at hx
-      obtain ⟨p, hp, _, hpx⟩ := BacktrackGen.mem_support_backtrack_ok _ _ hx
+      obtain ⟨p, hp, _, hpx⟩ := produces_backtrack_ok _ _ hx
       simp only [List.filterMap_cons, List.filterMap_nil, Bool.false_eq_true, eq_self_iff_true,
         ite_false, ite_true, List.mem_cons, List.not_mem_nil, or_false] at hp
       rcases hp with rfl | rfl | rfl
@@ -229,7 +229,7 @@ theorem typStep_sound (iS : Nat) (hlk : LookupSound iS) : StepGenSoundB (typStep
 theorem typing_emitted_sound (iS : Nat) (hlk : LookupSound iS)
     (fuel sz : Nat) (Γ : List type) (τ : type) (e : term)
     (hx : Produces (specimen_gen_typing_1__SpecimenTest_Correctness_TypingBridge_TypingBridge
-        (G := SPMF) fuel iS sz Γ τ) e) :
+        (G := SGen) fuel iS sz Γ τ) e) :
     typing Γ e τ := by
   rw [Produces, typ_bridge] at hx
   exact genRelB_produces_sound (typStep_sound iS hlk) fuel sz (Γ, τ) e hx
@@ -252,7 +252,7 @@ are the emitted instance's: it runs the `lookup` worker at size `iS` and at the 
 `10000`. -/
 def LookupComplete (iS : Nat) : Prop :=
   ∀ (Γ : List type) (τ : type) (x : Nat), lookup Γ x τ → x < iS → x < 10000 →
-    Produces (BacktrackGenFor.gen (α := Nat) (P := fun x => lookup Γ x τ) (G := SPMF) iS) x
+    Produces (BacktrackGenFor.gen (α := Nat) (P := fun x => lookup Γ x τ) (G := SGen) iS) x
 
 theorem typStep_complete (iS : Nat) (hlkc : LookupComplete iS) :
     StepGenCompleteB (typStep iS) (typSpecC iS) typPhi typSigma := by
@@ -262,49 +262,48 @@ theorem typStep_complete (iS : Nat) (hlkc : LookupComplete iS) :
   cases hty with
   | TConst =>
     rename_i n
-    have body : Produces ((BacktrackGen.liftGen (G := SPMF)
-        (Basalt.ArbitraryFueled.arbitraryFueled iS) >>= fun n => pure (term.Const n))
-        : BacktrackGen SPMF term) (term.Const n) :=
-      produces_bind_of (produces_liftGen_iff.mpr (nat_arbitraryGen_support n))
+    have body : Produces (((Basalt.ArbitraryFueled.arbitraryFueled iS) >>= fun n => pure (term.Const n))
+        : SGen term) (term.Const n) :=
+      produces_bind_of (produces_arbitraryFueled_nat _ n)
         (produces_pure_iff.mpr rfl)
     cases sz with
     | zero =>
       simp only [typStep]
-      refine (BacktrackGen.mem_support_refutedToExhausted_ok_iff _ _).mpr ?_
-      exact BacktrackGen.mem_support_backtrack_of_branch _ _ (List.Mem.head _)
+      refine (produces_backtrack_truncated_iff _ _).mpr ?_
+      exact produces_backtrack_of_branch _ _ (List.Mem.head _)
         (by exact Nat.zero_lt_succ _) _ body
     | succ sz =>
       simp only [typStep]
-      exact BacktrackGen.mem_support_backtrack_of_branch _ _ (List.Mem.head _)
+      exact produces_backtrack_of_branch _ _ (List.Mem.head _)
         (by exact Nat.zero_lt_succ _) _ body
   | TVar =>
     rename_i x hlkd
     simp only [varBound] at hv hlf
-    have body : Produces ((@BacktrackGenFor.gen _ (fun (x : Nat) => @lookup Γ x τ) _ SPMF _ iS >>=
-        fun x => pure (term.Var x)) : BacktrackGen SPMF term) (term.Var x) :=
+    have body : Produces ((@BacktrackGenFor.gen _ (fun (x : Nat) => @lookup Γ x τ) _ SGen _ _ _ _ iS >>=
+        fun x => pure (term.Var x)) : SGen term) (term.Var x) :=
       produces_bind_of (hlkc Γ τ x hlkd (by omega) (by omega)) (produces_pure_iff.mpr rfl)
     cases τ with
     | Nat =>
       cases sz with
       | zero =>
         simp only [typStep]
-        refine (BacktrackGen.mem_support_refutedToExhausted_ok_iff _ _).mpr ?_
-        exact BacktrackGen.mem_support_backtrack_of_branch _ _
+        refine (produces_backtrack_truncated_iff _ _).mpr ?_
+        exact produces_backtrack_of_branch _ _
           (List.Mem.tail _ (List.Mem.head _)) (by exact Nat.zero_lt_succ _) _ body
       | succ sz =>
         simp only [typStep]
-        exact BacktrackGen.mem_support_backtrack_of_branch _ _
+        exact produces_backtrack_of_branch _ _
           (List.Mem.tail _ (List.Mem.head _)) (by exact Nat.zero_lt_succ _) _ body
     | Fun τ1 τ2 =>
       cases sz with
       | zero =>
         simp only [typStep]
-        refine (BacktrackGen.mem_support_refutedToExhausted_ok_iff _ _).mpr ?_
-        exact BacktrackGen.mem_support_backtrack_of_branch _ _ (List.Mem.head _)
+        refine (produces_backtrack_truncated_iff _ _).mpr ?_
+        exact produces_backtrack_of_branch _ _ (List.Mem.head _)
           (by exact Nat.zero_lt_succ _) _ body
       | succ sz =>
         simp only [typStep]
-        exact BacktrackGen.mem_support_backtrack_of_branch _ _ (List.Mem.head _)
+        exact produces_backtrack_of_branch _ _ (List.Mem.head _)
           (by exact Nat.zero_lt_succ _) _ body
   | TAdd =>
     rename_i e1 e2 h1 h2
@@ -315,7 +314,7 @@ theorem typStep_complete (iS : Nat) (hlkc : LookupComplete iS) :
       simp only [varBound] at hv hlf
       simp only [tyNeed] at ht
       simp only [typStep]
-      refine BacktrackGen.mem_support_backtrack_of_branch _ _
+      refine produces_backtrack_of_branch _ _
         (List.Mem.tail _ (List.Mem.tail _ (List.Mem.head _))) (by exact Nat.zero_lt_succ _) _ ?_
       refine produces_bind_of
         (hrec (Γ, type.Nat) e1 ⟨h1, by omega, by omega, by dsimp only; omega⟩
@@ -333,7 +332,7 @@ theorem typStep_complete (iS : Nat) (hlkc : LookupComplete iS) :
     | succ sz =>
       simp only [typSigma, budget] at hsz
       simp only [typStep]
-      refine BacktrackGen.mem_support_backtrack_of_branch _ _
+      refine produces_backtrack_of_branch _ _
         (List.Mem.tail _ (List.Mem.head _)) (by exact Nat.zero_lt_succ _) _ ?_
       refine produces_bind_of
         (hrec (τ1 :: Γ, τ2) e0
@@ -350,13 +349,12 @@ theorem typStep_complete (iS : Nat) (hlkc : LookupComplete iS) :
       simp only [typSigma, budget] at hsz
       simp only [varBound] at hv hlf
       simp only [tyNeed, typing_outTy h2, Option.elim] at ht
-      have hbody : Produces ((BacktrackGen.liftGen (G := SPMF)
-          (Basalt.ArbitraryFueled.arbitraryFueled iS) >>= fun τ1' =>
+      have hbody : Produces (((Basalt.ArbitraryFueled.arbitraryFueled iS) >>= fun τ1' =>
             prev (Nat.div sz 2) (Γ, type.Fun τ1' τ) >>= fun e1 =>
               prev (Nat.div sz 2) (Γ, τ1') >>= fun e2 =>
-                pure (term.App e1 e2)) : BacktrackGen SPMF term) (term.App e1 e2) := by
+                pure (term.App e1 e2)) : SGen term) (term.App e1 e2) := by
         refine produces_bind_of
-          (produces_liftGen_iff.mpr (type_gen_complete τ1 iS (by omega))) ?_
+          (type_gen_produces τ1 iS (by omega)) ?_
         refine produces_bind_of
           (hrec (Γ, type.Fun τ1 τ) e1 ⟨h1, by omega, by omega, by dsimp only; omega⟩
             (by simp only [typPhi, tdepth]; omega) (sz / 2)
@@ -370,12 +368,12 @@ theorem typStep_complete (iS : Nat) (hlkc : LookupComplete iS) :
       cases τ with
       | Nat =>
         simp only [typStep]
-        exact BacktrackGen.mem_support_backtrack_of_branch _ _
+        exact produces_backtrack_of_branch _ _
           (List.Mem.tail _ (List.Mem.tail _ (List.Mem.tail _ (List.Mem.head _))))
           (by exact Nat.zero_lt_succ _) _ hbody
       | Fun _ _ =>
         simp only [typStep]
-        exact BacktrackGen.mem_support_backtrack_of_branch _ _
+        exact produces_backtrack_of_branch _ _
           (List.Mem.tail _ (List.Mem.tail _ (List.Mem.head _)))
           (by exact Nat.zero_lt_succ _) _ hbody
 
@@ -387,7 +385,7 @@ theorem typing_emitted_complete (iS : Nat) (hlkc : LookupComplete iS)
     (fuel sz : Nat) (hf : tdepth e < fuel) (hs : budget e ≤ sz)
     (hv : varBound e ≤ iS) (hlf : varBound e ≤ 10000) (ht : tyNeed Γ e ≤ iS) :
     Produces (specimen_gen_typing_1__SpecimenTest_Correctness_TypingBridge_TypingBridge
-      (G := SPMF) fuel iS sz Γ τ) e := by
+      (G := SGen) fuel iS sz Γ τ) e := by
   rw [Produces, typ_bridge]
   exact genRelB_complete (typStep_complete iS hlkc) fuel (Γ, τ) e ⟨h, hv, hlf, ht⟩ hf sz hs
 
@@ -397,7 +395,7 @@ theorem typing_emitted_complete_depth (iS : Nat) (hlkc : LookupComplete iS)
     (fuel sz : Nat) (hf : tdepth e < fuel) (hs : sizeMeasure e ≤ sz + 1)
     (hv : varBound e ≤ iS) (hlf : varBound e ≤ 10000) (ht : tyNeed Γ e ≤ iS) :
     Produces (specimen_gen_typing_1__SpecimenTest_Correctness_TypingBridge_TypingBridge
-      (G := SPMF) fuel iS sz Γ τ) e := by
+      (G := SGen) fuel iS sz Γ τ) e := by
   have hdom := budget_lt_sizeMeasure e
   exact typing_emitted_complete iS hlkc Γ τ e h fuel sz hf (by omega) hv hlf ht
 

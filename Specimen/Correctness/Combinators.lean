@@ -151,7 +151,7 @@ theorem checkerBacktrack_isOk {cs : List (Unit → Except GenError Bool)}
 /-! ## The enumerator's branch-combining law
 
 `EnumeratorCombinators.enumerate` is the enumerator's analogue of the generator's `backtrack`, and
-this is the analogue of the generator's backtrack support law (`BacktrackGen.mem_support_backtrack_ok_iff`
+this is the analogue of the generator's backtrack support law (`Specimen.Correctness.produces_backtrack_iff`
 at `SPMF`): a value is enumerated iff *some* branch enumerates it.
 
 Two differences from the generator case are worth noting, because they make this the *easier* half:

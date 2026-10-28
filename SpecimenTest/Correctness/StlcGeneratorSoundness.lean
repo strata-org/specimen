@@ -69,15 +69,15 @@ the guards and the `filterMap` reduce and membership is a plain `List.mem_cons` 
 
 ## Generic machinery this leans on
 
-* `BacktrackGen.mem_support_backtrack_ok` — a success in `backtrack gs` came from some branch of
+* `produces_backtrack_ok` — a success in `backtrack gs` came from some branch of
   `gs`. It is weight-agnostic, so soundness never has to evaluate a weight term.
-* `BacktrackGen.mem_support_refutedToExhausted_ok_iff` — strips the `size = 0` wrapper.
+* `produces_backtrack_truncated_iff` — strips the `size = 0` wrapper.
 * `Produces` and its algebra (`produces_bind_iff`, `produces_pure_iff`, `not_produces_refute`,
   `mem_support_liftGen_cases`) from `GenInterpSPMF` — each `do` bind in a branch decomposes through
   these instead of through raw `SPMF` support reasoning.
 * `Specimen.DecOpt`'s `[Decidable P]` instance, consumed via `of_decide_eq_true` — the single side
   condition in the whole component is `lookup_1`'s `τ₁ = τ` check.
-* `BacktrackGen.mem_support_backtrack_of_branch` — the converse, used *only* by the non-vacuity
+* `produces_backtrack_of_branch` — the converse, used *only* by the non-vacuity
   witnesses at the end of the file.
 
 ## Non-vacuity is proved too
@@ -134,14 +134,14 @@ Self-recursive only, so it gets its own `induction fuel`. It draws no unconstrai
 This mode carries the only `DecOpt` side condition in the whole component (`Now`'s `τ₁ = τ`). -/
 theorem lookup_gen_sound : ∀ (fuel iS sz : Nat) (Γ : List type) (τ : type) (x : Nat),
     Produces (specimen_gen_lookup_1__SpecimenTest_Correctness_StlcGeneratorSoundness_StlcGeneratorSoundness
-        (G := SPMF) fuel iS sz Γ τ) x →
+        (G := SGen) fuel iS sz Γ τ) x →
     lookup Γ x τ := by
   intro fuel
   induction fuel with
   | zero =>
     intro iS sz Γ τ x h
     simp only [specimen_gen_lookup_1__SpecimenTest_Correctness_StlcGeneratorSoundness_StlcGeneratorSoundness] at h
-    exact absurd h (not_produces_exhaust x)
+    exact absurd h (not_produces_outOfFuel x)
   | succ fuel ih =>
     intro iS sz Γ τ x h
     simp only [specimen_gen_lookup_1__SpecimenTest_Correctness_StlcGeneratorSoundness_StlcGeneratorSoundness] at h
@@ -150,22 +150,22 @@ theorem lookup_gen_sound : ∀ (fuel iS sz : Nat) (Γ : List type) (τ : type) (
     | nil =>
       cases sz with
       | zero =>
-        obtain ⟨q, hq, _, _⟩ := BacktrackGen.mem_support_backtrack_ok _ x
-          ((BacktrackGen.mem_support_refutedToExhausted_ok_iff _ _).mp h)
+        obtain ⟨q, hq, _, _⟩ := produces_backtrack_ok _ x
+          ((produces_backtrack_truncated_iff _ _).mp h)
         simp at hq
       | succ sz =>
-        obtain ⟨q, hq, _, _⟩ := BacktrackGen.mem_support_backtrack_ok _ x h
+        obtain ⟨q, hq, _, _⟩ := produces_backtrack_ok _ x h
         simp at hq
     | cons τ_1 Γ' =>
       -- `Now`, shared by the truncated `size = 0` pool and the full pool.
       have now_branch :
           Produces (match @DecOpt.decOpt (τ_1 = τ) inferInstance iS with
-            | Except.ok true => (pure Nat.zero : BacktrackGen SPMF Nat)
-            | Except.ok false => BacktrackGen.refute
+            | Except.ok true => (pure Nat.zero : SGen Nat)
+            | Except.ok false => Specimen.refute
             -- The third arm is `exhaust`, not `refute`: `DecOpt` is three-valued and an
             -- inconclusive check must not be reported as a definite refutation. Dead for a
             -- `Decidable`-derived instance like this one, which always answers `ok`.
-            | _ => BacktrackGen.exhaust) x → lookup (τ_1 :: Γ') x τ := by
+            | _ => Specimen.inconclusive) x → lookup (τ_1 :: Γ') x τ := by
         intro hqa
         simp only [DecOpt.decOpt] at hqa
         cases hdec : decide (τ_1 = τ) with
@@ -179,14 +179,14 @@ theorem lookup_gen_sound : ∀ (fuel iS sz : Nat) (Γ : List type) (τ : type) (
           exact lookup.Now τ Γ'
       cases sz with
       | zero =>
-        obtain ⟨q, hq, _, hqa⟩ := BacktrackGen.mem_support_backtrack_ok _ x
-          ((BacktrackGen.mem_support_refutedToExhausted_ok_iff _ _).mp h)
+        obtain ⟨q, hq, _, hqa⟩ := produces_backtrack_ok _ x
+          ((produces_backtrack_truncated_iff _ _).mp h)
         simp only [List.filterMap_cons, List.filterMap_nil, Bool.false_eq_true, eq_self_iff_true,
           ite_false, ite_true, List.mem_cons, List.not_mem_nil, or_false] at hq
         rcases hq with rfl
         exact now_branch hqa
       | succ sz =>
-        obtain ⟨q, hq, _, hqa⟩ := BacktrackGen.mem_support_backtrack_ok _ x h
+        obtain ⟨q, hq, _, hqa⟩ := produces_backtrack_ok _ x h
         simp only [List.filterMap_cons, List.filterMap_nil, Bool.false_eq_true, eq_self_iff_true,
           ite_false, ite_true, List.mem_cons, List.not_mem_nil, or_false] at hq
         rcases hq with rfl | rfl
@@ -206,22 +206,21 @@ guarded on the target type being `Nat`, `TVar` is unguarded.
 /-- Soundness of the derived `typing` generator: context and type in, term out. -/
 theorem typing_gen_sound : ∀ (fuel iS sz : Nat) (G : List type) (t : type) (e : term),
     Produces (specimen_gen_typing_1__SpecimenTest_Correctness_StlcGeneratorSoundness_StlcGeneratorSoundness
-        (G := SPMF) fuel iS sz G t) e →
+        (G := SGen) fuel iS sz G t) e →
     typing G e t := by
   intro fuel
   induction fuel with
   | zero =>
     intro iS sz G t e h
     simp only [specimen_gen_typing_1__SpecimenTest_Correctness_StlcGeneratorSoundness_StlcGeneratorSoundness] at h
-    exact absurd h (not_produces_exhaust e)
+    exact absurd h (not_produces_outOfFuel e)
   | succ fuel ih =>
     intro iS sz G t e h
     simp only [specimen_gen_typing_1__SpecimenTest_Correctness_StlcGeneratorSoundness_StlcGeneratorSoundness] at h
     -- `TConst` at `t = Nat`, shared by the truncated and the full pool.
     have tconst :
-        Produces ((BacktrackGen.liftGen (G := SPMF)
-            (Basalt.ArbitraryFueled.arbitraryFueled iS) >>= fun n => pure (term.Const n))
-            : BacktrackGen SPMF term) e → typing G e type.Nat := by
+        Produces (((Basalt.ArbitraryFueled.arbitraryFueled iS) >>= fun n => pure (term.Const n))
+            : SGen term) e → typing G e type.Nat := by
       intro hqa
       obtain ⟨n, _, he⟩ := produces_bind_iff.mp hqa
       cases produces_pure_iff.mp he
@@ -229,8 +228,8 @@ theorem typing_gen_sound : ∀ (fuel iS sz : Nat) (G : List type) (t : type) (e 
     -- `TVar`, unguarded, in both pools and at every target type: the delegated `lookup` producer at
     -- the emitted instance's literal fuel `10000`.
     have tvar : ∀ t,
-        Produces ((BacktrackGenFor.gen (α := Nat) (P := fun x => lookup G x t) (G := SPMF) iS
-            >>= fun x => pure (term.Var x)) : BacktrackGen SPMF term) e → typing G e t := by
+        Produces ((BacktrackGenFor.gen (α := Nat) (P := fun x => lookup G x t) (G := SGen) iS
+            >>= fun x => pure (term.Var x)) : SGen term) e → typing G e t := by
       intro t hqa
       obtain ⟨x, hx, he⟩ := produces_bind_iff.mp hqa
       cases produces_pure_iff.mp he
@@ -244,15 +243,15 @@ theorem typing_gen_sound : ∀ (fuel iS sz : Nat) (G : List type) (t : type) (e 
     | Nat =>
       cases sz with
       | zero =>
-        obtain ⟨q, hq, _, hqa⟩ := BacktrackGen.mem_support_backtrack_ok _ _
-          ((BacktrackGen.mem_support_refutedToExhausted_ok_iff _ _).mp h)
+        obtain ⟨q, hq, _, hqa⟩ := produces_backtrack_ok _ _
+          ((produces_backtrack_truncated_iff _ _).mp h)
         simp only [List.filterMap_cons, List.filterMap_nil, Bool.false_eq_true, eq_self_iff_true,
           ite_false, ite_true, List.mem_cons, List.not_mem_nil, or_false] at hq
         rcases hq with rfl | rfl
         · exact tconst hqa
         · exact tvar _ hqa
       | succ sz =>
-        obtain ⟨q, hq, _, hqa⟩ := BacktrackGen.mem_support_backtrack_ok _ _ h
+        obtain ⟨q, hq, _, hqa⟩ := produces_backtrack_ok _ _ h
         simp only [List.filterMap_cons, List.filterMap_nil, Bool.false_eq_true, eq_self_iff_true,
           ite_false, ite_true, List.mem_cons, List.not_mem_nil, or_false] at hq
         rcases hq with rfl | rfl | rfl | rfl
@@ -272,14 +271,14 @@ theorem typing_gen_sound : ∀ (fuel iS sz : Nat) (G : List type) (t : type) (e 
     | Fun τ1 τ2 =>
       cases sz with
       | zero =>
-        obtain ⟨q, hq, _, hqa⟩ := BacktrackGen.mem_support_backtrack_ok _ _
-          ((BacktrackGen.mem_support_refutedToExhausted_ok_iff _ _).mp h)
+        obtain ⟨q, hq, _, hqa⟩ := produces_backtrack_ok _ _
+          ((produces_backtrack_truncated_iff _ _).mp h)
         simp only [List.filterMap_cons, List.filterMap_nil, Bool.false_eq_true, eq_self_iff_true,
           ite_false, ite_true, List.mem_cons, List.not_mem_nil, or_false] at hq
         rcases hq with rfl
         exact tvar _ hqa
       | succ sz =>
-        obtain ⟨q, hq, _, hqa⟩ := BacktrackGen.mem_support_backtrack_ok _ _ h
+        obtain ⟨q, hq, _, hqa⟩ := produces_backtrack_ok _ _ h
         simp only [List.filterMap_cons, List.filterMap_nil, Bool.false_eq_true, eq_self_iff_true,
           ite_false, ite_true, List.mem_cons, List.not_mem_nil, or_false] at hq
         rcases hq with rfl | rfl | rfl
@@ -306,14 +305,14 @@ which is where the literal fuel `10000` comes from.
 `fun e => typing G e t` can produce, at the `SPMF` interpretation and at any size, really has
 type `t` in context `G`. -/
 theorem stlc_gen_sound (G : List type) (t : type) (sz : Nat) (e : term)
-    (h : Produces (BacktrackGenFor.gen (P := fun e => typing G e t) (G := SPMF) sz) e) :
+    (h : Produces (BacktrackGenFor.gen (P := fun e => typing G e t) (G := SGen) sz) e) :
     typing G e t := by
   simp only [BacktrackGenFor.gen] at h
   exact typing_gen_sound 10000 sz sz G t e h
 
 /-- Soundness of the derived `lookup` producer, at the `BacktrackGenFor` interface. -/
 theorem lookup_gen_sound' (G : List type) (t : type) (sz : Nat) (x : Nat)
-    (h : Produces (BacktrackGenFor.gen (P := fun x => lookup G x t) (G := SPMF) sz) x) :
+    (h : Produces (BacktrackGenFor.gen (P := fun x => lookup G x t) (G := SGen) sz) x) :
     lookup G x t := by
   simp only [BacktrackGenFor.gen] at h
   exact lookup_gen_sound 10000 sz sz G t x h
@@ -323,25 +322,25 @@ theorem lookup_gen_sound' (G : List type) (t : type) (sz : Nat) (x : Nat)
 A soundness theorem is worthless if its hypothesis is unsatisfiable, so the support really is shown
 to be inhabited — and not only in the truncated `size = 0` pool: `stlc_gen_nonvacuous_abs` goes
 through the *recursive* `TAbs` branch. This is the completeness direction, which is why these are the
-only proofs in the file that use `BacktrackGen.mem_support_backtrack_of_branch` and therefore the
+only proofs in the file that use `produces_backtrack_of_branch` and therefore the
 only ones that have to evaluate a branch weight (`by decide`).
 -/
 
 /-- The `lookup.Now` branch really is reachable, at every fuel, `initSize` and `size`. -/
 theorem lookup_now_witness (fuel iS sz : Nat) (τ : type) (Γ : List type) :
     Produces (specimen_gen_lookup_1__SpecimenTest_Correctness_StlcGeneratorSoundness_StlcGeneratorSoundness
-        (G := SPMF) (fuel + 1) iS sz (τ :: Γ) τ) 0 := by
+        (G := SGen) (fuel + 1) iS sz (τ :: Γ) τ) 0 := by
   simp only [specimen_gen_lookup_1__SpecimenTest_Correctness_StlcGeneratorSoundness_StlcGeneratorSoundness]
   cases sz with
   | zero =>
-    refine (BacktrackGen.mem_support_refutedToExhausted_ok_iff _ _).mpr ?_
-    refine BacktrackGen.mem_support_backtrack_of_branch _ _ (List.Mem.head _)
+    refine (produces_backtrack_truncated_iff _ _).mpr ?_
+    refine produces_backtrack_of_branch _ _ (List.Mem.head _)
       (by dsimp only; decide) _ ?_
     -- The `DecOpt` side condition `τ = τ` answers `.ok true`, so the branch is a `pure`.
     simp only [DecOpt.decOpt]
     exact produces_pure_iff.mpr rfl
   | succ sz =>
-    refine BacktrackGen.mem_support_backtrack_of_branch _ _ (List.Mem.head _)
+    refine produces_backtrack_of_branch _ _ (List.Mem.head _)
       (by dsimp only; decide) _ ?_
     simp only [DecOpt.decOpt]
     exact produces_pure_iff.mpr rfl
@@ -350,20 +349,20 @@ theorem lookup_now_witness (fuel iS sz : Nat) (τ : type) (Γ : List type) :
 out in the delegated `lookup` producer at the literal fuel `10000`. -/
 theorem typing_var_witness (fuel iS sz : Nat) (τ : type) (Γ : List type) :
     Produces (specimen_gen_typing_1__SpecimenTest_Correctness_StlcGeneratorSoundness_StlcGeneratorSoundness
-        (G := SPMF) (fuel + 1) iS sz (τ :: Γ) τ) (term.Var 0) := by
+        (G := SGen) (fuel + 1) iS sz (τ :: Γ) τ) (term.Var 0) := by
   simp only [specimen_gen_typing_1__SpecimenTest_Correctness_StlcGeneratorSoundness_StlcGeneratorSoundness]
   cases τ with
   | Nat =>
     cases sz with
     | zero =>
-      refine (BacktrackGen.mem_support_refutedToExhausted_ok_iff _ _).mpr ?_
-      refine BacktrackGen.mem_support_backtrack_of_branch _ _
+      refine (produces_backtrack_truncated_iff _ _).mpr ?_
+      refine produces_backtrack_of_branch _ _
         (List.Mem.tail _ (List.Mem.head _)) (by dsimp only; decide) _ ?_
       refine produces_bind_of ?_ (produces_pure_iff.mpr rfl)
       simp only [BacktrackGenFor.gen]
       exact lookup_now_witness 9999 iS iS type.Nat Γ
     | succ sz =>
-      refine BacktrackGen.mem_support_backtrack_of_branch _ _
+      refine produces_backtrack_of_branch _ _
         (List.Mem.tail _ (List.Mem.head _)) (by dsimp only; decide) _ ?_
       refine produces_bind_of ?_ (produces_pure_iff.mpr rfl)
       simp only [BacktrackGenFor.gen]
@@ -371,14 +370,14 @@ theorem typing_var_witness (fuel iS sz : Nat) (τ : type) (Γ : List type) :
   | Fun τ1 τ2 =>
     cases sz with
     | zero =>
-      refine (BacktrackGen.mem_support_refutedToExhausted_ok_iff _ _).mpr ?_
-      refine BacktrackGen.mem_support_backtrack_of_branch _ _ (List.Mem.head _)
+      refine (produces_backtrack_truncated_iff _ _).mpr ?_
+      refine produces_backtrack_of_branch _ _ (List.Mem.head _)
         (by dsimp only; decide) _ ?_
       refine produces_bind_of ?_ (produces_pure_iff.mpr rfl)
       simp only [BacktrackGenFor.gen]
       exact lookup_now_witness 9999 iS iS (type.Fun τ1 τ2) Γ
     | succ sz =>
-      refine BacktrackGen.mem_support_backtrack_of_branch _ _ (List.Mem.head _)
+      refine produces_backtrack_of_branch _ _ (List.Mem.head _)
         (by dsimp only; decide) _ ?_
       refine produces_bind_of ?_ (produces_pure_iff.mpr rfl)
       simp only [BacktrackGenFor.gen]
@@ -388,7 +387,7 @@ theorem typing_var_witness (fuel iS sz : Nat) (τ : type) (Γ : List type) :
 `Var 0` already at size `0`. -/
 theorem stlc_gen_nonvacuous :
     Produces (BacktrackGenFor.gen (P := fun e => typing [type.Nat] e type.Nat)
-        (G := SPMF) 0) (term.Var 0) := by
+        (G := SGen) 0) (term.Var 0) := by
   simp only [BacktrackGenFor.gen]
   exact typing_var_witness 9999 0 0 type.Nat []
 
@@ -397,10 +396,10 @@ theorem stlc_gen_nonvacuous :
 soundness theorem is not confined to the base constructors. -/
 theorem stlc_gen_nonvacuous_abs :
     Produces (BacktrackGenFor.gen (P := fun e => typing [] e (type.Fun type.Nat type.Nat))
-        (G := SPMF) 2) (term.Abs type.Nat (term.Var 0)) := by
+        (G := SGen) 2) (term.Abs type.Nat (term.Var 0)) := by
   simp only [BacktrackGenFor.gen,
     specimen_gen_typing_1__SpecimenTest_Correctness_StlcGeneratorSoundness_StlcGeneratorSoundness]
-  refine BacktrackGen.mem_support_backtrack_of_branch _ _
+  refine produces_backtrack_of_branch _ _
     (List.Mem.tail _ (List.Mem.head _)) (by dsimp only; decide) _ ?_
   refine produces_bind_of ?_ (produces_pure_iff.mpr rfl)
   exact typing_var_witness 9998 2 1 type.Nat []

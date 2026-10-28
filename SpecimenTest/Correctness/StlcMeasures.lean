@@ -1,8 +1,7 @@
 import SpecimenTest.CommonDefinitions.STLCDefinitions
 import SpecimenTest.CommonDefinitions.STLCBasaltGenerators
 import Specimen
-import Basalt.SPMF.Backtrack
-import Basalt.SPMF.Arbitrary
+import Specimen.Correctness.LeafSPMF
 
 /-!
 # Budget measures for the derived STLC generators
@@ -122,6 +121,19 @@ def tdepth : term → Nat
   | .Add a b => max (tdepth a) (tdepth b) + 1
   | .App a b => max (tdepth a) (tdepth b) + 1
 
+/-- The unconstrained `type` draw at `SGen` reaches everything it reaches at `SPMF`. -/
+theorem type_gen_reachesAll : ∀ n,
+    Specimen.Correctness.ReachesAll (@type.basaltArbitraryFueled SPMF _ n)
+      (@type.basaltArbitraryFueled Specimen.Correctness.SGen _ n)
+  | 0 => by simp only [type.basaltArbitraryFueled]; walk
+  | n + 1 => by simp only [type.basaltArbitraryFueled]; walk [type_gen_reachesAll n]
+
+/-- `type_gen_complete`, at the monad the derived generators draw from. -/
+theorem type_gen_produces (τ : type) (n : Nat) (h : typeDepth τ ≤ n) :
+    Specimen.Correctness.Produces
+      (Basalt.ArbitraryFueled.arbitraryFueled (α := type) (G := Specimen.Correctness.SGen) n) τ :=
+  type_gen_reachesAll n τ (type_gen_complete τ n h)
+
 /-- Largest de Bruijn index appearing, +1: bounds the `initSize` the lookup producer needs. -/
 def varBound : term → Nat
   | .Const _ => 0
@@ -131,10 +143,10 @@ def varBound : term → Nat
   | .App a b => max (varBound a) (varBound b)
 
 /-- The `TConst` branch draws its literal from `Arbitrary Nat`, so completeness there is exactly that
-    generator's support lemma, which lives in `Basalt.SPMF.Arbitrary`. -/
+    generator's support lemma, which lives in `Specimen.Correctness.LeafSPMF`. -/
 theorem nat_arbitraryGen_support (n : Nat) :
     n ∈ (Basalt.Nat.arbitraryGen (G := SPMF)).support :=
-  Basalt.Nat.mem_support_arbitraryGen n
+  Specimen.Correctness.nat_arbitraryGen_sound_complete.complete n trivial
 
 /-- The halving arithmetic, shared by the `Add` and `App` branches: the measure's doubling is
     exactly what survives the emitter's `Nat.div size' 2`, and the `max 2` floor is what forces
