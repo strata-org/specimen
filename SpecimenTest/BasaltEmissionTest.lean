@@ -29,9 +29,9 @@ inductive Between : Nat → Nat → Nat → Prop where
   | here : ∀ lo hi, lo ≤ hi → Between lo hi lo
   | there : ∀ lo hi n, Between (lo + 1) hi n → Between lo hi n
 
--- The emitted shape: branches as functions, and at size 0, where the recursive constructor is
--- withheld, one more branch that fails without refuting.
-/-- [(1, fun (_ : Unit) => Specimen.truncated)] -/
+-- The emitted shape: branches as functions, and at size 0 the recursive constructor as its
+-- conclusion, cut off where it matches. `there`'s conclusion constrains no input, so it always does.
+/-- (1, fun (_ : Unit) => Specimen.truncated)] -/
 #guard_msgs (substring := true, whitespace := lax) in
 derive_generator (fun lo hi => ∃ n, Between lo hi n)
 
