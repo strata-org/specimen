@@ -1,13 +1,14 @@
-import Basalt.Backtrack
+import Specimen.Enum.Backtrack
 import Basalt.Combinators
 
 /-!
 # The classes Basalt-derived generators are found by
 
 A derived generator under `specimen.emitBasalt` is polymorphic in its generator monad `G`. It asks of
-`G` only what derived code does: Basalt's `Gen`, `Fail` for a refutation, `FailWith Exhaustion` for a
-failure that is not one, and `Backtrack` for the choice among rules. These classes find such a
-generator by what it produces, and give the unconstrained values it draws.
+`G` only what derived code does: Basalt's `Gen`, and from `Specimen.Enum` `Fail` for a refutation,
+`FailWith Exhaustion` for a failure that is not one, and `Backtrack` (with `MonoBacktrack`) for the
+choice among rules. These classes find such a generator by what it produces, and give the
+unconstrained values it draws.
 
 Basalt keeps generation generic and has no lookup classes of its own, so they live here.
 -/
@@ -60,8 +61,8 @@ end Specimen
 /-- A generator for `α` whose successes satisfy `P`, taking a fuel; the Basalt counterpart of
 `ArbitrarySizedSuchThat`. -/
 class BacktrackGenFor (α : Type) (P : α → Prop) where
-  gen : ∀ {G : Type → Type} [Gen G] [Fail G] [FailWith Specimen.Exhaustion G] [Basalt.Backtrack G],
-    Nat → G α
+  gen : ∀ {G : Type → Type} [Gen G] [Specimen.Fail G] [Specimen.FailWith Specimen.Exhaustion G]
+    [Specimen.Backtrack G] [Specimen.MonoBacktrack G], Nat → G α
 
 namespace Basalt
 

@@ -42,8 +42,7 @@ derive_generator (fun τ => ∃ e, HasType e τ)
 - **Dependency.** Specimen requires `basalt`, which requires Mathlib. So Mathlib is cloned and a few GB
   of prebuilt artefacts downloaded, by `lake exe cache get` (`lake update` runs it). It is never built
   from source or elaborated into Specimen: the only Basalt modules Specimen imports are the generation
-  ones (`Gen`, `RandomChoice`, the combinators, `Fail`, `Backtrack`, `ExceptT`, `OptionT`, the Plausible
-  `Gen` instance), and
+  ones (`Gen`, `RandomChoice`, the combinators, `OptionT`, the Plausible `Gen` instance), and
   those import no Mathlib.
 - **Set the flag for a whole library, not per file** (§6.1):
 
@@ -58,21 +57,23 @@ derive_generator (fun τ => ∃ e, HasType e τ)
 
 ## 2. The Basalt API the emitter targets
 
-From Basalt's `Gen`, `Fail` and `Backtrack` modules, and Specimen's `Specimen.BasaltClasses`:
+From Basalt's `Gen`, Specimen's `Specimen.Enum` (the choice and failure classes, hosted in Specimen
+until Basalt has a stable API for them) and `Specimen.BasaltClasses`:
 
 ```lean
 class Gen (g : Type u → Type v)            -- Monad, RandomChoice, Inhabited, CCPO, MonoBind
-class Fail (G : Type → Type) where fail : G α               -- a refutation
-class FailWith (ε : Type) (G : Type → Type) where failWith : ε → G α   -- a failure that is not one
-class Basalt.Backtrack (G : Type → Type) where
+class Specimen.Fail (G : Type → Type) where fail : G α               -- a refutation
+class Specimen.FailWith (ε : Type) (G : Type → Type) where failWith : ε → G α   -- not a refutation
+class Specimen.Backtrack (G : Type → Type) where
   backtrack : List (Nat × (Unit → G α)) → G α
+class Specimen.MonoBacktrack (G) [Backtrack G] [∀ α, PartialOrder (G α)]   -- for partial_fixpoint
 
 -- Specimen
 inductive Specimen.Exhaustion where | fuel | truncated | inconclusive
 
 class BacktrackGenFor (α : Type) (P : α → Prop) where
-  gen : ∀ {G : Type → Type} [Gen G] [Fail G] [FailWith Specimen.Exhaustion G] [Basalt.Backtrack G],
-    Nat → G α
+  gen : ∀ {G : Type → Type} [Gen G] [Fail G] [FailWith Specimen.Exhaustion G] [Backtrack G]
+    [MonoBacktrack G], Nat → G α
 
 namespace Basalt
 class Arbitrary (α : Type) where
@@ -88,7 +89,7 @@ end Basalt
 - **`backtrack`** picks a branch by weight, runs it, and on either failure drops it and picks again
   among the rest. Branches are functions, so only those tried are built. What it means depends on the
   interpretation: the search itself when sampling, the union of the branches at an enumeration
-  (Basalt's `Backtrack` docstring and laws).
+  (`Specimen.Enum.Backtrack`'s docstring, and its laws in `Specimen.Enum.Laws`).
 - **`BacktrackGenFor α P`** is the counterpart of `ArbitrarySizedSuchThat α P`, polymorphic in `G`.
 - **`Basalt.Arbitrary` / `Basalt.ArbitraryFueled`** are the counterparts of Plausible's
   unconstrained classes; a blanket instance gives `ArbitraryFueled` from `Arbitrary`. Basalt has no
@@ -113,20 +114,20 @@ Under the flag (abridged: the `size + 1` case, without the input-dispatch guards
 ```lean
 instance : BacktrackGenFor Expr (fun e => HasType e τ) where
   gen :=
-    let rec aux_arb {G : Type → Type} [_root_.Gen G] [_root_.Fail G]
-        [_root_.FailWith Specimen.Exhaustion G] [Basalt.Backtrack G]
+    let rec aux_arb {G : Type → Type} [_root_.Gen G] [Specimen.Fail G]
+        [Specimen.FailWith Specimen.Exhaustion G] [Specimen.Backtrack G] [Specimen.MonoBacktrack G]
         (fuel initSize size : Nat) (τ : Ty) : G Expr :=
       match fuel with
       | 0 => Specimen.outOfFuel
       | fuel' + 1 =>
         match size with
-        | 0 => Basalt.Backtrack.backtrack
+        | 0 => Specimen.Backtrack.backtrack
             [ …,   -- the non-recursive constructors, as below
              (1, fun (_ : Unit) => match τ with      -- `add`, cut off where it would apply
                 | .nat => Specimen.truncated
                 | _ => Specimen.refute)]
         | size' + 1 =>
-          Basalt.Backtrack.backtrack
+          Specimen.Backtrack.backtrack
             [(4, fun (_ : Unit) => match τ with
                 | .nat => do
                   let n ← Basalt.ArbitraryFueled.arbitraryFueled initSize
@@ -155,8 +156,8 @@ are identical. What changes:
 | Plausible path | Basalt path |
 |---|---|
 | `instance : ArbitrarySizedSuchThat …`, field `arbitrarySizedST` | `instance : BacktrackGenFor …`, field `gen` |
-| worker returns `Plausible.Gen α` | worker binds `{G} [Gen G] [Fail G] [FailWith Exhaustion G] [Backtrack G]`, returns `G α` |
-| `GeneratorCombinators.backtrack [(w, b), …]` | `Basalt.Backtrack.backtrack [(w, fun (_ : Unit) => b), …]` |
+| worker returns `Plausible.Gen α` | worker binds `{G} [Gen G] [Fail G] [FailWith Exhaustion G] [Backtrack G] [MonoBacktrack G]`, returns `G α` |
+| `GeneratorCombinators.backtrack [(w, b), …]` | `Specimen.Backtrack.backtrack [(w, fun (_ : Unit) => b), …]` |
 | `throw Gen.genericFailure` | `Specimen.refute` (`Fail.fail`) |
 | `throw Gen.outOfFuelError` (fuel 0) | `Specimen.outOfFuel` (`failWith .fuel`) |
 | `DecOpt` premise: anything but `ok true` throws | `ok false` → `refute`, error → `inconclusive` |
@@ -171,7 +172,7 @@ Notes:
   branch sits inside `List.filterMap` with no expected type, and `fun () =>` there leaves a universe
   constraint unsolved.
 - **`_root_.Gen`.** Derived code lands in the user's file, where `open Plausible` is common, and a bare
-  `Gen` there is ambiguous. `Fail` and `FailWith` are written `_root_.` too, the rest qualified.
+  `Gen` there is ambiguous. The rest are written qualified.
 - **The `G` binder sits on the inner function.** A `let rec` is lifted to a top-level declaration and
   cannot capture a binder from an enclosing lambda; `derive_mutual`'s definitions each carry their own
   `{G}`, which unify at the call sites.
@@ -205,8 +206,8 @@ instance (priority := low) [BacktrackGenFor α P] : ArbitrarySizedSuchThat α P 
 
 So every consumer of `ArbitrarySizedSuchThat` (the `plausible` tactic, `specimen_test`,
 `printSamples`, generators derived with the flag off) runs a Basalt-derived generator unchanged.
-At `BasaltSampler` a refutation is `none` and a labelled failure an `.error`, and Basalt's
-`Backtrack` instance for it is the search, retrying past both. `toPlausibleGen` throws
+At `BasaltSampler` a refutation is `none` and a labelled failure an `.error`, and the `Backtrack`
+instance for it is the search, retrying past both. `toPlausibleGen` throws
 `Gen.genericFailure` for a refutation and Plausible's `"out of fuel"` error for a labelled failure, which `Gen.GenError.isInconclusive` classifies as inconclusive, so the distinction
 survives the boundary as a message. Low priority, so a hand-written `ArbitrarySizedSuchThat` for the
 same relation still wins.
@@ -310,4 +311,5 @@ before the flip. A replayed module shows as `Replayed …` in the log. If in dou
   yet.
 - **The `Basalt.ArbitraryFueled` requirement** is manual (§6.2). A better error at the point of the
   synthesis failure, naming the `deriving` line to add, is the realistic improvement.
-- **Packaging.** `basalt` is pinned to a commit of its enumeration rework, until that is merged.
+- **Packaging.** `basalt` is pinned to `hgoldstein95/basalt#35` (a fix to `walk fixpoint` the laws in
+  `Specimen.Enum.Laws` need), until it is merged; then to `main`.

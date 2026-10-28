@@ -17,7 +17,7 @@ whose only constructor carries a side condition, so the schedule has to draw-and
 construct.
 
 The path also has its own copy of the Basalt branch emission (each branch wrapped as a function for
-`Basalt.Backtrack.backtrack`), so this file has to build with `specimen.emitBasalt` both off and on;
+`Specimen.Backtrack.backtrack`), so this file has to build with `specimen.emitBasalt` both off and on;
 `BasaltEmissionTest` derives an input-free relation with the flag set.
 -/
 

@@ -122,8 +122,9 @@ def arbitrarySizedST (prop : MExp) (fuel : MExp) : MExp :=
 /-- `MExp` representation of `BacktrackGenFor.gen`, the Basalt-general counterpart of
     `arbitrarySizedST`.
 
-    Five more holes than `arbitrarySizedST` because the field is
-    `{α} → (P) → [inst] → {G} → [Gen G] → [Fail G] → [FailWith _ G] → [Backtrack G] → Nat → G α`:
+    Six more holes than `arbitrarySizedST` because the field is
+    `{α} → (P) → [inst] → {G} → [Gen G] → [Fail G] → [FailWith _ G] → [Backtrack G] →
+    [MonoBacktrack G] → Nat → G α`:
     under `@` every binder must be supplied, so `G` gets a hole solved by unification against the
     expected type, and its instances get holes solved by instance synthesis.
 
@@ -131,7 +132,7 @@ def arbitrarySizedST (prop : MExp) (fuel : MExp) : MExp :=
     Specimen's own modules to import Basalt. -/
 def backtrackGenForCall (prop : MExp) (fuel : MExp) : MExp :=
   .MApp .allExplicit (.MConst (Name.mkStr2 "BacktrackGenFor" "gen"))
-    [.MHole, prop, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, fuel]
+    [.MHole, prop, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, fuel]
 
 /-- `ok x` is an `MExp` representing `Except.ok x`. -/
 def ok (x : MExp) : MExp :=

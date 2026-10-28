@@ -245,7 +245,8 @@ def mkConstrainedProducerTypeClassInstance
       -- surrounding scope — doing that leaves `G` as an unassigned metavariable and the lifted
       -- `aux_arb` fails the kernel with "declaration has metavariables".
       --
-      -- `BacktrackGenFor.gen` is itself `∀ {G} [Gen G] [Fail G] [FailWith _ G] [Backtrack G], Nat → G α`,
+      -- `BacktrackGenFor.gen` is itself `∀ {G} [Gen G] [Fail G] [FailWith _ G] [Backtrack G]
+      -- [MonoBacktrack G], Nat → G α`,
       -- so the field's own binders unify with the inner function's at the call below.
       let basaltBinders ← liftMacroM basaltInstBinders
       `(instance $arbitraryTypeParamInstances:bracketedBinder* : $backtrackGenForTypeclass $targetTypeSyntax (fun $targetVarPattern => @$(mkIdent inductiveName) $args*) where
@@ -431,10 +432,10 @@ def mkConstrainedProducerMutualPieces
     let recurses := [baseGenerators, inductiveGenerators].any (mentionsIdent freshFuel'.getId ·)
     let defCmd ←
       if !recurses then `(command| def $defIdent : $defType := $lambdaBody)
-      -- `termination_by` binds every parameter after the colon, so the five holes skip `{G}` and its
-      -- four instances.
+      -- `termination_by` binds every parameter after the colon, so the six holes skip `{G}` and its
+      -- five instances.
       else if useBasalt then `(command| def $defIdent : $defType := $lambdaBody
-        termination_by structural _ _ _ _ _ $fuelIdent:ident => $fuelIdent)
+        termination_by structural _ _ _ _ _ _ $fuelIdent:ident => $fuelIdent)
       else `(command| def $defIdent : $defType := $lambdaBody
         termination_by structural $fuelIdent:ident => $fuelIdent)
 

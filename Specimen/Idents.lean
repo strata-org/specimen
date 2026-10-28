@@ -108,30 +108,34 @@ def basaltGenVar : Ident := mkIdent $ Name.mkStr1 "G"
 
 /-- The instance binders of a Basalt-targeted derived generator after `{G : Type → Type}`: a
     generator monad that can refute (`Fail`), fail without refuting (`FailWith Specimen.Exhaustion`)
-    and backtrack among rules (`Basalt.Backtrack`). -/
-def basaltFailClass : Ident := mkIdent $ Name.mkStr2 "_root_" "Fail"
-def basaltFailWithClass : Ident := mkIdent $ Name.mkStr2 "_root_" "FailWith"
+    and backtrack among rules (`Specimen.Backtrack`, with `Specimen.MonoBacktrack`). -/
+def basaltFailClass : Ident := mkIdent $ Name.mkStr2 "Specimen" "Fail"
+def basaltFailWithClass : Ident := mkIdent $ Name.mkStr2 "Specimen" "FailWith"
 def basaltExhaustionType : Ident := mkIdent $ Name.mkStr2 "Specimen" "Exhaustion"
-def basaltBacktrackClass : Ident := mkIdent $ Name.mkStr2 "Basalt" "Backtrack"
+def basaltBacktrackClass : Ident := mkIdent $ Name.mkStr2 "Specimen" "Backtrack"
+def basaltMonoBacktrackClass : Ident := mkIdent $ Name.mkStr2 "Specimen" "MonoBacktrack"
 
 def basaltInstBinders : MacroM (Array (TSyntax ``Lean.Parser.Term.bracketedBinder)) := do
   let g := basaltGenVar
   return #[← `(Lean.Parser.Term.bracketedBinderF| [$basaltGenClass $g]),
     ← `(Lean.Parser.Term.bracketedBinderF| [$basaltFailClass $g]),
     ← `(Lean.Parser.Term.bracketedBinderF| [$basaltFailWithClass $basaltExhaustionType $g]),
-    ← `(Lean.Parser.Term.bracketedBinderF| [$basaltBacktrackClass $g])]
+    ← `(Lean.Parser.Term.bracketedBinderF| [$basaltBacktrackClass $g]),
+    ← `(Lean.Parser.Term.bracketedBinderF| [$basaltMonoBacktrackClass $g])]
 
-/-- `fun {G} [Gen G] [Fail G] [FailWith Specimen.Exhaustion G] [Basalt.Backtrack G] => body`. -/
+/-- `fun {G} [Gen G] [Fail G] [FailWith Specimen.Exhaustion G] [Specimen.Backtrack G] [Specimen.MonoBacktrack G] => body`. -/
 def basaltFun (body : TSyntax `term) : MacroM (TSyntax `term) := do
   let g := basaltGenVar
   `(fun {$g : Type → Type} [$basaltGenClass $g] [$basaltFailClass $g]
-      [$basaltFailWithClass $basaltExhaustionType $g] [$basaltBacktrackClass $g] => $body)
+      [$basaltFailWithClass $basaltExhaustionType $g] [$basaltBacktrackClass $g]
+      [$basaltMonoBacktrackClass $g] => $body)
 
-/-- `∀ {G} [Gen G] [Fail G] [FailWith Specimen.Exhaustion G] [Basalt.Backtrack G], ty`. -/
+/-- `∀ {G} [Gen G] [Fail G] [FailWith Specimen.Exhaustion G] [Specimen.Backtrack G] [Specimen.MonoBacktrack G], ty`. -/
 def basaltForall (ty : TSyntax `term) : MacroM (TSyntax `term) := do
   let g := basaltGenVar
   `(∀ {$g : Type → Type} [$basaltGenClass $g] [$basaltFailClass $g]
-      [$basaltFailWithClass $basaltExhaustionType $g] [$basaltBacktrackClass $g], $ty)
+      [$basaltFailWithClass $basaltExhaustionType $g] [$basaltBacktrackClass $g]
+      [$basaltMonoBacktrackClass $g], $ty)
 
 /-- `BacktrackGenFor α P`, the Basalt counterpart of `ArbitrarySizedSuchThat`. Its `gen` field is
     itself quantified over `{G}` and `basaltInstBinders`. -/
@@ -143,7 +147,7 @@ def unqualifiedBacktrackGenForFn : Ident := mkIdent $ Name.mkStr1 "gen"
 /-- Basalt's weighted backtracking. Its branches are functions (`List (Nat × (Unit → G α))`), so the
     emitted branch list wraps each producer in `fun (_ : Unit) => …` and only the branch selected is
     built. -/
-def basaltBacktrackFn : Ident := mkIdent $ Name.mkStr3 "Basalt" "Backtrack" "backtrack"
+def basaltBacktrackFn : Ident := mkIdent $ Name.mkStr3 "Specimen" "Backtrack" "backtrack"
 
 /-- `Specimen.outOfFuel`, replacing `throw Gen.outOfFuelError`. -/
 def backtrackGenExhaustFn : Ident := mkIdent $ Name.mkStr2 "Specimen" "outOfFuel"

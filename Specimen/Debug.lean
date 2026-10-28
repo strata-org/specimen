@@ -35,7 +35,7 @@ register_option specimen.multiOutput : Bool := {
 
 /-- When true, derived **generators** are emitted against Basalt's generator algebra instead of
     `Plausible.Gen`: the body is polymorphic in a generator monad `G` with `Gen`, `Fail`,
-    `FailWith Specimen.Exhaustion` and `Basalt.Backtrack`, its type is `G α`, and the instance emitted
+    `FailWith Specimen.Exhaustion`, `Specimen.Backtrack` and `Specimen.MonoBacktrack`, its type is `G α`, and the instance emitted
     is `BacktrackGenFor` rather than `ArbitrarySizedSuchThat`. One derived body then elaborates at
     every such `G`, not only the one it runs at.
 

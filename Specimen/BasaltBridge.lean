@@ -1,4 +1,4 @@
-import Basalt.BacktrackWith
+import Specimen.Enum.BacktrackWith
 import Basalt.OptionT
 import Basalt.PlausibleGen
 import Plausible.Arbitrary
@@ -23,7 +23,7 @@ open Plausible
 namespace Specimen
 
 /-- The monad a Basalt-derived generator runs at under Plausible: a refutation is `none`, a failure
-that is not one is a labelled `.error`, and `Basalt.Backtrack` retries past both. -/
+that is not one is a labelled `.error`, and `Specimen.Backtrack` retries past both. -/
 abbrev BasaltSampler := ExceptT Exhaustion (OptionT Plausible.Gen)
 
 /-- Run at `Plausible.Gen`, throwing `Gen.genericFailure` for a refutation and `Gen.outOfFuel` for a
