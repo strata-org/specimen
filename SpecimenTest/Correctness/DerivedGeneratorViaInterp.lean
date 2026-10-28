@@ -285,9 +285,9 @@ theorem lookup_emitted_neverFails (iS : Nat) :
         exact neverFails_bind (ih fuel sz (by omega) (by omega))
           (fun _ _ => neverFails_pure _)
 
-/-! ## Refutation-soundness: a `refuted` verdict is a proof of uninhabitedness
+/-! ## Refutation-soundness: a refutation is a proof of uninhabitedness
 
-The fourth direction: a `refuted` verdict is not just a failed attempt, it is a proof that no value
+The fourth direction: a refutation is not just a failed attempt, it is a proof that no value
 satisfies the relation. That makes the generator usable as a refutation procedure.
 
 Two things are worth being precise about.

@@ -20,12 +20,12 @@ are emitted and the proof stops compiling.
 
 ## Why the `SPMF` interpretation
 
-The emitted worker is polymorphic in the generator monad. Instantiated at Basalt's `SPMF` it denotes
-a sub-probability distribution over outcomes, and `Produces g x` says `x` is in the distribution's
-*support* — producible with nonzero probability, whatever the seed. `Basalt/SPMF/Backtrack.lean`
-supplies the theorems that decompose that support through the `backtrack` combinator every derived
-generator is built from, and `Specimen.Correctness.GenInterpSPMF` packages the `bind`/`pure`/`liftGen`
-steps as a `Produces` algebra. So "sound at `SPMF`" is the strong, seed-independent statement.
+The emitted worker is polymorphic in the generator monad. Instantiated at `SGen` (Basalt's `SPMF`
+under the sampler's `OptionT` and `ExceptT`) it denotes a sub-probability distribution over outcomes,
+and `Produces g x` says `x` is a success in the distribution's *support* — producible with nonzero
+probability, whatever the seed. Basalt's search lemmas decompose that support through the `backtrack`
+every derived generator is built from, and `Specimen.Correctness.GenInterpSPMF` packages them, with
+the `bind`/`pure` steps, as a `Produces` algebra. So "sound at `SPMF`" is the strong, seed-independent statement.
 
 ## Structure of the proof
 
@@ -72,8 +72,8 @@ the guards and the `filterMap` reduce and membership is a plain `List.mem_cons` 
 * `produces_backtrack_ok` — a success in `backtrack gs` came from some branch of
   `gs`. It is weight-agnostic, so soundness never has to evaluate a weight term.
 * `produces_backtrack_truncated_iff` — strips the `size = 0` wrapper.
-* `Produces` and its algebra (`produces_bind_iff`, `produces_pure_iff`, `not_produces_refute`,
-  `mem_support_liftGen_cases`) from `GenInterpSPMF` — each `do` bind in a branch decomposes through
+* `Produces` and its algebra (`produces_bind_iff`, `produces_pure_iff`, `not_produces_refute`)
+  from `GenInterpSPMF` — each `do` bind in a branch decomposes through
   these instead of through raw `SPMF` support reasoning.
 * `Specimen.DecOpt`'s `[Decidable P]` instance, consumed via `of_decide_eq_true` — the single side
   condition in the whole component is `lookup_1`'s `τ₁ = τ` check.
@@ -162,7 +162,7 @@ theorem lookup_gen_sound : ∀ (fuel iS sz : Nat) (Γ : List type) (τ : type) (
           Produces (match @DecOpt.decOpt (τ_1 = τ) inferInstance iS with
             | Except.ok true => (pure Nat.zero : SGen Nat)
             | Except.ok false => Specimen.refute
-            -- The third arm is `exhaust`, not `refute`: `DecOpt` is three-valued and an
+            -- The third arm is `inconclusive`, not `refute`: `DecOpt` is three-valued and an
             -- inconclusive check must not be reported as a definite refutation. Dead for a
             -- `Decidable`-derived instance like this one, which always answers `ok`.
             | _ => Specimen.inconclusive) x → lookup (τ_1 :: Γ') x τ := by

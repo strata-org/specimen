@@ -444,7 +444,7 @@ theorem genRelB_complete {step : SGenStep I A} {P : I → A → Prop} {φ σ : I
 A failure verdict cannot do this on its own. A labelled failure has three sources in emitted code — the
 fuel backstop tripping, a `size = 0` truncated disjunction, and a premise checker answering
 inconclusively — and only the middle one involves a search that actually completed. So reading
-`exhausted` as "nothing exists within this budget" is unsound in general.
+a labelled failure as "nothing exists within this budget" is unsound in general.
 
 What *is* sound uses only the **absence of a success**, plus completeness. These two lemmas separate the
 honest part from the part that needs an extra assumption, and neither inspects the failure constructor. -/
