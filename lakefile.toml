@@ -23,17 +23,17 @@ roots = ["Specimen", "Specimen.Interp", "Specimen.Basalt"]
 [[require]]
 name = "batteries"
 scope = "leanprover-community"
-rev = "f2effa3d803fda822b1f97b806c47cf2adfbcbc2"
+rev = "66e469188fe07963e5cf666c7d4433f45b8131c5"
 
 [[require]]
 name = "plausible"
 scope = "leanprover-community"
-rev = "118aa17ee84656b8bd727fef7c458ee8c833385c"
+rev = "dfa4f38190d07c37e315953e08b90fe2d95b3c24"
 
 [[require]]
 name = "proofwidgets"
 scope = "leanprover-community"
-rev = "106ff4fafc74ef4ac99d81dbf3ab399118f497a5"
+rev = "df72b022e558978a1c50264cfc4d7fec86fa8e04"
 
 # Basalt, for `specimen.emitBasalt`. It requires Mathlib, which comes with it: run `lake exe cache get`
 # after cloning to download Mathlib's build rather than compiling it (`lake update` runs it by itself). The batteries, plausible and
@@ -41,4 +41,4 @@ rev = "106ff4fafc74ef4ac99d81dbf3ab399118f497a5"
 [[require]]
 name = "basalt"
 git = "https://github.com/hgoldstein95/basalt"
-rev = "a6a783526afd1642792dda1863705dd37113160e"
+rev = "e15147ce2301a52df348fa2e60c674dc66496729"

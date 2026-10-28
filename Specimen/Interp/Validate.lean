@@ -35,7 +35,7 @@ inductive InterpIssue where
   /-- A step reads a variable that nothing bound — usually a schedule edited out of order. -/
   | unboundVar (spec : SpecKey) (ctor : Name) (variable_ : Name) (context : String)
   /-- A call passes the wrong number of value-level arguments for the callee's input arity. -/
-  | arityMismatch (spec : SpecKey) (ctor : Name) (callee : String) (given expected : Nat)
+  | arityMismatch (spec : SpecKey) (ctor : Name) (callee : String) (passed expected : Nat)
   /-- A step or schedule form v1 does not interpret. -/
   | unsupported (spec : SpecKey) (ctor : Name) (why : String)
   deriving Repr
@@ -68,8 +68,8 @@ def message : InterpIssue → String
     s!"call to '{fn}' but no registered relation has that `recFnName`."
   | unboundVar _ _ v ctx =>
     s!"'{v}' is read {ctx} but never bound earlier in the schedule."
-  | arityMismatch _ _ callee given expected =>
-    s!"call to {callee} passes {given} value argument(s) but it takes {expected}."
+  | arityMismatch _ _ callee passed expected =>
+    s!"call to {callee} passes {passed} value argument(s) but it takes {expected}."
   | unsupported _ _ why => why
 
 /-- `spec / ctor: message`, the form used in reports. -/
@@ -133,9 +133,9 @@ private def checkCall (env : InterpEnv) (spec : SpecKey) (ctor : Name) (bound : 
   | some key =>
     match inputArity? env key with
     | some n =>
-      let given := (valueArgs args).length
-      if given == n then argIssues
-      else argIssues ++ [.arityMismatch spec ctor s!"'{f}' ({renderSpecKey key})" given n]
+      let passed := (valueArgs args).length
+      if passed == n then argIssues
+      else argIssues ++ [.arityMismatch spec ctor s!"'{f}' ({renderSpecKey key})" passed n]
     | none => argIssues
 
 /-- Checks one constructor's schedule, threading the set of bound variables through the steps. -/
@@ -235,9 +235,9 @@ private def checkSchedule (env : InterpEnv) (rel : RelSchedule) (ctor : Name) (s
           let rendered := ppHypothesisExpr hypExpr
           -- What the checker will be handed: `checkSource`/`checkSourceIn` drop the relation's type
           -- and instance positions, not only what is syntactically type-level.
-          let given := valueArgsAt (env.typeArgIndicesOf relName) args
+          let passed := valueArgsAt (env.typeArgIndicesOf relName) args
           let argIssues :=
-            checkExprs env spec ctor bound s!"in the check `{rendered}`" given
+            checkExprs env spec ctor bound s!"in the check `{rendered}`" passed
           -- Keyed with the instantiation, as `checkSourceIn` looks it up. A polymorphic relation's
           -- checker is registered as e.g. `MapNotContainsKey[]@(0:Attr, …)`; the bare key missed it, so
           -- `check` demanded a leaf for a checker the closure had derived, and never saw its arity.
@@ -251,9 +251,9 @@ private def checkSchedule (env : InterpEnv) (rel : RelSchedule) (ctor : Name) (s
               | some callee =>
                 let expected := callee.inputPositions.length
                 let arity :=
-                  if given.length == expected then []
+                  if passed.length == expected then []
                   else [InterpIssue.arityMismatch spec ctor
-                    s!"{renderSpecKey checkerKey} (for `{rendered}`)" given.length expected]
+                    s!"{renderSpecKey checkerKey} (for `{rendered}`)" passed.length expected]
                 -- A *generator*'s `Check` runs through `checkSource`, which reads only name-keyed leaves
                 -- (`env.checkers`); a derived checker mode reaches it only once
                 -- `publishInterpretedCheckers` has registered it as one. Checker and enumerator schedules

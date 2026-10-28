@@ -679,12 +679,12 @@ def drawSplit (policy : SplitPolicy) (n k : Nat) (floor : Nat := 0) (mins : List
     Gen (List Nat) :=
   if mins.all (· == 0) then drawSplitEven policy n k floor
   else do
-    let (given, left) := (mins.take k).foldl (fun (acc : List Nat × Nat) m =>
+    let (passed, left) := (mins.take k).foldl (fun (acc : List Nat × Nat) m =>
       let g := min m acc.2
       (acc.1 ++ [g], acc.2 - g)) ([], n)
-    let given := given ++ List.replicate (k - given.length) 0
+    let passed := passed ++ List.replicate (k - passed.length) 0
     let rest ← drawSplitEven policy left k floor
-    return (given.zip rest).map (fun (a, b) => a + b)
+    return (passed.zip rest).map (fun (a, b) => a + b)
 
 /-- For each size-consuming step of a schedule, in order, the premise that emitted it (`none` for a
     step no premise emitted). These are the steps `runSteps` hands an allocation to. -/
