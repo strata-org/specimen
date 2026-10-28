@@ -106,32 +106,57 @@ def basaltGenClass : Ident := mkIdent $ Name.mkStr2 "_root_" "Gen"
 /-- The type variable for the generator monad in emitted definitions. -/
 def basaltGenVar : Ident := mkIdent $ Name.mkStr1 "G"
 
-/-- `BacktrackGen G α`, the return type of a Basalt-targeted derived generator. Failure is a value
-    (`Outcome.refuted` or `Outcome.exhausted`) rather than a thrown error. -/
-def backtrackGenTypeConstructor : Ident := mkIdent $ Name.mkStr1 "BacktrackGen"
+/-- The instance binders of a Basalt-targeted derived generator after `{G : Type → Type}`: a
+    generator monad that can refute (`Fail`), fail without refuting (`FailWith Specimen.Exhaustion`)
+    and backtrack among rules (`Basalt.Backtrack`). -/
+def basaltFailClass : Ident := mkIdent $ Name.mkStr2 "_root_" "Fail"
+def basaltFailWithClass : Ident := mkIdent $ Name.mkStr2 "_root_" "FailWith"
+def basaltExhaustionType : Ident := mkIdent $ Name.mkStr2 "Specimen" "Exhaustion"
+def basaltBacktrackClass : Ident := mkIdent $ Name.mkStr2 "Basalt" "Backtrack"
+
+def basaltInstBinders : MacroM (Array (TSyntax ``Lean.Parser.Term.bracketedBinder)) := do
+  let g := basaltGenVar
+  return #[← `(Lean.Parser.Term.bracketedBinderF| [$basaltGenClass $g]),
+    ← `(Lean.Parser.Term.bracketedBinderF| [$basaltFailClass $g]),
+    ← `(Lean.Parser.Term.bracketedBinderF| [$basaltFailWithClass $basaltExhaustionType $g]),
+    ← `(Lean.Parser.Term.bracketedBinderF| [$basaltBacktrackClass $g])]
+
+/-- `fun {G} [Gen G] [Fail G] [FailWith Specimen.Exhaustion G] [Basalt.Backtrack G] => body`. -/
+def basaltFun (body : TSyntax `term) : MacroM (TSyntax `term) := do
+  let g := basaltGenVar
+  `(fun {$g : Type → Type} [$basaltGenClass $g] [$basaltFailClass $g]
+      [$basaltFailWithClass $basaltExhaustionType $g] [$basaltBacktrackClass $g] => $body)
+
+/-- `∀ {G} [Gen G] [Fail G] [FailWith Specimen.Exhaustion G] [Basalt.Backtrack G], ty`. -/
+def basaltForall (ty : TSyntax `term) : MacroM (TSyntax `term) := do
+  let g := basaltGenVar
+  `(∀ {$g : Type → Type} [$basaltGenClass $g] [$basaltFailClass $g]
+      [$basaltFailWithClass $basaltExhaustionType $g] [$basaltBacktrackClass $g], $ty)
 
 /-- `BacktrackGenFor α P`, the Basalt counterpart of `ArbitrarySizedSuchThat`. Its `gen` field is
-    itself quantified over `∀ {G} [Gen G]`. -/
+    itself quantified over `{G}` and `basaltInstBinders`. -/
 def backtrackGenForTypeclass : Ident := mkIdent $ Name.mkStr1 "BacktrackGenFor"
 
 /-- The field name of `BacktrackGenFor`. -/
 def unqualifiedBacktrackGenForFn : Ident := mkIdent $ Name.mkStr1 "gen"
 
-/-- Basalt's weighted backtracking combinator. Its branches are functions
-    (`List (Nat × (Unit → BacktrackGen G α))`), so the emitted branch list wraps each producer in
-    `fun (_ : Unit) => …` and only the branch selected is built. -/
-def basaltBacktrackFn : Ident := mkIdent $ Name.mkStr2 "BacktrackGen" "backtrack"
+/-- Basalt's weighted backtracking. Its branches are functions (`List (Nat × (Unit → G α))`), so the
+    emitted branch list wraps each producer in `fun (_ : Unit) => …` and only the branch selected is
+    built. -/
+def basaltBacktrackFn : Ident := mkIdent $ Name.mkStr3 "Basalt" "Backtrack" "backtrack"
 
-/-- `BacktrackGen.refutedToExhausted`: downgrade a definite refutation to inconclusive, for the
-    `size = 0` case where the recursive constructors were withheld. -/
-def backtrackGenRefutedToExhaustedFn : Ident :=
-  mkIdent $ Name.mkStr2 "BacktrackGen" "refutedToExhausted"
+/-- `Specimen.truncated`: at `size = 0`, where the recursive constructors were withheld, a branch that
+    fails without refuting, so a search whose other branches all refute is not reported refuted. -/
+def basaltTruncatedFn : Ident := mkIdent $ Name.mkStr2 "Specimen" "truncated"
 
-/-- `BacktrackGen.exhaust`, the out-of-fuel failure, replacing `throw Gen.outOfFuelError`. -/
-def backtrackGenExhaustFn : Ident := mkIdent $ Name.mkStr2 "BacktrackGen" "exhaust"
+/-- `Specimen.outOfFuel`, replacing `throw Gen.outOfFuelError`. -/
+def backtrackGenExhaustFn : Ident := mkIdent $ Name.mkStr2 "Specimen" "outOfFuel"
 
-/-- `BacktrackGen.refute`, the definite failure, replacing `throw Plausible.Gen.genericFailure`. -/
-def backtrackGenRefuteFn : Ident := mkIdent $ Name.mkStr2 "BacktrackGen" "refute"
+/-- `Specimen.inconclusive`, for a premise whose checker could not decide. -/
+def basaltInconclusiveFn : Ident := mkIdent $ Name.mkStr2 "Specimen" "inconclusive"
+
+/-- `Specimen.refute`, the definite failure, replacing `throw Plausible.Gen.genericFailure`. -/
+def backtrackGenRefuteFn : Ident := mkIdent $ Name.mkStr2 "Specimen" "refute"
 
 
 /-- Produces a fresh user-facing & *accessible* identifier with respect to the local context

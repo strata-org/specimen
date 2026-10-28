@@ -798,8 +798,8 @@ private def foldedWeight (weightFnIdent : Ident) (modifierIdent : Option Ident)
         if stx.isIdent && stx.getId == baseName then some base else none⟩
     `(have $baseIdent := $base; $modBody)
 
-/-- One weighted branch of a derived generator. Basalt's `BacktrackGen.backtrack` takes its branches as
-    functions (`Nat × (Unit → BacktrackGen G α)`), so under `specimen.emitBasalt` the producer is
+/-- One weighted branch of a derived generator. Basalt's `Backtrack.backtrack` takes its branches as
+    functions (`Nat × (Unit → G α)`), so under `specimen.emitBasalt` the producer is
     wrapped in `fun (_ : Unit) => …` and only the branch `backtrack` selects is ever built. Plausible's
     `backtrack` takes the generator itself.
 

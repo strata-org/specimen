@@ -1,12 +1,16 @@
-import Basalt.Arbitrary
-import Basalt.PlausibleBridge
+import Basalt.BacktrackWith
+import Basalt.OptionT
+import Basalt.PlausibleGen
+import Plausible.Arbitrary
+import Plausible.ArbitraryFueled
 import Specimen.ArbitrarySizedSuchThat
+import Specimen.BasaltClasses
 
 /-!
 # Running Basalt-derived generators through Specimen's Plausible machinery
 
 Under `specimen.emitBasalt`, a derived generator is a `BacktrackGenFor` instance whose body is
-polymorphic in Basalt's `Gen`. Everything in Specimen that consumes generators — the `specimen` and
+polymorphic in its generator monad. Everything in Specimen that consumes generators — the `specimen` and
 `specimen_test` tactics, `Plausible.Testable`, `ArbitrarySizedSuchThat.printSamples`, and every
 derived generator emitted *without* the flag — looks up `ArbitrarySizedSuchThat` instead. This
 module connects the two with one blanket instance, plus the equality leaves the Basalt path needs.
@@ -16,20 +20,45 @@ Import it through `Specimen.Basalt`.
 
 open Plausible
 
+namespace Specimen
+
+/-- The monad a Basalt-derived generator runs at under Plausible: a refutation is `none`, a failure
+that is not one is a labelled `.error`, and `Basalt.Backtrack` retries past both. -/
+abbrev BasaltSampler := ExceptT Exhaustion (OptionT Plausible.Gen)
+
+/-- Run at `Plausible.Gen`, throwing `Gen.genericFailure` for a refutation and `Gen.outOfFuel` for a
+labelled failure, so a caller that classifies Plausible's errors can still tell them apart. -/
+def BasaltSampler.toPlausibleGen (x : BasaltSampler α) : Plausible.Gen α := do
+  match ← x.run.run with
+  | some (.ok a) => pure a
+  | none => throw Plausible.Gen.genericFailure
+  | some (.error _) => throw Plausible.Gen.outOfFuel
+
+end Specimen
+
 /-- A Basalt-derived generator runs as an `ArbitrarySizedSuchThat` by instantiating its generator monad
-at `Plausible.Gen` and turning its `Outcome` into Plausible's errors (`BacktrackGen.toPlausibleGen`).
+at `Specimen.BasaltSampler` and turning its failures into Plausible's errors.
 
 `priority := low`, so a hand-written or Plausible-path `ArbitrarySizedSuchThat` for the same relation
 still wins; this only fills in where none exists.
 
-The conversion squeezes `Outcome`'s refuted/exhausted distinction into a thrown `GenError`, which
-Specimen recovers from the message (`Gen.GenError.isInconclusive` treats Plausible's out-of-fuel
-error as inconclusive). Inside the Basalt path the distinction is in the type; it becomes a string
-only here, at the boundary. -/
+The conversion squeezes the refuted/exhausted distinction into a thrown `GenError`, which Specimen
+recovers from the message (`Gen.GenError.isInconclusive` treats Plausible's out-of-fuel error as
+inconclusive). Inside the Basalt path the distinction is in the type; it becomes a string only here, at
+the boundary. -/
 instance (priority := low) {α : Type} {P : α → Prop} [BacktrackGenFor α P] :
     ArbitrarySizedSuchThat α P where
   arbitrarySizedST size :=
-    BacktrackGen.toPlausibleGen (BacktrackGenFor.gen (P := P) (G := Plausible.Gen) size)
+    (BacktrackGenFor.gen (P := P) (G := Specimen.BasaltSampler) size).toPlausibleGen
+
+/-- A Basalt unconstrained generator is a Plausible one at `Plausible.Gen`. Low priority, so a native
+Plausible instance keeps winning and an existing test's distribution is unchanged. -/
+instance (priority := low) [Basalt.Arbitrary α] : Plausible.Arbitrary α where
+  arbitrary := Basalt.Arbitrary.arbitrary (G := Plausible.Gen)
+
+/-- Plausible's own `ArbitraryFueled → Arbitrary` instance then takes the fuel from its size. -/
+instance (priority := low) [Basalt.ArbitraryFueled α] : Plausible.ArbitraryFueled α where
+  arbitraryFueled n := Basalt.ArbitraryFueled.arbitraryFueled (G := Plausible.Gen) n
 
 /-! ## Leaf instances for equality constraints
 
@@ -52,5 +81,5 @@ instance instBacktrackGenForEqLeft {α : Type} {val : α} : BacktrackGenFor α (
 instance instBacktrackGenForEqPair {α : Type} [Basalt.Arbitrary α] :
     BacktrackGenFor (α × α) (fun (l, r) => l = r) where
   gen _ := do
-    let a ← BacktrackGen.liftGen Basalt.Arbitrary.arbitrary
+    let a ← Basalt.Arbitrary.arbitrary
     pure (a, a)

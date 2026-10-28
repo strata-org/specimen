@@ -122,16 +122,16 @@ def arbitrarySizedST (prop : MExp) (fuel : MExp) : MExp :=
 /-- `MExp` representation of `BacktrackGenFor.gen`, the Basalt-general counterpart of
     `arbitrarySizedST`.
 
-    Two more holes than `arbitrarySizedST` because the field is
-    `{α} → (P) → [inst] → {G} → [Gen G] → Nat → BacktrackGen G α`: under `@` every binder must be
-    supplied, so `G` gets a hole solved by unification against the expected type, and its `Gen`
-    instance gets a hole solved by instance synthesis.
+    Five more holes than `arbitrarySizedST` because the field is
+    `{α} → (P) → [inst] → {G} → [Gen G] → [Fail G] → [FailWith _ G] → [Backtrack G] → Nat → G α`:
+    under `@` every binder must be supplied, so `G` gets a hole solved by unification against the
+    expected type, and its instances get holes solved by instance synthesis.
 
     The name is unqualified so it resolves in the *emitted* code's scope rather than requiring
     Specimen's own modules to import Basalt. -/
 def backtrackGenForCall (prop : MExp) (fuel : MExp) : MExp :=
   .MApp .allExplicit (.MConst (Name.mkStr2 "BacktrackGenFor" "gen"))
-    [.MHole, prop, .MHole, .MHole, .MHole, fuel]
+    [.MHole, prop, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, fuel]
 
 /-- `ok x` is an `MExp` representing `Except.ok x`. -/
 def ok (x : MExp) : MExp :=
@@ -319,7 +319,7 @@ def unconstrainedProducer (prodSort : ProducerSort) (ty : TSyntax `term)
     (fuel : MExp := .MId `initSize) : CompileScheduleM MExp := do
   -- Under Basalt an unconstrained sub-producer must be polymorphic in the generator monad, so
   -- Plausible's `Arbitrary` (fixed at `Plausible.Gen`) cannot be used — it type-errors inside a
-  -- `BacktrackGen G` body.
+  -- Basalt-targeted body.
   --
   -- `Basalt.ArbitraryFueled` rather than `Basalt.Arbitrary`, for two reasons. Basalt's `Gen` has no
   -- ambient size parameter and hence no `sized`, so there is no `ArbitraryFueled → Arbitrary`
@@ -340,9 +340,7 @@ def unconstrainedProducer (prodSort : ProducerSort) (ty : TSyntax `term)
   StateT.modifyGet $ fun instances =>
     let producerMExp :=
       if useBasalt then
-        .MApp .allowImplicit (.MConst (Name.mkStr2 "BacktrackGen" "liftGen"))
-          [.MApp .allowImplicit
-            (.MConst (Name.mkStr3 "Basalt" "ArbitraryFueled" "arbitraryFueled")) [fuel]]
+        .MApp .allowImplicit (.MConst (Name.mkStr3 "Basalt" "ArbitraryFueled" "arbitraryFueled")) [fuel]
       else match prodSort with
       | .Enumerator => .MConst ``Enum.enum
       | .Generator => .MConst ``Arbitrary.arbitrary
@@ -384,7 +382,7 @@ mutual
     | .MFail | .MOutOfFuel =>
       -- Outside the Basalt path these two compile to the same term, and the distinction survives only
       -- because `Gen.outOfFuelError` carries a message that `GenError.isInconclusive` recognises.
-      -- Under Basalt they are separate `Outcome` constructors.
+      -- Under Basalt one is a refutation (`Fail`) and the other a labelled failure (`FailWith`).
       do
       let useBasalt := (Lean.Option.get (← getOptions) specimen.emitBasalt)
         && deriveSort matches .Generator
@@ -430,17 +428,17 @@ mutual
         -- definite "this constructor does not apply", `error` only says the checker ran out of budget.
         --
         -- Under `Plausible.Gen` there is nowhere to put that difference — failure is a single thrown
-        -- error — so both collapse. Under Basalt they must not: `Outcome` has both `refuted` and
-        -- `exhausted` precisely so an inconclusive premise can stay inconclusive. Collapsing `error`
-        -- into `refute` would let a *derived* checker that merely ran out of fuel be reported as a
-        -- definite refutation of the whole branch, and `backtrack` would then be entitled to report
-        -- `refuted` for a relation that is in fact inhabited. This is the same distinction the
-        -- `size = 0` case preserves with `refutedToExhausted`.
+        -- error — so both collapse. Under Basalt they must not: a refutation is `Fail.fail` and an
+        -- undecided premise `FailWith`, so an inconclusive premise stays inconclusive. Collapsing
+        -- `error` into a refutation would let a *derived* checker that merely ran out of fuel be
+        -- reported as a definite refutation of the whole branch, and `backtrack` would then be
+        -- entitled to report a refutation for a relation that is in fact inhabited. This is the same
+        -- distinction the `size = 0` case preserves with `Specimen.truncated`.
         let cases ←
           if useBasalt then do
             let falseCase ← `(Term.matchAltExpr|
               | $(mkIdent ``Except.ok) $(mkIdent ``false) => $backtrackGenRefuteFn)
-            let errCase ← `(Term.matchAltExpr| | _ => $backtrackGenExhaustFn)
+            let errCase ← `(Term.matchAltExpr| | _ => $basaltInconclusiveFn)
             pure #[trueCase, falseCase, errCase]
           else do
             let wildCardCase ← `(Term.matchAltExpr| | _ => $failFn $genericFailure)

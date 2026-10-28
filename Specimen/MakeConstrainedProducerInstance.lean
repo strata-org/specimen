@@ -26,12 +26,14 @@ open Idents Schedules
     Basalt path only (`useBasalt`): the Plausible path signals this through `GenError` strings and
     re-classifying those is a separate change. -/
 private def wrapZeroCase (useBasalt : Bool) (baseGenerators inductiveGenerators : TSyntax `term)
-    (zeroBranch : TSyntax `term) : TermElabM (TSyntax `term) := do
+    (combinatorFn : Ident) : TermElabM (TSyntax `term) := do
   let sameList :=
     match baseGenerators.raw.reprint, inductiveGenerators.raw.reprint with
     | some a, some b => a == b
     | _, _ => false
-  if useBasalt && !sameList then `($backtrackGenRefutedToExhaustedFn $zeroBranch) else pure zeroBranch
+  if useBasalt && !sameList then
+    `($combinatorFn ($baseGenerators ++ [(1, fun (_ : Unit) => $basaltTruncatedFn)]))
+  else `($combinatorFn $baseGenerators)
 
 /-- Extracts the name of the induction relation and its arguments -/
 def parseInductiveApp (body : Term) :
@@ -93,7 +95,7 @@ def findTargetVarIndex (targetVar : FVarId) (args : Array Expr) : (Option Nat) :
 def requireBasaltImport : CoreM Unit := do
   unless ((← getEnv).getModuleIdx? `Specimen.BasaltBridge).isSome do
     throwError "`specimen.emitBasalt` requires `import Specimen.Basalt` in this file: derived \
-      generators are emitted against Basalt's `Gen`, `BacktrackGen` and `BacktrackGenFor`"
+      generators are emitted against Basalt's `Gen`, `Fail`, `FailWith` and `Backtrack`"
 
 /-- Whether `stx` contains the identifier `x`, ignoring macro scopes. -/
 private def mentionsIdent (x : Name) (stx : Syntax) : Bool :=
@@ -140,8 +142,7 @@ def mkConstrainedProducerTypeClassInstance
     -- Create the inner match on size (base vs recursive constructors)
     let mut sizeCaseExprs := #[]
     let zeroCase ← `(Term.matchAltExpr|
-      | $(mkIdent ``Nat.zero) => $(← wrapZeroCase useBasalt baseGenerators inductiveGenerators
-          (← `($combinatorFn $baseGenerators))))
+      | $(mkIdent ``Nat.zero) => $(← wrapZeroCase useBasalt baseGenerators inductiveGenerators combinatorFn))
     sizeCaseExprs := sizeCaseExprs.push zeroCase
 
     let succCase ← `(Term.matchAltExpr| | $(mkIdent ``Nat.succ) $freshSize' => $combinatorFn $inductiveGenerators)
@@ -240,10 +241,10 @@ def mkConstrainedProducerTypeClassInstance
       | .Enumerator => mkFreshAccessibleIdent topLevelLocalCtx `aux_enum
 
     -- Determine the appropriate type of the final producer
-    -- (`BacktrackGen G α` under Basalt, else `Plausible.Gen α` or `ExceptT GenError Enum α`)
+    -- (`G α` under Basalt, else `Plausible.Gen α` or `ExceptT GenError Enum α`)
     let optionTProducerType ←
       if useBasalt then
-        `($backtrackGenTypeConstructor $basaltGenVar $targetTypeSyntax)
+        `($basaltGenVar $targetTypeSyntax)
       else match producerSort with
       | .Generator => `($genTypeConstructor $targetTypeSyntax)
       | .Enumerator => `($exceptTTypeConstructor $genErrorType $enumTypeConstructor $targetTypeSyntax)
@@ -266,11 +267,12 @@ def mkConstrainedProducerTypeClassInstance
       -- surrounding scope — doing that leaves `G` as an unassigned metavariable and the lifted
       -- `aux_arb` fails the kernel with "declaration has metavariables".
       --
-      -- `BacktrackGenFor.gen` is itself `∀ {G} [Gen G], Nat → BacktrackGen G α`, so the field's own
-      -- implicit binders unify with the inner function's at the call below.
+      -- `BacktrackGenFor.gen` is itself `∀ {G} [Gen G] [Fail G] [FailWith _ G] [Backtrack G], Nat → G α`,
+      -- so the field's own binders unify with the inner function's at the call below.
+      let basaltBinders ← liftMacroM basaltInstBinders
       `(instance $arbitraryTypeParamInstances:bracketedBinder* : $backtrackGenForTypeclass $targetTypeSyntax (fun $targetVarPattern => @$(mkIdent inductiveName) $args*) where
           $unqualifiedBacktrackGenForFn:ident :=
-            let rec $innerFunctionIdent:ident {$basaltGenVar : Type → Type} [$basaltGenClass $basaltGenVar] $innerParams* $arbitraryTypeParamInstances:bracketedBinder* : $optionTProducerType :=
+            let rec $innerFunctionIdent:ident {$basaltGenVar : Type → Type} $basaltBinders:bracketedBinder* $innerParams* $arbitraryTypeParamInstances:bracketedBinder* : $optionTProducerType :=
               $matchExpr
             fun $freshSizeIdent => $innerFunctionIdent $fuelLit $freshSizeIdent $freshSizeIdent $outerParams*)
     else
@@ -312,8 +314,7 @@ def mkConstrainedProducerMutualPieces
 
     let mut sizeCaseExprs := #[]
     sizeCaseExprs := sizeCaseExprs.push (← `(Term.matchAltExpr|
-      | $(mkIdent ``Nat.zero) => $(← wrapZeroCase useBasalt baseGenerators inductiveGenerators
-          (← `($combinatorFn $baseGenerators)))))
+      | $(mkIdent ``Nat.zero) => $(← wrapZeroCase useBasalt baseGenerators inductiveGenerators combinatorFn)))
     sizeCaseExprs := sizeCaseExprs.push (← `(Term.matchAltExpr| | $(mkIdent ``Nat.succ) $freshSize' => $combinatorFn $inductiveGenerators))
     let sizeMatchExpr ← mkMatchExpr sizeIdent sizeCaseExprs
 
@@ -374,7 +375,7 @@ def mkConstrainedProducerMutualPieces
         mkProdPat targetVars
 
     let optionTProducerType ←
-      if useBasalt then `($backtrackGenTypeConstructor $basaltGenVar $targetTypeSyntax)
+      if useBasalt then `($basaltGenVar $targetTypeSyntax)
       else match deriveSort with
       | .Generator => `($genTypeConstructor $targetTypeSyntax)
       | .Enumerator => `($exceptTTypeConstructor $genErrorType $enumTypeConstructor $targetTypeSyntax)
@@ -429,21 +430,21 @@ def mkConstrainedProducerMutualPieces
     for (name, ty) in allParamNamesAndTypes[:insertIdx].toArray.reverse do
       defType ← `(($name : $ty) → $defType)
     -- Under Basalt the definition is polymorphic in the generator monad. These binders go
-    -- *outermost*, since the return type `BacktrackGen G α` mentions `G`. Mutually recursive
+    -- *outermost*, since the return type `G α` mentions `G`. Mutually recursive
     -- definitions in the block each carry their own `{G}`, which unify at the call sites, so the
     -- whole SCC ends up at one interpretation without needing a shared section variable.
     if useBasalt then
-      defType ← `(∀ {$basaltGenVar : Type → Type} [$basaltGenClass $basaltGenVar], $defType)
+      defType ← liftMacroM (basaltForall defType)
     -- Lambda includes instance binders at the same position
     let instParams : Array (TSyntax `term) := defTypeParamInstances.map (fun b => ⟨b.raw⟩)
     let allInnerParams := innerParamBinders[:insertIdx].toArray ++ instParams ++ innerParamBinders[insertIdx:].toArray
     let innerLambda ← `(fun $allInnerParams* => $matchExpr)
     -- Bind the generator monad in an outer lambda rather than splicing binders into the parameter
-    -- array: `fun {G} [Gen G] => fun params => body` is the same term as one combined lambda, and
+    -- array: `fun {G} [Gen G] … => fun params => body` is the same term as one combined lambda, and
     -- avoids having to name the implicit-binder parser category.
     let lambdaBody ←
       if useBasalt then
-        `(fun {$basaltGenVar : Type → Type} [$basaltGenClass $basaltGenVar] => $innerLambda)
+        liftMacroM (basaltFun innerLambda)
       else pure innerLambda
     -- Name the recursive argument. Left to infer it, Lean's structural search over a large mutual block
     -- with three `Nat` parameters per definition gives up and falls back to well-founded recursion, whose
@@ -452,9 +453,10 @@ def mkConstrainedProducerMutualPieces
     let recurses := [baseGenerators, inductiveGenerators].any (mentionsIdent freshFuel'.getId ·)
     let defCmd ←
       if !recurses then `(command| def $defIdent : $defType := $lambdaBody)
-      -- `termination_by` binds every parameter after the colon, so `_ _` skips `{G} [Gen G]`.
+      -- `termination_by` binds every parameter after the colon, so the five holes skip `{G}` and its
+      -- four instances.
       else if useBasalt then `(command| def $defIdent : $defType := $lambdaBody
-        termination_by structural _ _ $fuelIdent:ident => $fuelIdent)
+        termination_by structural _ _ _ _ _ $fuelIdent:ident => $fuelIdent)
       else `(command| def $defIdent : $defType := $lambdaBody
         termination_by structural $fuelIdent:ident => $fuelIdent)
 
