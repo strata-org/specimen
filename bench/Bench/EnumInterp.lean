@@ -112,25 +112,25 @@ decreasing_by all_goals omega
 
 /-- `Finite` with `bind` flattening into a balanced union tree, so an index costs `O(log n)` unions
 rather than walking a right-nested chain of `n`. -/
-def FB (α : Type) : Type := Basalt.Finite α
+def FB (α : Type) : Type := Specimen.Finite α
 
-partial def balancedFlatten : List (Basalt.Finite α) → Basalt.Finite α
-  | [] => Basalt.Finite.empty
+partial def balancedFlatten : List (Specimen.Finite α) → Specimen.Finite α
+  | [] => Specimen.Finite.empty
   | [x] => x
   | xs =>
     let k := xs.length / 2
-    Basalt.Finite.union (balancedFlatten (xs.take k)) (balancedFlatten (xs.drop k))
+    Specimen.Finite.union (balancedFlatten (xs.take k)) (balancedFlatten (xs.drop k))
 
 instance : Monad FB where
-  pure a := Basalt.Finite.singleton a
-  bind x f := match (x : Basalt.Finite _) with
+  pure a := Specimen.Finite.singleton a
+  bind x f := match (x : Specimen.Finite _) with
     | .undef => .undef
-    | .mk _ idx => balancedFlatten (List.ofFn fun i => (f (idx i) : Basalt.Finite _))
-  map f x := Basalt.Finite.map f (x : Basalt.Finite _)
-instance : RandomChoice FB := ⟨fun lo hi h => (RandomChoice.choose lo hi h : Basalt.Finite _)⟩
-instance : Fail FB := ⟨fun {α} => (Basalt.Finite.empty : Basalt.Finite α)⟩
+    | .mk _ idx => balancedFlatten (List.ofFn fun i => (f (idx i) : Specimen.Finite _))
+  map f x := Specimen.Finite.map f (x : Specimen.Finite _)
+instance : RandomChoice FB := ⟨fun lo hi h => (RandomChoice.choose lo hi h : Specimen.Finite _)⟩
+instance : Fail FB := ⟨fun {α} => (Specimen.Finite.empty : Specimen.Finite α)⟩
 instance : Specimen.Backtrack FB where
-  backtrack gs := balancedFlatten (gs.filterMap fun p => if p.1 = 0 then none else some (p.2 () : Basalt.Finite _))
+  backtrack gs := balancedFlatten (gs.filterMap fun p => if p.1 = 0 then none else some (p.2 () : Specimen.Finite _))
 
 /-- A plain list of entries: `bind` is `flatMap`, `backtrack` concatenation. -/
 def ListE (α : Type) : Type := List α
@@ -194,9 +194,9 @@ def main (args : List String) : IO Unit := do
     let (d, td) ← timeIt fun _ => (derivedAt [] goal s).length
     let (f, tf) ← timeIt fun _ => (finiteAll [] goal s).length
     let (fe, tfe) ← timeIt fun _ => (finiteExAll [] goal s).length
-    let (fb, tfb) ← timeIt fun _ => (((typEb (G := Basalt.Finite) s [] goal).toList?).getD []).length
+    let (fb, tfb) ← timeIt fun _ => (((typEb (G := Specimen.Finite) s [] goal).toList?).getD []).length
     IO.println s!"  budget {s} all:     Finite, maps as binds {fb} in {tfb}ms"
-    let (bb, tbb) ← timeIt fun _ => ((((typEb (G := FB) s [] goal) : Basalt.Finite _).toList?).getD []).length
+    let (bb, tbb) ← timeIt fun _ => ((((typEb (G := FB) s [] goal) : Specimen.Finite _).toList?).getD []).length
     let (lb, tlb) ← timeIt fun _ => (((typEb (G := ListE) s [] goal) : List _)).length
     IO.println s!"  budget {s} all:     balanced Finite, maps as binds {bb} in {tbb}ms | list {lb} in {tlb}ms"
     let (l, tl) ← timeIt fun _ => (levelsUpTo [] goal s).length
