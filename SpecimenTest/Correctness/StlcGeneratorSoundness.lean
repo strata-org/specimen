@@ -71,7 +71,7 @@ the guards and the `filterMap` reduce and membership is a plain `List.mem_cons` 
 
 * `produces_backtrack_ok` — a success in `backtrack gs` came from some branch of
   `gs`. It is weight-agnostic, so soundness never has to evaluate a weight term.
-* `produces_backtrack_truncated_iff` — strips the `size = 0` wrapper.
+* `produces_truncated_iff` — the `size = 0` pool's truncation branches produce nothing.
 * `Produces` and its algebra (`produces_bind_iff`, `produces_pure_iff`, `not_produces_refute`)
   from `GenInterpSPMF` — each `do` bind in a branch decomposes through
   these instead of through raw `SPMF` support reasoning.
@@ -151,7 +151,7 @@ theorem lookup_gen_sound : ∀ (fuel iS sz : Nat) (Γ : List type) (τ : type) (
       cases sz with
       | zero =>
         obtain ⟨q, hq, _, _⟩ := produces_backtrack_ok _ x
-          ((produces_backtrack_truncated_iff _ _).mp h)
+          h
         simp at hq
       | succ sz =>
         obtain ⟨q, hq, _, _⟩ := produces_backtrack_ok _ x h
@@ -180,11 +180,12 @@ theorem lookup_gen_sound : ∀ (fuel iS sz : Nat) (Γ : List type) (τ : type) (
       cases sz with
       | zero =>
         obtain ⟨q, hq, _, hqa⟩ := produces_backtrack_ok _ x
-          ((produces_backtrack_truncated_iff _ _).mp h)
+          h
         simp only [List.filterMap_cons, List.filterMap_nil, Bool.false_eq_true, eq_self_iff_true,
           ite_false, ite_true, List.mem_cons, List.not_mem_nil, or_false] at hq
-        rcases hq with rfl
-        exact now_branch hqa
+        rcases hq with rfl | rfl
+        · exact now_branch hqa
+        · simp at hqa
       | succ sz =>
         obtain ⟨q, hq, _, hqa⟩ := produces_backtrack_ok _ x h
         simp only [List.filterMap_cons, List.filterMap_nil, Bool.false_eq_true, eq_self_iff_true,
@@ -244,12 +245,14 @@ theorem typing_gen_sound : ∀ (fuel iS sz : Nat) (G : List type) (t : type) (e 
       cases sz with
       | zero =>
         obtain ⟨q, hq, _, hqa⟩ := produces_backtrack_ok _ _
-          ((produces_backtrack_truncated_iff _ _).mp h)
+          h
         simp only [List.filterMap_cons, List.filterMap_nil, Bool.false_eq_true, eq_self_iff_true,
           ite_false, ite_true, List.mem_cons, List.not_mem_nil, or_false] at hq
-        rcases hq with rfl | rfl
+        rcases hq with rfl | rfl | rfl | rfl
         · exact tconst hqa
         · exact tvar _ hqa
+        · simp at hqa
+        · simp at hqa
       | succ sz =>
         obtain ⟨q, hq, _, hqa⟩ := produces_backtrack_ok _ _ h
         simp only [List.filterMap_cons, List.filterMap_nil, Bool.false_eq_true, eq_self_iff_true,
@@ -272,11 +275,13 @@ theorem typing_gen_sound : ∀ (fuel iS sz : Nat) (G : List type) (t : type) (e 
       cases sz with
       | zero =>
         obtain ⟨q, hq, _, hqa⟩ := produces_backtrack_ok _ _
-          ((produces_backtrack_truncated_iff _ _).mp h)
+          h
         simp only [List.filterMap_cons, List.filterMap_nil, Bool.false_eq_true, eq_self_iff_true,
           ite_false, ite_true, List.mem_cons, List.not_mem_nil, or_false] at hq
-        rcases hq with rfl
-        exact tvar _ hqa
+        rcases hq with rfl | rfl | rfl
+        · exact tvar _ hqa
+        · simp at hqa
+        · simp at hqa
       | succ sz =>
         obtain ⟨q, hq, _, hqa⟩ := produces_backtrack_ok _ _ h
         simp only [List.filterMap_cons, List.filterMap_nil, Bool.false_eq_true, eq_self_iff_true,
@@ -333,7 +338,6 @@ theorem lookup_now_witness (fuel iS sz : Nat) (τ : type) (Γ : List type) :
   simp only [specimen_gen_lookup_1__SpecimenTest_Correctness_StlcGeneratorSoundness_StlcGeneratorSoundness]
   cases sz with
   | zero =>
-    refine (produces_backtrack_truncated_iff _ _).mpr ?_
     refine produces_backtrack_of_branch _ _ (List.Mem.head _)
       (by dsimp only; decide) _ ?_
     -- The `DecOpt` side condition `τ = τ` answers `.ok true`, so the branch is a `pure`.
@@ -355,7 +359,6 @@ theorem typing_var_witness (fuel iS sz : Nat) (τ : type) (Γ : List type) :
   | Nat =>
     cases sz with
     | zero =>
-      refine (produces_backtrack_truncated_iff _ _).mpr ?_
       refine produces_backtrack_of_branch _ _
         (List.Mem.tail _ (List.Mem.head _)) (by dsimp only; decide) _ ?_
       refine produces_bind_of ?_ (produces_pure_iff.mpr rfl)
@@ -370,7 +373,6 @@ theorem typing_var_witness (fuel iS sz : Nat) (τ : type) (Γ : List type) :
   | Fun τ1 τ2 =>
     cases sz with
     | zero =>
-      refine (produces_backtrack_truncated_iff _ _).mpr ?_
       refine produces_backtrack_of_branch _ _ (List.Mem.head _)
         (by dsimp only; decide) _ ?_
       refine produces_bind_of ?_ (produces_pure_iff.mpr rfl)

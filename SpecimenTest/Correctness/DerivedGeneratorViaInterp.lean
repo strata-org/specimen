@@ -42,9 +42,10 @@ where each earns its keep:
 1. **The input index.** `lookup` recurses on `Γ`'s tail, so the step's `prev` has to be a family over
    inputs as well as size. An interpreter that closed over its arguments could not state the bridge
    at all.
-2. **`produces_backtrack_truncated_iff`.** The emitted `size = 0` case adds a `Specimen.truncated`
-   branch to its truncated branch list. That branch is invisible to success, but it is syntactically
-   present, so the bridge does not typecheck without a lemma to see through it.
+2. **The `size = 0` truncation branches.** The emitted `size = 0` case keeps each recursive
+   constructor as its conclusion, cut off with `Specimen.truncated` where it matches. Those branches
+   produce nothing (`produces_truncated_iff`), but they are syntactically present, so the bridge has
+   to state them and every case split over the pool has to dismiss them.
 3. **The measure pair.** `lkPhi`/`lkSigma` unfold to exactly `x < fuel` and `x < sz` — the same two
    side conditions the hand-rolled `lookup_gen_complete` in `StlcCompleteness.lean` arrived at
    independently. That agreement is the cross-check that the generic route computes the right budgets
@@ -73,18 +74,23 @@ noncomputable def lkStep (iS : Nat) : SGenStep (List type × type) Nat :=
     match sz with
     | 0 =>
       Basalt.Backtrack.backtrack
-        ((List.filterMap (fun o => o)
-            [if (match i.1 with | List.cons _ _ => true | _ => false) then
-                some (1, fun (_ : Unit) =>
-                  match i.1 with
-                  | List.cons τ_1 _ =>
-                    match @DecOpt.decOpt (@Eq (@type) τ_1 i.2) _ iS with
-                    | Except.ok Bool.true => (return Nat.zero : SGen Nat)
-                    | Except.ok Bool.false => Specimen.refute
-                    | _ => Specimen.inconclusive
-                  | _ => Specimen.refute)
-              else none]) ++
-          [(1, fun (_ : Unit) => Specimen.truncated)])
+        (List.filterMap (fun o => o)
+          [if (match i.1 with | List.cons _ _ => true | _ => false) then
+              some (1, fun (_ : Unit) =>
+                match i.1 with
+                | List.cons τ_1 _ =>
+                  match @DecOpt.decOpt (@Eq (@type) τ_1 i.2) _ iS with
+                  | Except.ok Bool.true => (return Nat.zero : SGen Nat)
+                  | Except.ok Bool.false => Specimen.refute
+                  | _ => Specimen.inconclusive
+                | _ => Specimen.refute)
+            else none,
+            if (match i.1 with | List.cons _ _ => true | _ => false) then
+              some (1, fun (_ : Unit) =>
+                match i.1 with
+                | List.cons _ _ => Specimen.truncated
+                | _ => Specimen.refute)
+            else none])
     | Nat.succ size' =>
       Basalt.Backtrack.backtrack
         (List.filterMap (fun o => o)
@@ -161,7 +167,6 @@ theorem lkStep_sound (iS : Nat) : StepGenSoundB (lkStep iS) lkSpec := by
     cases sz with
     | zero =>
       simp only [lkStep] at hx
-      rw [produces_backtrack_truncated_iff] at hx
       obtain ⟨p, hp, _, _⟩ := produces_backtrack_ok _ _ hx
       simp at hp
     | succ sz =>
@@ -172,12 +177,12 @@ theorem lkStep_sound (iS : Nat) : StepGenSoundB (lkStep iS) lkSpec := by
     cases sz with
     | zero =>
       simp only [lkStep] at hx
-      rw [produces_backtrack_truncated_iff] at hx
       obtain ⟨p, hp, _, hpx⟩ := produces_backtrack_ok _ _ hx
       simp only [List.filterMap_cons, List.filterMap_nil, Bool.false_eq_true, eq_self_iff_true,
         ite_false, ite_true, List.mem_cons, List.not_mem_nil, or_false] at hp
-      rcases hp with rfl
-      exact lkNow_sound iS _ τ x hpx
+      rcases hp with rfl | rfl
+      · exact lkNow_sound iS _ τ x hpx
+      · simp at hpx
     | succ sz =>
       simp only [lkStep] at hx
       obtain ⟨p, hp, _, hpx⟩ := produces_backtrack_ok _ _ hx
@@ -326,9 +331,15 @@ theorem lookup_emitted_refute (iS : Nat) :
     intro sz Γ τ h
     cases sz with
     | zero =>
-      -- the truncated pool has a branch that fails without refuting, so it cannot refute at all
+      -- at size 0 `Later` is cut off where `Γ` is a cons, which never refutes; at `Γ = []` no
+      -- constructor applies, and the refutation is correct
       simp only [specimen_gen_lookup_1__SpecimenTest_Correctness_DerivedGeneratorViaInterp_DerivedGeneratorViaInterp] at h
-      exact absurd h (not_refutes_backtrack_truncated _)
+      have hall := refutes_backtrack h
+      cases Γ with
+      | nil => intro x hx; cases hx
+      | cons τ_1 Γ' =>
+        have hLater := hall _ (List.Mem.tail _ (List.Mem.head _)) (by dsimp only; decide)
+        simp at hLater
     | succ sz =>
       simp only [specimen_gen_lookup_1__SpecimenTest_Correctness_DerivedGeneratorViaInterp_DerivedGeneratorViaInterp] at h
       have hall := refutes_backtrack h

@@ -219,7 +219,6 @@ theorem stlc_gen_complete_mutual (e : term) : Reach e := by
         cases sz with
         | zero =>
           simp only [specimen_gen_typing_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness]
-          refine (produces_backtrack_truncated_iff _ _).mpr ?_
           exact produces_backtrack_of_branch _ _ (List.Mem.head _)
             (by dsimp only; decide) _ body
         | succ sz =>
@@ -247,7 +246,6 @@ theorem stlc_gen_complete_mutual (e : term) : Reach e := by
           cases sz with
           | zero =>
             simp only [specimen_gen_typing_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness]
-            refine (produces_backtrack_truncated_iff _ _).mpr ?_
             exact produces_backtrack_of_branch _ _
               (List.Mem.tail _ (List.Mem.head _)) (by dsimp only; decide) _ body
           | succ sz =>
@@ -258,7 +256,6 @@ theorem stlc_gen_complete_mutual (e : term) : Reach e := by
           cases sz with
           | zero =>
             simp only [specimen_gen_typing_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness]
-            refine (produces_backtrack_truncated_iff _ _).mpr ?_
             exact produces_backtrack_of_branch _ _ (List.Mem.head _)
               (by dsimp only; decide) _ body
           | succ sz =>

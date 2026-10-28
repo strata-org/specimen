@@ -70,19 +70,31 @@ noncomputable def typStep (iS : Nat) : SGenStep (List type × type) term :=
     match sz with
     | 0 =>
       Basalt.Backtrack.backtrack
-        ((List.filterMap (fun o => o)
-            [if (match i.2 with | type.Nat => true | _ => false) then
-                some (4, fun (_ : Unit) =>
-                  match i.2 with
-                  | type.Nat =>
-                    (Basalt.ArbitraryFueled.arbitraryFueled iS) >>=
-                      fun n => pure (term.Const n)
-                  | _ => Specimen.refute)
-              else none,
-              some (3, fun (_ : Unit) =>
-                @BacktrackGenFor.gen _ (fun (x : Nat) => @lookup i.1 x i.2) _ SGen _ _ _ _ iS >>=
-                  fun x => pure (term.Var x))]) ++
-          [(1, fun (_ : Unit) => Specimen.truncated)])
+        (List.filterMap (fun o => o)
+          [if (match i.2 with | type.Nat => true | _ => false) then
+              some (4, fun (_ : Unit) =>
+                match i.2 with
+                | type.Nat =>
+                  (Basalt.ArbitraryFueled.arbitraryFueled iS) >>=
+                    fun n => pure (term.Const n)
+                | _ => Specimen.refute)
+            else none,
+            some (3, fun (_ : Unit) =>
+              @BacktrackGenFor.gen _ (fun (x : Nat) => @lookup i.1 x i.2) _ SGen _ _ _ _ iS >>=
+                fun x => pure (term.Var x)),
+            if (match i.2 with | type.Nat => true | _ => false) then
+              some (1, fun (_ : Unit) =>
+                match i.2 with
+                | type.Nat => Specimen.truncated
+                | _ => Specimen.refute)
+            else none,
+            if (match i.2 with | type.Fun _ _ => true | _ => false) then
+              some (1, fun (_ : Unit) =>
+                match i.2 with
+                | type.Fun _ _ => Specimen.truncated
+                | _ => Specimen.refute)
+            else none,
+            some (1, fun (_ : Unit) => Specimen.truncated)])
     | Nat.succ size' =>
       Basalt.Backtrack.backtrack
         (List.filterMap (fun o => o)
@@ -171,13 +183,14 @@ theorem typStep_sound (iS : Nat) (hlk : LookupSound iS) : StepGenSoundB (typStep
     cases sz with
     | zero =>
       simp only [typStep] at hx
-      rw [produces_backtrack_truncated_iff] at hx
       obtain ⟨p, hp, _, hpx⟩ := produces_backtrack_ok _ _ hx
       simp only [List.filterMap_cons, List.filterMap_nil, Bool.false_eq_true, eq_self_iff_true,
         ite_false, ite_true, List.mem_cons, List.not_mem_nil, or_false] at hp
-      rcases hp with rfl | rfl
+      rcases hp with rfl | rfl | rfl | rfl
       · exact tconst _ hpx
       · exact tvar _ hpx
+      · simp at hpx
+      · simp at hpx
     | succ sz =>
       simp only [typStep] at hx
       obtain ⟨p, hp, _, hpx⟩ := produces_backtrack_ok _ _ hx
@@ -201,12 +214,13 @@ theorem typStep_sound (iS : Nat) (hlk : LookupSound iS) : StepGenSoundB (typStep
     cases sz with
     | zero =>
       simp only [typStep] at hx
-      rw [produces_backtrack_truncated_iff] at hx
       obtain ⟨p, hp, _, hpx⟩ := produces_backtrack_ok _ _ hx
       simp only [List.filterMap_cons, List.filterMap_nil, Bool.false_eq_true, eq_self_iff_true,
         ite_false, ite_true, List.mem_cons, List.not_mem_nil, or_false] at hp
-      rcases hp with rfl
-      exact tvar _ hpx
+      rcases hp with rfl | rfl | rfl
+      · exact tvar _ hpx
+      · simp at hpx
+      · simp at hpx
     | succ sz =>
       simp only [typStep] at hx
       obtain ⟨p, hp, _, hpx⟩ := produces_backtrack_ok _ _ hx
@@ -269,7 +283,6 @@ theorem typStep_complete (iS : Nat) (hlkc : LookupComplete iS) :
     cases sz with
     | zero =>
       simp only [typStep]
-      refine (produces_backtrack_truncated_iff _ _).mpr ?_
       exact produces_backtrack_of_branch _ _ (List.Mem.head _)
         (by exact Nat.zero_lt_succ _) _ body
     | succ sz =>
@@ -287,7 +300,6 @@ theorem typStep_complete (iS : Nat) (hlkc : LookupComplete iS) :
       cases sz with
       | zero =>
         simp only [typStep]
-        refine (produces_backtrack_truncated_iff _ _).mpr ?_
         exact produces_backtrack_of_branch _ _
           (List.Mem.tail _ (List.Mem.head _)) (by exact Nat.zero_lt_succ _) _ body
       | succ sz =>
@@ -298,7 +310,6 @@ theorem typStep_complete (iS : Nat) (hlkc : LookupComplete iS) :
       cases sz with
       | zero =>
         simp only [typStep]
-        refine (produces_backtrack_truncated_iff _ _).mpr ?_
         exact produces_backtrack_of_branch _ _ (List.Mem.head _)
           (by exact Nat.zero_lt_succ _) _ body
       | succ sz =>

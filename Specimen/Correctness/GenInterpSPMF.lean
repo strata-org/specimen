@@ -143,19 +143,21 @@ theorem produces_backtrack_of_branch (gs : List (Nat × (Unit → SGen A))) (p :
     Produces (Basalt.Backtrack.backtrack gs) x :=
   (produces_backtrack_iff gs x).mpr ⟨p, hp, hk, h⟩
 
-/-- The emitted `size = 0` case adds one branch that fails with `Specimen.truncated`, which changes
-only how a failed search ends, never what it produces — so it is invisible to both soundness and
-completeness. Without this the `size = 0` case of real emitted code would not fit the interpreter. -/
-@[simp] theorem produces_backtrack_truncated_iff (gs : List (Nat × (Unit → SGen A))) (x : A) :
-    Produces (Basalt.Backtrack.backtrack (gs ++ [(1, fun (_ : Unit) => Specimen.truncated)])) x ↔
-      Produces (Basalt.Backtrack.backtrack gs) x := by
-  simp only [produces_backtrack_iff, List.mem_append, List.mem_singleton]
-  constructor
-  · rintro ⟨p, hp | rfl, hk, h⟩
-    · exact ⟨p, hp, hk, h⟩
-    · exact absurd h (not_produces_truncated x)
-  · rintro ⟨p, hp, hk, h⟩
-    exact ⟨p, .inl hp, hk, h⟩
+/-! The failures as `simp` facts, so that `simp` closes a branch that ends in one — the `size = 0`
+pool's truncation branches among them. -/
+
+@[simp] theorem produces_refute_iff (x : A) : Produces (Specimen.refute : SGen A) x ↔ False :=
+  iff_false_intro (not_produces_refute x)
+
+@[simp] theorem produces_outOfFuel_iff (x : A) : Produces (Specimen.outOfFuel : SGen A) x ↔ False :=
+  iff_false_intro (not_produces_outOfFuel x)
+
+@[simp] theorem produces_truncated_iff (x : A) : Produces (Specimen.truncated : SGen A) x ↔ False :=
+  iff_false_intro (not_produces_truncated x)
+
+@[simp] theorem produces_inconclusive_iff (x : A) :
+    Produces (Specimen.inconclusive : SGen A) x ↔ False :=
+  iff_false_intro (not_produces_inconclusive x)
 
 /-! ### Failures
 
@@ -324,11 +326,17 @@ theorem refutes_backtrack {gs : List (Nat × (Unit → SGen A))}
     (h : Refutes (Basalt.Backtrack.backtrack gs)) : ∀ p ∈ gs, 0 < p.1 → Refutes (p.2 ()) :=
   (refutes_searchWith gs.length gs none (Nat.le_refl _) h).2
 
-/-- The `size = 0` pool cannot refute: its truncation branch has positive weight and never does. -/
-theorem not_refutes_backtrack_truncated (gs : List (Nat × (Unit → SGen A))) :
-    ¬ Refutes (Basalt.Backtrack.backtrack (gs ++ [(1, fun (_ : Unit) => Specimen.truncated)])) :=
-  fun h => not_refutes_truncated
-    (refutes_backtrack h _ (List.mem_append_right _ (List.mem_singleton_self _)) Nat.one_pos)
+@[simp] theorem refutes_truncated_iff : Refutes (Specimen.truncated : SGen A) ↔ False :=
+  iff_false_intro not_refutes_truncated
+
+@[simp] theorem refutes_outOfFuel_iff : Refutes (Specimen.outOfFuel : SGen A) ↔ False :=
+  iff_false_intro not_refutes_outOfFuel
+
+@[simp] theorem refutes_inconclusive_iff : Refutes (Specimen.inconclusive : SGen A) ↔ False :=
+  iff_false_intro not_refutes_inconclusive
+
+@[simp] theorem refutes_refute_iff : Refutes (Specimen.refute : SGen A) ↔ True :=
+  iff_true_intro refutes_refute
 
 /-- A search with a branch of positive weight that cannot fail cannot fail: that branch is tried
 before the search can stop, and succeeds. -/
