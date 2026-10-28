@@ -2121,10 +2121,11 @@ def elabDeriveGeneratorMulti : CommandElab := fun stx => do
 /-- Command for deriving a constrained enumerator for an inductive relation -/
 syntax (name := enumerator_deriver) "derive_enumerator" term : command
 
-/-- Elaborator for the `derive_generator` command which derives a constrained generator
-    using generator schedules from Testing Theorems & the unification algorithm from Generating Good Generators -/
+/-- Elaborator for `derive_enumerator`. The command is the single-relation command `derive_mutual` superseded, and is not ported to
+    Basalt: it emits a lazy-list enumerator with `specimen.emitBasalt` set or not. -/
 @[command_elab enumerator_deriver]
-def elabDeriveScheduledEnumerator : CommandElab := fun stx => do
+def elabDeriveScheduledEnumerator : CommandElab := fun stx =>
+  withScope (fun sc => { sc with opts := sc.opts.setBool `specimen.emitBasalt false }) do
   match stx with
   | `(derive_enumerator $descr:term) => do
     -- Derive an instance of the `Enumerate` typeclass

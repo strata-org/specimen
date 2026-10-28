@@ -82,6 +82,12 @@ instance (priority := low) {α : Type} {P : α → Prop} [EnumFor α P] : EnumSi
     Specimen.toEnumeratorEntries
       (EnumFor.enum (P := P) (G := ExceptT Specimen.Exhaustion Specimen.Finite) size).run
 
+/-- A Basalt unconstrained enumeration is one of Specimen's, read at `Finite`: the values up to the
+size. A derived checker draws an unconstrained value this way. Low priority, as above. -/
+instance (priority := low) [Specimen.EnumFueled α] : Enum α where
+  enum size := LazyList.fromList
+    ((Specimen.EnumFueled.enumFueled (G := Specimen.Finite) size).toList?.getD [])
+
 /-! ## Leaf instances for equality constraints
 
 Derived schedules bottom out in premises `x = e` (or `e = x`) whenever an output is determined by

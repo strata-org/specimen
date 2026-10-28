@@ -670,5 +670,10 @@ def scheduleToMExp (schedule : Schedule) (mfuel : MExp) (defFuel : MExp) (recTyp
   -- Fold over the `scheduleSteps` and convert each of them to a functional `MExp`
   -- Note that the fold composes the `MExp`, and we use `foldr` since
   -- we want the `epilogue` to be the base-case of the fold
-  List.foldrM (fun step acc => scheduleStepToMExp step defFuel acc recType fuelPrimeName sizeExpr targetInductive)
-    epilogue scheduleSteps
+  let steps := List.foldrM (fun step acc => scheduleStepToMExp step defFuel acc recType fuelPrimeName
+    sizeExpr targetInductive) epilogue scheduleSteps
+  -- A checker stays on `DecOpt` and reads its premises' enumerators through Specimen's own classes,
+  -- which `Specimen.BasaltBridge` serves from the Basalt ones.
+  match scheduleSort with
+  | .CheckerSchedule => withOptions (·.setBool `specimen.emitBasalt false) steps
+  | _ => steps
