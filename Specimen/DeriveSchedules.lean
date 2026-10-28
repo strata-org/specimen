@@ -618,7 +618,7 @@ the schedules. -/
    The snd and third elements combined should equal the set vars(hyp.fst)
 -/
 
-private partial def enumSchedules {α v} [BEq v] (vars : List v) (hyps : List (α × List (List v) × List v)) (env : List v)
+private partial def enumSchedules {α v : Type u} [BEq v] (vars : List v) (hyps : List (α × List (List v) × List v)) (env : List v)
   : LazyList (List (PreScheduleStep α v)) :=
   match hyps with
   | [] => pure (prune_empties [.InstVars <| vars.removeAll env])
@@ -693,7 +693,7 @@ in a canonical order always, thus dramatically reducing the size of the enumerat
 because hypotheses in different components cannot possibly depend on each other, so their ordering
 does not make a difference.
 -/
-private partial def enumSchedules' {α v} [BEq v] (vars : List v) (matchableVars : List v) (hypComps : List (List (α × List (List v) × List v))) (env : List v)
+private partial def enumSchedules' {α v : Type u} [BEq v] (vars : List v) (matchableVars : List v) (hypComps : List (List (α × List (List v) × List v))) (env : List v)
   : LazyList (List (PreScheduleStep α v)) :=
   match hypComps with
   | [] => pure (prune_empties [.InstVars <| vars.removeAll env])
@@ -776,7 +776,7 @@ in a canonical order always, thus dramatically reducing the size of the enumerat
 because hypotheses in different components cannot possibly depend on each other, so their ordering
 does not make a difference.
 -/
-private def enumSchedulesChunked {α v} [BEq v] [Hashable v] (vars : List v) (matchableVars : List v) (hypComps : List (LazyList (List (α × List (List v) × List v)))) (env : List v)
+private def enumSchedulesChunked {α v : Type u} [BEq v] [Hashable v] (vars : List v) (matchableVars : List v) (hypComps : List (LazyList (List (α × List (List v) × List v)))) (env : List v)
   : LazyList (List (PreScheduleStep α v)) :=
   -- Use HashSet for O(1) lookups instead of O(n) List.contains
   let envSet := Std.HashSet.ofList env

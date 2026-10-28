@@ -602,7 +602,7 @@ def evalHypothesisArgs (funcs : FuncTable) (bindings : ValEnv) (args : List Cons
     `Eq` and `Ne` are decided structurally, mirroring the built-in `[Decidable P] → DecOpt P`
     instance the pipeline relies on. Every other relation is looked up in `InterpEnv.checkers`. -/
 def checkSource (env : InterpEnv) (targetInductive : Name) (src : Source)
-    (fuel' initSize sizeExpr : Nat) (bindings : ValEnv) :
+    (_fuel' initSize sizeExpr : Nat) (bindings : ValEnv) :
     Except String (Except GenError Bool) := do
   match src with
   | .NonRec (relName, args) => do
