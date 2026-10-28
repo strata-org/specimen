@@ -8,7 +8,8 @@ default.
 
 What changes is only the emitted code. The commands (`derive_generator`, `derive_mutual`, the
 `specimen` tactics) are the same, and a Basalt-derived generator runs wherever an
-`ArbitrarySizedSuchThat` is expected. Enumerators and checkers are not affected.
+`ArbitrarySizedSuchThat` is expected. `derive_mutual enumerator` is emitted the same way (§6); checkers
+and the older `derive_enumerator` command are not affected.
 
 ## Contents
 
@@ -17,8 +18,9 @@ What changes is only the emitted code. The commands (`derive_generator`, `derive
 3. What is emitted
 4. Running Basalt generators through Plausible
 5. Unconstrained values: `deriving instance Basalt.ArbitraryFueled`
-6. Constraints and pitfalls
-7. Not done
+6. Enumerators
+7. Constraints and pitfalls
+8. Not done
 
 ---
 
@@ -44,7 +46,7 @@ derive_generator (fun τ => ∃ e, HasType e τ)
   from source or elaborated into Specimen: the only Basalt modules Specimen imports are the generation
   ones (`Gen`, `RandomChoice`, the combinators, `OptionT`, the Plausible `Gen` instance), and
   those import no Mathlib.
-- **Set the flag for a whole library, not per file** (§6.1):
+- **Set the flag for a whole library, not per file** (§7.1):
 
   ```toml
   [[lean_lib]]
@@ -218,7 +220,7 @@ The module also has the equality leaves the Basalt path needs (`x = e`, `e = x`,
 `Basalt.ArbitraryFueled`, also at low priority.
 
 There is no bridge the other way, and cannot be: a single `Plausible.Gen α` does not give a
-`∀ {G} [Gen G], G α`. This one-way street is the source of most of §6.
+`∀ {G} [Gen G], G α`. This one-way street is the source of most of §7.
 
 ## 5. Unconstrained values: `deriving instance Basalt.ArbitraryFueled`
 
@@ -249,9 +251,26 @@ nested occurrences (`List T` inside `T`) and fields whose type depends on an ear
 (`bitvecConst (n : Nat) (b : BitVec n)`) are rejected with an error naming the field; write those
 instances by hand.
 
-## 6. Constraints and pitfalls
+## 6. Enumerators
 
-### 6.1 The flag must be set for a whole import closure
+Under the flag, `derive_mutual enumerator` emits the generator's code shape over the same classes, from
+the enumerator's own schedules. It is registered as `EnumFor α P` rather than `BacktrackGenFor`, and
+unconstrained values come from `Specimen.EnumFueled`, derived with `deriving instance
+Specimen.EnumFueled for T` and kept apart from `Basalt.ArbitraryFueled` so that a type's generator and
+enumeration never constrain each other.
+
+An enumerator is read at `ExceptT Exhaustion Finite`: everything up to the size, with truncation and
+out-of-fuel as labels. `Specimen.BasaltBridge` serves `EnumSizedSuchThat` from `EnumFor` and `Enum` from
+`EnumFueled` at that reading, which is how a derived checker draws its premises; checkers themselves
+stay on `DecOpt`. The law that the reading lists exactly what the sampler can succeed with
+(`EnumeratesWith`) is walked for a derived enumerator in `SpecimenTest/Correctness/DerivedEnumLaw.lean`.
+
+`derive_enumerator`, the single-relation command `derive_mutual` superseded, ignores the flag and emits
+the lazy-list enumerator.
+
+## 7. Constraints and pitfalls
+
+### 7.1 The flag must be set for a whole import closure
 
 If module `A` derives an instance with the flag off and module `B` uses it with the flag on, `B` fails
 with `failed to synthesize BacktrackGenFor …` for an instance that visibly exists in `A`: `A`
@@ -269,7 +288,7 @@ A hand-written constrained producer that has to serve both paths needs both inst
 (Writing only the `BacktrackGenFor` one also serves both, through the bridge, but then the Plausible
 path runs the bridge rather than the instance as written.)
 
-### 6.2 Every datatype needs its own `Basalt.ArbitraryFueled`
+### 7.2 Every datatype needs its own `Basalt.ArbitraryFueled`
 
 Each datatype a Basalt-derived generator draws unconstrained values of needs
 `deriving instance Basalt.ArbitraryFueled for T`. A missing one is a synthesis error naming the class.
@@ -286,7 +305,7 @@ Deriving these instances implicitly inside `derive_generator` does not work: an 
 declaration, so two modules each deriving a relation over the same datatype would each declare one,
 and nothing importing both would compile.
 
-### 6.3 Seed statistical tests
+### 7.3 Seed statistical tests
 
 The two paths draw from the same primitive (`RandomChoice Plausible.Gen` is `Gen.choose`) and run the
 same `backtrack` algorithm. They differ in one respect: a failed Plausible branch throws, and since
@@ -296,20 +315,19 @@ but comparing the paths with unseeded runs showed differences in both directions
 `Gen.sampleWithSeed` (one seeded stream, not a seed per iteration: `mkStdGen` on consecutive seeds
 correlates the first draw, which picks the top-level constructor).
 
-### 6.4 Rebuild after flipping the flag
+### 7.4 Rebuild after flipping the flag
 
 Lake has replayed cached test modules across a flag change, reporting results for the configuration
 before the flip. A replayed module shows as `Replayed …` in the log. If in doubt, remove
 `.lake/build/lib/lean/<Lib>` and `.lake/build/ir/<Lib>` before trusting a flag-on result.
 
-## 7. Not done
+## 8. Not done
 
-- **Enumerators and checkers** keep their own types. They are structurally recursive over fuel and want
-  a different algebra.
-- **Proofs about derived generators.** The point of a `G`-polymorphic body is that it can be
-  interpreted at a semantic `Gen` instance to state soundness and completeness; nothing here does that
-  yet.
-- **The `Basalt.ArbitraryFueled` requirement** is manual (§6.2). A better error at the point of the
+- **Checkers** keep `DecOpt`. A checker interface with run, specification and expense readings is
+  separate work.
+- **Soundness and completeness of derived generators** against their relation. The enumeration law
+  above relates two readings of one derived term; stating either against the relation is not done.
+- **The `Basalt.ArbitraryFueled` requirement** is manual (§7.2). A better error at the point of the
   synthesis failure, naming the `deriving` line to add, is the realistic improvement.
 - **Packaging.** `basalt` is pinned to `hgoldstein95/basalt#35` (a fix to `walk fixpoint` the laws in
   `Specimen.Enum.Laws` need), until it is merged; then to `main`.
