@@ -109,7 +109,7 @@ instance (c : Nat) : BacktrackGenFor (List String) (fun s => WithinCapacity s c)
   gen _ := do
     let n ← chooseNat 0 c
     (List.range n).mapM fun _ =>
-      BacktrackGen.liftGen (Basalt.ArbitraryFueled.arbitraryFueled (α := String) 0)
+      Basalt.ArbitraryFueled.arbitraryFueled (α := String) 0
 
 /-- `atLeast`, for the Basalt path. -/
 instance atLeastBasalt (n : Nat) : BacktrackGenFor Nat (fun b => n ≤ b) where

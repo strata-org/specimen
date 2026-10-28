@@ -31,7 +31,7 @@ inductive Small : Nat → Prop where
   | one : Small 1
 
 /--
-error: `specimen.emitBasalt` requires `import Specimen.Basalt` in this file: derived generators are emitted against Basalt's `Gen`, `BacktrackGen` and `BacktrackGenFor`
+error: `specimen.emitBasalt` requires `import Specimen.Basalt` in this file: derived generators are emitted against Basalt's `Gen`, `Fail`, `FailWith` and `Backtrack`
 -/
 #guard_msgs in
 set_option specimen.emitBasalt true in

@@ -169,8 +169,8 @@ instance lookupProducerBasalt (Δ : List LMonoTy) (t : LMonoTy) :
     BacktrackGenFor Nat (fun i => Δ[i]? = some t) where
   gen _ := do
     match (List.range Δ.length).filter (fun i => Δ[i]? = some t) with
-    -- `refute`, not `exhaust`: no budget would find an in-scope variable of type `t`.
-    | [] => BacktrackGen.refute
+    -- `refute`, not `outOfFuel`: no budget would find an in-scope variable of type `t`.
+    | [] => Specimen.refute
     | c :: cs =>
       let n ← chooseNat 0 cs.length
       return (c :: cs).getD n c

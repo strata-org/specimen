@@ -32,7 +32,7 @@ private def wrapZeroCase (useBasalt : Bool) (baseGenerators inductiveGenerators 
     | some a, some b => a == b
     | _, _ => false
   if useBasalt && !sameList then
-    `($combinatorFn ($baseGenerators ++ [(1, fun (_ : Unit) => $basaltTruncatedFn)]))
+    `($combinatorFn ($baseGenerators ++ [(1, fun (_ : $(mkIdent ``Unit)) => $basaltTruncatedFn)]))
   else `($combinatorFn $baseGenerators)
 
 /-- Extracts the name of the induction relation and its arguments -/

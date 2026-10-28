@@ -34,10 +34,10 @@ register_option specimen.multiOutput : Bool := {
 }
 
 /-- When true, derived **generators** are emitted against Basalt's generator algebra instead of
-    `Plausible.Gen`: the body is polymorphic in `{G : Type → Type} [Gen G]`, its type is
-    `BacktrackGen G α`, and the instance emitted is `BacktrackGenFor` rather than
-    `ArbitrarySizedSuchThat`. One derived body then elaborates at every `Gen` instance, not only the
-    one it runs at.
+    `Plausible.Gen`: the body is polymorphic in a generator monad `G` with `Gen`, `Fail`,
+    `FailWith Specimen.Exhaustion` and `Basalt.Backtrack`, its type is `G α`, and the instance emitted
+    is `BacktrackGenFor` rather than `ArbitrarySizedSuchThat`. One derived body then elaborates at
+    every such `G`, not only the one it runs at.
 
     Requires `import Specimen.Basalt` in the deriving file: the emitted code names Basalt's classes, and
     that module also supplies the bridge back to `ArbitrarySizedSuchThat`, so the `plausible` tactic and

@@ -34,7 +34,7 @@ derive_generator (fun τ => ∃ e, HasType e τ)
 ```
 
 - **`import Specimen.Basalt`** is required in any file that derives generators under the flag. It
-  brings Basalt's classes (the emitted code names them), the bridge back to `ArbitrarySizedSuchThat`
+  brings Basalt's classes and Specimen's lookup classes (the emitted code names them), the bridge back to `ArbitrarySizedSuchThat`
   (§4) and the `Basalt.ArbitraryFueled` deriving handler (§5). It is not part of `import Specimen`,
   because Basalt keeps `Gen` at the root namespace, where it is ambiguous with `Plausible.Gen` in any
   file with `open Plausible`. With the flag on and the import missing, deriving stops with an error
@@ -42,7 +42,8 @@ derive_generator (fun τ => ∃ e, HasType e τ)
 - **Dependency.** Specimen requires `basalt`, which requires Mathlib. So Mathlib is cloned and a few GB
   of prebuilt artefacts downloaded, by `lake exe cache get` (`lake update` runs it). It is never built
   from source or elaborated into Specimen: the only Basalt modules Specimen imports are the generation
-  ones (`Gen`, `RandomChoice`, the combinators, `BacktrackGen`, `Arbitrary`, the Plausible bridge), and
+  ones (`Gen`, `RandomChoice`, the combinators, `Fail`, `Backtrack`, `ExceptT`, `OptionT`, the Plausible
+  `Gen` instance), and
   those import no Mathlib.
 - **Set the flag for a whole library, not per file** (§6.1):
 
@@ -57,21 +58,21 @@ derive_generator (fun τ => ∃ e, HasType e τ)
 
 ## 2. The Basalt API the emitter targets
 
-From `Basalt/Gen.lean`, `Basalt/BacktrackGen.lean` and `Basalt/Arbitrary.lean`:
+From Basalt's `Gen`, `Fail` and `Backtrack` modules, and Specimen's `Specimen.BasaltClasses`:
 
 ```lean
 class Gen (g : Type u → Type v)            -- Monad, RandomChoice, Inhabited, CCPO, MonoBind
+class Fail (G : Type → Type) where fail : G α               -- a refutation
+class FailWith (ε : Type) (G : Type → Type) where failWith : ε → G α   -- a failure that is not one
+class Basalt.Backtrack (G : Type → Type) where
+  backtrack : List (Nat × (Unit → G α)) → G α
 
-inductive Outcome (α : Type) where
-  | ok (a : α) | refuted | exhausted
-
-abbrev BacktrackGen (G : Type → Type) (α : Type) := Producer .gen G α   -- run : G (Outcome α)
-
-def BacktrackGen.backtrack (gs : List (Nat × (Unit → BacktrackGen G α))) : BacktrackGen G α
--- also: liftGen, refute, exhaust, refutedToExhausted
+-- Specimen
+inductive Specimen.Exhaustion where | fuel | truncated | inconclusive
 
 class BacktrackGenFor (α : Type) (P : α → Prop) where
-  gen : ∀ {G : Type → Type} [Gen G], Nat → BacktrackGen G α
+  gen : ∀ {G : Type → Type} [Gen G] [Fail G] [FailWith Specimen.Exhaustion G] [Basalt.Backtrack G],
+    Nat → G α
 
 namespace Basalt
 class Arbitrary (α : Type) where
@@ -81,16 +82,18 @@ class ArbitraryFueled (α : Type) where
 end Basalt
 ```
 
-- **Failure is a value.** `BacktrackGen G α` produces an `Outcome`: a definite refutation and an
-  exhausted budget are different constructors, where Plausible's generators throw one `GenError` for
-  both and tell them apart by its message.
-- **`backtrack`** picks a branch by weight, runs it, and on failure drops it and picks again among the
-  rest; it is `refuted` only if every branch refuted, `exhausted` if any branch exhausted. Branches
-  are functions, so only those tried are built. It is the same algorithm as Specimen's
-  `GeneratorCombinators.backtrack`.
+- **Failure is part of the monad, in two kinds.** `Fail.fail` says the rule does not apply;
+  `FailWith.failWith e` says the search gave up without deciding, and why. Plausible's generators throw
+  one `GenError` for both and tell them apart by its message.
+- **`backtrack`** picks a branch by weight, runs it, and on either failure drops it and picks again
+  among the rest. Branches are functions, so only those tried are built. What it means depends on the
+  interpretation: the search itself when sampling, the union of the branches at an enumeration
+  (Basalt's `Backtrack` docstring and laws).
 - **`BacktrackGenFor α P`** is the counterpart of `ArbitrarySizedSuchThat α P`, polymorphic in `G`.
 - **`Basalt.Arbitrary` / `Basalt.ArbitraryFueled`** are the counterparts of Plausible's
-  unconstrained classes; a blanket instance gives `ArbitraryFueled` from `Arbitrary`.
+  unconstrained classes; a blanket instance gives `ArbitraryFueled` from `Arbitrary`. Basalt has no
+  lookup classes of its own, so these and `BacktrackGenFor` are Specimen's, with base instances for
+  `Nat`, `Bool`, `Int`, `Char`, `String`, `Fin`, and `List`, `Option`, `Prod` and `Sum` of them.
 
 ## 3. What is emitted
 
@@ -110,34 +113,35 @@ Under the flag (abridged: the `size + 1` case, without the input-dispatch guards
 ```lean
 instance : BacktrackGenFor Expr (fun e => HasType e τ) where
   gen :=
-    let rec aux_arb {G : Type → Type} [_root_.Gen G] (fuel initSize size : Nat) (τ : Ty) :
-        BacktrackGen G Expr :=
+    let rec aux_arb {G : Type → Type} [_root_.Gen G] [_root_.Fail G]
+        [_root_.FailWith Specimen.Exhaustion G] [Basalt.Backtrack G]
+        (fuel initSize size : Nat) (τ : Ty) : G Expr :=
       match fuel with
-      | 0 => BacktrackGen.exhaust
+      | 0 => Specimen.outOfFuel
       | fuel' + 1 =>
         match size with
-        | 0 => BacktrackGen.refutedToExhausted (BacktrackGen.backtrack [ … ])
+        | 0 => Basalt.Backtrack.backtrack ([ … ] ++ [(1, fun (_ : Unit) => Specimen.truncated)])
         | size' + 1 =>
-          BacktrackGen.backtrack
+          Basalt.Backtrack.backtrack
             [(4, fun (_ : Unit) => match τ with
                 | .nat => do
-                  let n ← BacktrackGen.liftGen (Basalt.ArbitraryFueled.arbitraryFueled initSize)
+                  let n ← Basalt.ArbitraryFueled.arbitraryFueled initSize
                   return Expr.lit n
-                | _ => BacktrackGen.refute),
+                | _ => Specimen.refute),
              (4, fun (_ : Unit) => match τ with
                 | .bool => do
-                  let n ← BacktrackGen.liftGen (Basalt.ArbitraryFueled.arbitraryFueled initSize)
+                  let n ← Basalt.ArbitraryFueled.arbitraryFueled initSize
                   match DecOpt.negOpt (DecOpt.decOpt (n = 0) initSize) with
                   | .ok true => return Expr.isPos n
-                  | .ok false => BacktrackGen.refute
-                  | _ => BacktrackGen.exhaust
-                | _ => BacktrackGen.refute),
+                  | .ok false => Specimen.refute
+                  | _ => Specimen.inconclusive
+                | _ => Specimen.refute),
              (…, fun (_ : Unit) => match τ with
                 | .nat => do
                   let l ← aux_arb fuel' initSize size' .nat
                   let r ← aux_arb fuel' initSize size' .nat
                   return Expr.add l r
-                | _ => BacktrackGen.refute)]
+                | _ => Specimen.refute)]
     fun size => aux_arb 10000 size size τ
 ```
 
@@ -147,13 +151,13 @@ are identical. What changes:
 | Plausible path | Basalt path |
 |---|---|
 | `instance : ArbitrarySizedSuchThat …`, field `arbitrarySizedST` | `instance : BacktrackGenFor …`, field `gen` |
-| worker returns `Plausible.Gen α` | worker binds `{G} [_root_.Gen G]`, returns `BacktrackGen G α` |
-| `GeneratorCombinators.backtrack [(w, b), …]` | `BacktrackGen.backtrack [(w, fun (_ : Unit) => b), …]` |
-| `throw Gen.genericFailure` | `BacktrackGen.refute` |
-| `throw Gen.outOfFuelError` (fuel 0) | `BacktrackGen.exhaust` |
-| `DecOpt` premise: anything but `ok true` throws | `ok false` → `refute`, error → `exhaust` |
-| size 0 list as is | `refutedToExhausted` around it when recursive constructors are withheld |
-| `Arbitrary.arbitrary` | `BacktrackGen.liftGen (Basalt.ArbitraryFueled.arbitraryFueled initSize)` |
+| worker returns `Plausible.Gen α` | worker binds `{G} [Gen G] [Fail G] [FailWith Exhaustion G] [Backtrack G]`, returns `G α` |
+| `GeneratorCombinators.backtrack [(w, b), …]` | `Basalt.Backtrack.backtrack [(w, fun (_ : Unit) => b), …]` |
+| `throw Gen.genericFailure` | `Specimen.refute` (`Fail.fail`) |
+| `throw Gen.outOfFuelError` (fuel 0) | `Specimen.outOfFuel` (`failWith .fuel`) |
+| `DecOpt` premise: anything but `ok true` throws | `ok false` → `refute`, error → `inconclusive` |
+| size 0 list as is | one more branch, `Specimen.truncated`, when recursive constructors are withheld |
+| `Arbitrary.arbitrary` | `Basalt.ArbitraryFueled.arbitraryFueled initSize` |
 | `ArbitrarySizedSuchThat.arbitrarySizedST P n` | `BacktrackGenFor.gen P n` |
 | type parameter binder `[Plausible.Arbitrary α]` | `[Basalt.ArbitraryFueled α]` |
 
@@ -163,19 +167,21 @@ Notes:
   branch sits inside `List.filterMap` with no expected type, and `fun () =>` there leaves a universe
   constraint unsolved.
 - **`_root_.Gen`.** Derived code lands in the user's file, where `open Plausible` is common, and a bare
-  `Gen` there is ambiguous. The other names are unambiguous as emitted.
+  `Gen` there is ambiguous. `Fail` and `FailWith` are written `_root_.` too, the rest qualified.
 - **The `G` binder sits on the inner function.** A `let rec` is lifted to a top-level declaration and
   cannot capture a binder from an enclosing lambda; `derive_mutual`'s definitions each carry their own
   `{G}`, which unify at the call sites.
-- **`refute` vs `exhaust` at a `DecOpt` premise.** `ok false` says the constructor does not apply;
-  an error only says the checker ran out of budget. Collapsing the second into `refute` would let
-  `backtrack` report `refuted` for an inhabited relation.
+- **`refute` vs `inconclusive` at a `DecOpt` premise.** `ok false` says the constructor does not
+  apply; an error only says the checker ran out of budget. Collapsing the second into `refute` would let
+  `backtrack` report a refutation for an inhabited relation.
 - **At size 0** only the non-recursive constructors are offered, so their failing is not a refutation
-  of the relation; `refutedToExhausted` downgrades it. For a relation with no recursive constructors the
-  size-0 list is complete and stays as is.
+  of the relation. One more branch, `Specimen.truncated`, fails without refuting, so a search whose
+  other branches all refute ends with that label; since `backtrack` retries past it, the successes are
+  unchanged. There is no catch to relabel a refutation after the fact. For a relation with no recursive
+  constructors the size-0 list is complete and stays as is.
 - **Unconstrained values use the fueled class**, at `initSize`: a derived datatype only ever has
-  `Basalt.ArbitraryFueled` (§5), and Basalt's `Gen` has no ambient size from which an unfueled
-  generator could take one.
+  `Basalt.ArbitraryFueled` (§5), and `Gen` alone has no ambient size from which an unfueled generator
+  could take one.
 - **The `specimen_test` theorem checker stays on the Plausible path** with the flag on: it runs in
   `Plausible.Gen` and calls generators through `ArbitrarySizedSuchThat`, which the bridge (§4)
   supplies for Basalt-derived ones.
@@ -185,20 +191,23 @@ Notes:
 `Specimen.BasaltBridge` has one blanket instance:
 
 ```lean
+abbrev Specimen.BasaltSampler := ExceptT Exhaustion (OptionT Plausible.Gen)
+
 instance (priority := low) [BacktrackGenFor α P] : ArbitrarySizedSuchThat α P where
   arbitrarySizedST size :=
-    BacktrackGen.toPlausibleGen (BacktrackGenFor.gen (P := P) (G := Plausible.Gen) size)
+    (BacktrackGenFor.gen (P := P) (G := Specimen.BasaltSampler) size).toPlausibleGen
 ```
 
 So every consumer of `ArbitrarySizedSuchThat` (the `plausible` tactic, `specimen_test`,
 `printSamples`, generators derived with the flag off) runs a Basalt-derived generator unchanged.
-`toPlausibleGen` throws `Gen.genericFailure` for `refuted` and Plausible's `"out of fuel"` error for
-`exhausted`, which `Gen.GenError.isInconclusive` classifies as inconclusive, so the distinction
+At `BasaltSampler` a refutation is `none` and a labelled failure an `.error`, and Basalt's
+`Backtrack` instance for it is the search, retrying past both. `toPlausibleGen` throws
+`Gen.genericFailure` for a refutation and Plausible's `"out of fuel"` error for a labelled failure, which `Gen.GenError.isInconclusive` classifies as inconclusive, so the distinction
 survives the boundary as a message. Low priority, so a hand-written `ArbitrarySizedSuchThat` for the
 same relation still wins.
 
 The module also has the equality leaves the Basalt path needs (`x = e`, `e = x`, and a pair
-`l = r`), mirroring Specimen's `ArbitrarySizedSuchThat` ones. Basalt's own `PlausibleBridge` gives
+`l = r`), mirroring Specimen's `ArbitrarySizedSuchThat` ones. It also gives
 `Plausible.Arbitrary` from `Basalt.Arbitrary` and `Plausible.ArbitraryFueled` from
 `Basalt.ArbitraryFueled`, also at low priority.
 
@@ -275,8 +284,8 @@ and nothing importing both would compile.
 
 The two paths draw from the same primitive (`RandomChoice Plausible.Gen` is `Gen.choose`) and run the
 same `backtrack` algorithm. They differ in one respect: a failed Plausible branch throws, and since
-Plausible's `Gen` is `StateT StdGen` under `Except`, the RNG rolls back; a failed Basalt branch returns
-a value and keeps the randomness it consumed. This has had no measurable effect on generation quality,
+Plausible's `Gen` is `StateT StdGen` under `Except`, the RNG rolls back; a failed Basalt branch is a
+value of the `OptionT`/`ExceptT` layers above it and keeps the randomness it consumed. This has had no measurable effect on generation quality,
 but comparing the paths with unseeded runs showed differences in both directions from run to run. Use
 `Gen.sampleWithSeed` (one seeded stream, not a seed per iteration: `mkStdGen` on consecutive seeds
 correlates the first draw, which picks the top-level constructor).
@@ -296,4 +305,4 @@ before the flip. A replayed module shows as `Replayed …` in the log. If in dou
   yet.
 - **The `Basalt.ArbitraryFueled` requirement** is manual (§6.2). A better error at the point of the
   synthesis failure, naming the `deriving` line to add, is the realistic improvement.
-- **Packaging.** `basalt` is required by local path until Specimen's additions to it are merged upstream.
+- **Packaging.** `basalt` is pinned to a commit of its enumeration rework, until that is merged.
