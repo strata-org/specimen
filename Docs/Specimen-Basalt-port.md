@@ -120,7 +120,11 @@ instance : BacktrackGenFor Expr (fun e => HasType e τ) where
       | 0 => Specimen.outOfFuel
       | fuel' + 1 =>
         match size with
-        | 0 => Basalt.Backtrack.backtrack ([ … ] ++ [(1, fun (_ : Unit) => Specimen.truncated)])
+        | 0 => Basalt.Backtrack.backtrack
+            [ …,   -- the non-recursive constructors, as below
+             (1, fun (_ : Unit) => match τ with      -- `add`, cut off where it would apply
+                | .nat => Specimen.truncated
+                | _ => Specimen.refute)]
         | size' + 1 =>
           Basalt.Backtrack.backtrack
             [(4, fun (_ : Unit) => match τ with
@@ -156,7 +160,7 @@ are identical. What changes:
 | `throw Gen.genericFailure` | `Specimen.refute` (`Fail.fail`) |
 | `throw Gen.outOfFuelError` (fuel 0) | `Specimen.outOfFuel` (`failWith .fuel`) |
 | `DecOpt` premise: anything but `ok true` throws | `ok false` → `refute`, error → `inconclusive` |
-| size 0 list as is | one more branch, `Specimen.truncated`, when recursive constructors are withheld |
+| size 0 list as is | each recursive constructor as its conclusion match, then `Specimen.truncated` |
 | `Arbitrary.arbitrary` | `Basalt.ArbitraryFueled.arbitraryFueled initSize` |
 | `ArbitrarySizedSuchThat.arbitrarySizedST P n` | `BacktrackGenFor.gen P n` |
 | type parameter binder `[Plausible.Arbitrary α]` | `[Basalt.ArbitraryFueled α]` |
@@ -174,11 +178,12 @@ Notes:
 - **`refute` vs `inconclusive` at a `DecOpt` premise.** `ok false` says the constructor does not
   apply; an error only says the checker ran out of budget. Collapsing the second into `refute` would let
   `backtrack` report a refutation for an inhabited relation.
-- **At size 0** only the non-recursive constructors are offered, so their failing is not a refutation
-  of the relation. One more branch, `Specimen.truncated`, fails without refuting, so a search whose
-  other branches all refute ends with that label; since `backtrack` retries past it, the successes are
-  unchanged. There is no catch to relabel a refutation after the fact. For a relation with no recursive
-  constructors the size-0 list is complete and stays as is.
+- **At size 0** a recursive constructor cannot recurse, so it is offered only as its conclusion: the
+  leading input matches and input-only checks of its schedule, then `Specimen.truncated` where they
+  match. A search that only meets refutations and truncations ends truncated if some recursive
+  constructor could have applied, and refuted if none could, which is a genuine refutation. The
+  branch has weight `1`, since a recursive constructor's own weight is `0` at size 0 and a branch of
+  weight `0` is never tried. `backtrack` retries past a truncation, so the successes are unchanged.
 - **Unconstrained values use the fueled class**, at `initSize`: a derived datatype only ever has
   `Basalt.ArbitraryFueled` (§5), and `Gen` alone has no ambient size from which an unfueled generator
   could take one.
