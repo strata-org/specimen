@@ -28,6 +28,9 @@ inductive MonadSort
   | Enumerator
   | OptionTEnumerator
   | Checker
+  /-- Under `specimen.emitBasalt`, a checker's question to an enumeration: a function of the
+      continuation (`Specimen.CheckerSearch`, `Specimen.CheckerSearchAll`, `Specimen.searchWorker`). -/
+  | CheckerSearch
   deriving Repr, BEq
 
 /-- Determines whether a `MonadSort` corresponds to a monad
@@ -464,6 +467,13 @@ mutual
         else
           -- For checkers, we can just invoke `DecOpt.andOptList`
           `($andOptListFn [$m1:term, $k1:term])
+      | .Checker, .CheckerSearch => do
+          let args ←
+            if vars.isEmpty then
+              throwError m!"empty list of vars supplied to MBind, deriveSort = {repr deriveSort}, monadSort = {repr monadSort}, m1 = {m1}, k1 = {k1}"
+            else
+              mkTuple vars
+          `($m1:term (fun $args:term => $k1:term))
       | .Checker, .Enumerator
       | .Checker, .OptionTEnumerator => do
           -- If there are multiple variables that are bound to the result
@@ -565,6 +575,10 @@ def scheduleStepToMExp (step : ScheduleStep) (defFuel : MExp) (k : MExp) (output
       let ty ← hypothesisExprToTSyntaxTerm hyp
       let tyExpr := ToExpr.toExpr hyp
       let producer ← unconstrainedProducer prodSort ty defFuel
+      if basaltWorkers && prodSort matches .Enumerator then
+        let search := .MApp .allExplicit (.MConst (Name.mkStr3 "Specimen" "CheckerSearchAll" "search"))
+          [hypothesisExprToMExp hyp, .MHole, defFuel]
+        return .MBind .CheckerSearch search [⟨v,tyExpr⟩] k
       pure $ .MBind monadSort producer [⟨v,tyExpr⟩] k
     | Source.Rec f args | Source.MutRec f args =>
       pure $ .MBind monadSort (recCall f fuelPrimeName sizeExpr args) [⟨v, outputType⟩] k
@@ -581,15 +595,21 @@ def scheduleStepToMExp (step : ScheduleStep) (defFuel : MExp) (k : MExp) (output
       -- independent dependencies.
       let fuel := if hypExpr.1 == targetInductive then sizeExpr else defFuel
       let producer ← constrainedProducer ps varsTys (hypothesisExprToMExp hypExpr) fuel
+      if basaltWorkers && ps matches .Enumerator then
+        let (args, argTys) := List.unzip varsTys
+        let typedArgs := List.zip args (argTys.map (Option.map ToExpr.toExpr))
+        let search := .MApp .allExplicit (.MConst (Name.mkStr3 "Specimen" "CheckerSearch" "search"))
+          [.MHole, .MFun typedArgs (hypothesisExprToMExp hypExpr), .MHole, fuel, defFuel]
+        return .MBind .CheckerSearch search typedVars k
       pure $ .MBind monadSort producer typedVars k
     | Source.Rec f args | Source.MutRec f args =>
       let call := recCall f fuelPrimeName sizeExpr args
       -- A checker calling an enumerator of its own block reaches the worker directly rather than
-      -- through `EnumSizedSuchThat`; under Basalt the worker is polymorphic in its monad, so it is read
-      -- as the bridge reads it, not instantiated at the checker's.
-      let call := if basaltWorkers && ps matches .Enumerator then
-          .MApp .allowImplicit (.MConst (Name.mkStr2 "Specimen" "basaltEnumeration")) [call]
-        else call
+      -- through `CheckerSearch`; under Basalt the worker is polymorphic in its monad, so it is run as a
+      -- search rather than instantiated at the checker's.
+      if basaltWorkers && ps matches .Enumerator then
+        let search := .MApp .allowImplicit (.MConst (Name.mkStr2 "Specimen" "searchWorker")) [call]
+        return .MBind .CheckerSearch search typedVars k
       pure $ .MBind monadSort call typedVars k
   | .Check src polarity =>
 
