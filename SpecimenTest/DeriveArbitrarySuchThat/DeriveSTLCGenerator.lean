@@ -3,7 +3,7 @@ import Specimen.DecOpt
 import Plausible.Arbitrary
 import Specimen.ArbitrarySizedSuchThat
 import SpecimenTest.DeriveArbitrary.DeriveSTLCTermTypeGenerators
--- `Basalt.ArbitraryFueled type`/`term`, which the generator needs under `specimen.emitBasalt` for the
+-- `Basalt.ArbitrarySized type`/`term`, which the generator needs under `specimen.emitBasalt` for the
 -- unconstrained fields of `term`.
 import SpecimenTest.CommonDefinitions.STLCBasaltGenerators
 import SpecimenTest.DeriveDecOpt.DeriveSTLCChecker

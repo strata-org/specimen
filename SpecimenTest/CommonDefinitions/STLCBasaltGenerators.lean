@@ -11,5 +11,5 @@ A separate module so that `DeriveSTLCTermTypeGenerators`, a test of Plausible's 
 stays free of Specimen.
 -/
 
-deriving instance Basalt.ArbitraryFueled for type
-deriving instance Basalt.ArbitraryFueled for term
+deriving instance Basalt.ArbitrarySized for type
+deriving instance Basalt.ArbitrarySized for term

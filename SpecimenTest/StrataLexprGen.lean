@@ -102,14 +102,14 @@ unused with the flag off. -/
 instance : Basalt.Arbitrary Rat where
   arbitrary := do return (Rat.ofInt (← Basalt.Arbitrary.arbitrary))
 
-deriving instance Basalt.ArbitraryFueled for QuantifierKind
-deriving instance Basalt.ArbitraryFueled for Identifier
+deriving instance Basalt.ArbitrarySized for QuantifierKind
+deriving instance Basalt.ArbitrarySized for Identifier
 
 /-- Hand-written: `LConst.bitvecConst (n : Nat) (b : BitVec n)` has a field whose type depends on an
 earlier field, which the deriving handler rejects. The width is fixed at 32; the typing relation treats
 all bitvector constants alike. -/
-instance : Basalt.ArbitraryFueled LConst where
-  arbitraryFueled _ :=
+instance : Basalt.ArbitrarySized LConst where
+  arbitrarySized _ :=
     oneOf [fun () => .intConst <$> Basalt.Arbitrary.arbitrary,
            fun () => .strConst <$> Basalt.Arbitrary.arbitrary,
            fun () => .realConst <$> Basalt.Arbitrary.arbitrary,
@@ -119,8 +119,8 @@ instance : Basalt.ArbitraryFueled LConst where
            fun () => .boolConst <$> Basalt.Arbitrary.arbitrary]
 
 /-- The same fixed pool as `Arbitrary LMonoTy`, for the same reason. -/
-instance : Basalt.ArbitraryFueled LMonoTy where
-  arbitraryFueled _ := do
+instance : Basalt.ArbitrarySized LMonoTy where
+  arbitrarySized _ := do
     let choices : List LMonoTy :=
       [.int, .bool, .string,
        .arrow .int .bool, .arrow .bool .bool, .arrow .int .int]
@@ -167,7 +167,7 @@ priority. -/
 
 instance lookupProducerBasalt (Δ : List LMonoTy) (t : LMonoTy) :
     BacktrackGenFor Nat (fun i => Δ[i]? = some t) where
-  gen _ := do
+  gen _ _ := do
     match (List.range Δ.length).filter (fun i => Δ[i]? = some t) with
     -- `refute`, not `outOfFuel`: no budget would find an in-scope variable of type `t`.
     | [] => Specimen.refute
@@ -177,7 +177,7 @@ instance lookupProducerBasalt (Δ : List LMonoTy) (t : LMonoTy) :
 
 instance lookupProducerSynBasalt (Δ : List LMonoTy) :
     BacktrackGenFor (Nat × Option LMonoTy) (fun p => Δ[p.1]? = p.2) where
-  gen _ := do
+  gen _ _ := do
     if 0 < Δ.length then
       let n ← chooseNat 0 (Δ.length - 1)
       return (n, Δ[n]?)

@@ -17,7 +17,7 @@ and the older `derive_enumerator` command are not affected.
 2. The Basalt API the emitter targets
 3. What is emitted
 4. Running Basalt generators through Plausible
-5. Unconstrained values: `deriving instance Basalt.ArbitraryFueled`
+5. Unconstrained values: `deriving instance Basalt.ArbitrarySized`
 6. Enumerators
 7. Constraints and pitfalls
 8. Not done
@@ -37,7 +37,7 @@ derive_generator (fun τ => ∃ e, HasType e τ)
 
 - **`import Specimen.Basalt`** is required in any file that derives generators under the flag. It
   brings Basalt's classes and Specimen's lookup classes (the emitted code names them), the bridge back to `ArbitrarySizedSuchThat`
-  (§4) and the `Basalt.ArbitraryFueled` deriving handler (§5). It is not part of `import Specimen`,
+  (§4) and the `Basalt.ArbitrarySized` deriving handler (§5). It is not part of `import Specimen`,
   because Basalt keeps `Gen` at the root namespace, where it is ambiguous with `Plausible.Gen` in any
   file with `open Plausible`. With the flag on and the import missing, deriving stops with an error
   naming the import.
@@ -80,8 +80,8 @@ class BacktrackGenFor (α : Type) (P : α → Prop) where
 namespace Basalt
 class Arbitrary (α : Type) where
   arbitrary : ∀ {G : Type → Type} [Gen G], G α
-class ArbitraryFueled (α : Type) where
-  arbitraryFueled : ∀ {G : Type → Type} [Gen G] [Pick G], Nat → G α
+class ArbitrarySized (α : Type) where
+  arbitrarySized : ∀ {G : Type → Type} [Gen G] [Pick G], Nat → G α
 end Basalt
 ```
 
@@ -93,9 +93,9 @@ end Basalt
   interpretation: the search itself when sampling, the union of the branches at an enumeration
   (`Specimen.Enum.Backtrack`'s docstring, and its laws in `Specimen.Enum.Laws`).
 - **`BacktrackGenFor α P`** is the counterpart of `ArbitrarySizedSuchThat α P`, polymorphic in `G`.
-- **`Basalt.Arbitrary` / `Basalt.ArbitraryFueled`** are the counterparts of Plausible's
-  unconstrained classes; a blanket instance gives `ArbitraryFueled` from `Arbitrary`. Basalt has no
-  lookup classes of its own, so these and `BacktrackGenFor` are Specimen's. `ArbitraryFueled`'s base
+- **`Basalt.Arbitrary` / `Basalt.ArbitrarySized`** are the counterparts of Plausible's
+  unconstrained classes; a blanket instance gives `ArbitrarySized` from `Arbitrary`. Basalt has no
+  lookup classes of its own, so these and `BacktrackGenFor` are Specimen's. `ArbitrarySized`'s base
   instances (`Nat`, `Bool`, `Int`, `Char`, `String`, `Fin`, and `List`, `Option`, `Prod` and `Sum` of
   them) are bounded by the size as Plausible's are by its ambient size, so the same instance serves a
   generator and an enumeration.
@@ -137,12 +137,12 @@ instance : BacktrackGenFor Expr (fun e => HasType e τ) where
           Specimen.Backtrack.backtrack
             [(4, fun (_ : Unit) => match τ with
                 | .nat => do
-                  let n ← Basalt.ArbitraryFueled.arbitraryFueled initSize
+                  let n ← Basalt.ArbitrarySized.arbitrarySized initSize
                   return Expr.lit n
                 | _ => Specimen.refute),
              (4, fun (_ : Unit) => match τ with
                 | .bool => do
-                  let n ← Basalt.ArbitraryFueled.arbitraryFueled initSize
+                  let n ← Basalt.ArbitrarySized.arbitrarySized initSize
                   match DecOpt.negOpt (DecOpt.decOpt (n = 0) initSize) with
                   | .ok true => return Expr.isPos n
                   | .ok false => Specimen.refute
@@ -170,9 +170,9 @@ are identical. What changes:
 | `throw Gen.outOfFuelError` (fuel 0) | `Specimen.outOfFuel` (`failWith .fuel`) |
 | `DecOpt` premise: anything but `ok true` throws | `ok false` → `refute`, error → `inconclusive` |
 | size 0 list as is | each recursive constructor as its conclusion match, then `Specimen.truncated` |
-| `Arbitrary.arbitrary` | `Basalt.ArbitraryFueled.arbitraryFueled initSize` |
+| `Arbitrary.arbitrary` | `Basalt.ArbitrarySized.arbitrarySized initSize` |
 | `ArbitrarySizedSuchThat.arbitrarySizedST P n` | `BacktrackGenFor.gen P n initSize` |
-| type parameter binder `[Plausible.Arbitrary α]` | `[Basalt.ArbitraryFueled α]` |
+| type parameter binder `[Plausible.Arbitrary α]` | `[Basalt.ArbitrarySized α]` |
 
 Notes:
 
@@ -224,35 +224,35 @@ same relation still wins.
 The module also has the equality leaves the Basalt path needs (`x = e`, `e = x`, and a pair
 `l = r`), mirroring Specimen's `ArbitrarySizedSuchThat` ones. It also gives
 `Plausible.Arbitrary` from `Basalt.Arbitrary` and `Plausible.ArbitraryFueled` from
-`Basalt.ArbitraryFueled`, also at low priority.
+`Basalt.ArbitrarySized`, also at low priority.
 
 There is no bridge the other way, and cannot be: a single `Plausible.Gen α` does not give a
 `∀ {G} [Gen G], G α`. This one-way street is the source of most of §7.
 
-## 5. Unconstrained values: `deriving instance Basalt.ArbitraryFueled`
+## 5. Unconstrained values: `deriving instance Basalt.ArbitrarySized`
 
 When a Basalt-derived generator needs an unconstrained value of a datatype, it asks for
-`Basalt.ArbitraryFueled`, and the datatype's `Plausible.Arbitrary` cannot stand in. The handler in
+`Basalt.ArbitrarySized`, and the datatype's `Plausible.Arbitrary` cannot stand in. The handler in
 `Specimen.DeriveBasaltArbitrary` derives one:
 
 ```lean
-deriving instance Basalt.ArbitraryFueled for Tree
+deriving instance Basalt.ArbitrarySized for Tree
 ```
 
 emits
 
 ```lean
-def Tree.basaltArbitraryFueled {G : Type → Type} [_root_.Gen G] [Specimen.Pick G] : Nat → G Tree
+def Tree.basaltArbitrarySized {G : Type → Type} [_root_.Gen G] [Specimen.Pick G] : Nat → G Tree
   | 0     => oneOf [fun (_ : Unit) => pure Tree.leaf]
   | n + 1 => oneOf [fun (_ : Unit) => pure Tree.leaf,
-                    fun (_ : Unit) => Tree.basaltArbitraryFueled n >>= fun a0 => … pure (Tree.node a0 a1 a2)]
+                    fun (_ : Unit) => Tree.basaltArbitrarySized n >>= fun a0 => … pure (Tree.node a0 a1 a2)]
 
-instance : Basalt.ArbitraryFueled Tree where
-  arbitraryFueled := Tree.basaltArbitraryFueled
+instance : Basalt.ArbitrarySized Tree where
+  arbitrarySized := Tree.basaltArbitrarySized
 ```
 
 Uniform over the non-recursive constructors at fuel 0 and all constructors otherwise. A field is
-generated by the recursive call at one less fuel, else by `Basalt.ArbitraryFueled` at the same fuel if
+generated by the recursive call at one less fuel, else by `Basalt.ArbitrarySized` at the same fuel if
 an instance exists, else by `Basalt.Arbitrary`. Type parameters are supported. Indexed families,
 nested occurrences (`List T` inside `T`) and fields whose type depends on an earlier field
 (`bitvecConst (n : Nat) (b : BitVec n)`) are rejected with an error naming the field; write those
@@ -262,11 +262,11 @@ instances by hand.
 
 Under the flag, `derive_mutual enumerator` emits the generator's code shape over the same classes, from
 the enumerator's own schedules. It is registered as `EnumFor α P` rather than `BacktrackGenFor`, and
-draws unconstrained values from `Basalt.ArbitraryFueled`, as a generator does.
+draws unconstrained values from `Basalt.ArbitrarySized`, as a generator does.
 
 An enumerator is read at `ExceptT Exhaustion Finite`: everything up to the size, with truncation and
 out-of-fuel as labels. `Specimen.BasaltBridge` serves `EnumSizedSuchThat` from `EnumFor` and `Enum` from
-`Basalt.ArbitraryFueled` at that reading, which is how a derived checker draws its premises; checkers themselves
+`Basalt.ArbitrarySized` at that reading, which is how a derived checker draws its premises; checkers themselves
 stay on `DecOpt`. The law that the reading lists exactly what the sampler can succeed with
 (`EnumeratesWith`) is walked for a derived enumerator in `SpecimenTest/Correctness/DerivedEnumLaw.lean`.
 
@@ -293,16 +293,16 @@ A hand-written constrained producer that has to serve both paths needs both inst
 (Writing only the `BacktrackGenFor` one also serves both, through the bridge, but then the Plausible
 path runs the bridge rather than the instance as written.)
 
-### 7.2 Every datatype needs its own `Basalt.ArbitraryFueled`
+### 7.2 Every datatype needs its own `Basalt.ArbitrarySized`
 
 Each datatype a Basalt-derived generator draws unconstrained values of needs
-`deriving instance Basalt.ArbitraryFueled for T`. A missing one is a synthesis error naming the class.
+`deriving instance Basalt.ArbitrarySized for T`. A missing one is a synthesis error naming the class.
 
 **Curated instances are the silent case.** A file that overrides `Arbitrary String` with a small pool,
 so that generated keys collide, still generates on the Basalt path without its counterpart, but from
 Basalt's own `Arbitrary String` (random printable ASCII): every key-lookup premise then takes its
 trivial branch, and the only symptom is worse test data. When porting a file, give every hand-written
-`Arbitrary` / `ArbitraryFueled` instance a `Basalt.ArbitraryFueled` twin, not just the datatypes that
+`Arbitrary` / `ArbitraryFueled` instance a `Basalt.ArbitrarySized` twin, not just the datatypes that
 fail. Declare such pools `local`: a global one is seen by every module importing the file, and two of
 them for the same type make generation depend on which one instance resolution picks.
 
@@ -332,7 +332,7 @@ before the flip. A replayed module shows as `Replayed …` in the log. If in dou
   separate work.
 - **Soundness and completeness of derived generators** against their relation. The enumeration law
   above relates two readings of one derived term; stating either against the relation is not done.
-- **The `Basalt.ArbitraryFueled` requirement** is manual (§7.2). A better error at the point of the
+- **The `Basalt.ArbitrarySized` requirement** is manual (§7.2). A better error at the point of the
   synthesis failure, naming the `deriving` line to add, is the realistic improvement.
 - **Packaging.** `basalt` is pinned to `hgoldstein95/basalt#35` (a fix to `walk fixpoint` the laws in
   `Specimen.Enum.Laws` need), until it is merged; then to `main`.

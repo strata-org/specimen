@@ -80,12 +80,12 @@ same term is a generator when sampled and every value up to the size, each once,
 Derived generators and enumerators both draw unconstrained values through it. `Pick` is there for a
 weighted instance: at an enumeration it lists each branch once, where `frequency` repeats it per unit
 of weight. -/
-class ArbitraryFueled (α : Type) where
-  arbitraryFueled : ∀ {G : Type → Type} [Gen G] [Specimen.Pick G], Nat → G α
+class ArbitrarySized (α : Type) where
+  arbitrarySized : ∀ {G : Type → Type} [Gen G] [Specimen.Pick G], Nat → G α
 
 /-- An unfueled generator ignores the fuel. Low priority, so an instance that uses it wins. -/
-instance (priority := low) [Arbitrary α] : ArbitraryFueled α where
-  arbitraryFueled _ := Arbitrary.arbitrary
+instance (priority := low) [Arbitrary α] : ArbitrarySized α where
+  arbitrarySized _ := Arbitrary.arbitrary
 
 open RandomChoice
 
@@ -152,42 +152,42 @@ Bounded by the size, as Plausible's are by its ambient size: `Nat` is uniform on
 uniform on `0..n` with each element at size `n`. A component of a compound type gets the size
 unchanged: components are siblings, not nested. -/
 
-instance : ArbitraryFueled Nat := ⟨fun n => chooseNat 0 n⟩
+instance : ArbitrarySized Nat := ⟨fun n => chooseNat 0 n⟩
 
-instance : ArbitraryFueled Bool := ⟨fun _ => do pure ((← chooseNat 0 1) == 0)⟩
+instance : ArbitrarySized Bool := ⟨fun _ => do pure ((← chooseNat 0 1) == 0)⟩
 
-instance : ArbitraryFueled Unit := ⟨fun _ => pure ()⟩
+instance : ArbitrarySized Unit := ⟨fun _ => pure ()⟩
 
-instance : ArbitraryFueled (Fin (n + 1)) := ⟨fun _ => do
+instance : ArbitrarySized (Fin (n + 1)) := ⟨fun _ => do
   let m ← choose 0 n (Nat.zero_le n)
   pure ⟨m.down.val, Nat.lt_succ_of_le m.down.property.2⟩⟩
 
 /-- `-n` to `n`. -/
-instance : ArbitraryFueled Int := ⟨fun n => do pure ((← chooseNat 0 (2 * n) : Nat) - (n : Int))⟩
+instance : ArbitrarySized Int := ⟨fun n => do pure ((← chooseNat 0 (2 * n) : Nat) - (n : Int))⟩
 
 /-- Printable ASCII, `' '` through `'~'`, at every size. -/
-instance : ArbitraryFueled Char := ⟨fun _ => do pure (Char.ofNat (← chooseNat 32 126))⟩
+instance : ArbitrarySized Char := ⟨fun _ => do pure (Char.ofNat (← chooseNat 32 126))⟩
 
-instance [ArbitraryFueled α] : ArbitraryFueled (Option α) where
-  arbitraryFueled n := oneOf [fun () => pure none, fun () => some <$> ArbitraryFueled.arbitraryFueled n]
+instance [ArbitrarySized α] : ArbitrarySized (Option α) where
+  arbitrarySized n := oneOf [fun () => pure none, fun () => some <$> ArbitrarySized.arbitrarySized n]
 
-instance [ArbitraryFueled α] [ArbitraryFueled β] : ArbitraryFueled (α × β) where
-  arbitraryFueled n := do
-    let a ← ArbitraryFueled.arbitraryFueled n
-    let b ← ArbitraryFueled.arbitraryFueled n
+instance [ArbitrarySized α] [ArbitrarySized β] : ArbitrarySized (α × β) where
+  arbitrarySized n := do
+    let a ← ArbitrarySized.arbitrarySized n
+    let b ← ArbitrarySized.arbitrarySized n
     pure (a, b)
 
-instance [ArbitraryFueled α] [ArbitraryFueled β] : ArbitraryFueled (α ⊕ β) where
-  arbitraryFueled n := oneOf [fun () => Sum.inl <$> ArbitraryFueled.arbitraryFueled n,
-    fun () => Sum.inr <$> ArbitraryFueled.arbitraryFueled n]
+instance [ArbitrarySized α] [ArbitrarySized β] : ArbitrarySized (α ⊕ β) where
+  arbitrarySized n := oneOf [fun () => Sum.inl <$> ArbitrarySized.arbitrarySized n,
+    fun () => Sum.inr <$> ArbitrarySized.arbitrarySized n]
 
-instance [ArbitraryFueled α] : ArbitraryFueled (List α) where
-  arbitraryFueled n := do
+instance [ArbitrarySized α] : ArbitrarySized (List α) where
+  arbitrarySized n := do
     let k ← chooseNat 0 n
-    vectorOf k (ArbitraryFueled.arbitraryFueled n)
+    vectorOf k (ArbitrarySized.arbitrarySized n)
 
-instance : ArbitraryFueled String where
-  arbitraryFueled n := do pure (String.ofList (← ArbitraryFueled.arbitraryFueled (α := List Char) n))
+instance : ArbitrarySized String where
+  arbitrarySized n := do pure (String.ofList (← ArbitrarySized.arbitrarySized (α := List Char) n))
 
 end Basalt
 

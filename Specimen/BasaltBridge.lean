@@ -60,12 +60,12 @@ instance (priority := low) [Basalt.Arbitrary α] : Plausible.Arbitrary α where
   arbitrary := Basalt.Arbitrary.arbitrary (G := Plausible.Gen)
 
 /-- Plausible's own `ArbitraryFueled → Arbitrary` instance then takes the fuel from its size. -/
-instance (priority := low) [Basalt.ArbitraryFueled α] : Plausible.ArbitraryFueled α where
-  arbitraryFueled n := Basalt.ArbitraryFueled.arbitraryFueled (G := Plausible.Gen) n
+instance (priority := low) [Basalt.ArbitrarySized α] : Plausible.ArbitraryFueled α where
+  arbitraryFueled n := Basalt.ArbitrarySized.arbitrarySized (G := Plausible.Gen) n
 
 /-- A Basalt-derived enumerator's run at `ExceptT Exhaustion Finite`, as the lazy list Specimen's
 enumerator consumers read: each success, and each label as `Gen.outOfFuelError`, which a checker reads
-as inconclusive. An undefined run (infinite, which a derived enumerator over `Basalt.ArbitraryFueled` leaves is not)
+as inconclusive. An undefined run (infinite, which a derived enumerator over `Basalt.ArbitrarySized` leaves is not)
 is one inconclusive entry. -/
 def Specimen.toEnumeratorEntries (x : Specimen.Finite (Except Specimen.Exhaustion α)) :
     LazyList (Except GenError α) :=
@@ -86,9 +86,9 @@ instance (priority := low) {α : Type} {P : α → Prop} [EnumFor α P] : EnumSi
 
 /-- A Basalt unconstrained generator is one of Specimen's enumerators, read at `Finite`: the values up
 to the size. A derived checker draws an unconstrained value this way. Low priority, as above. -/
-instance (priority := low) [Basalt.ArbitraryFueled α] : Enum α where
+instance (priority := low) [Basalt.ArbitrarySized α] : Enum α where
   enum size := LazyList.fromList
-    ((Basalt.ArbitraryFueled.arbitraryFueled (G := Specimen.Finite) size).toList?.getD [])
+    ((Basalt.ArbitrarySized.arbitrarySized (G := Specimen.Finite) size).toList?.getD [])
 
 /-! ## Leaf instances for equality constraints
 
@@ -114,14 +114,14 @@ instance instEnumForEqLeft {α : Type} {val : α} : EnumFor α (fun x => val = x
 
 /-- A pair constrained to be equal: generate one value and duplicate it. The counterpart of Specimen's
 `ArbitrarySizedSuchThat (α × α) (fun (l, r) => l = r)`. -/
-instance instBacktrackGenForEqPair {α : Type} [Basalt.ArbitraryFueled α] :
+instance instBacktrackGenForEqPair {α : Type} [Basalt.ArbitrarySized α] :
     BacktrackGenFor (α × α) (fun (l, r) => l = r) where
   gen _ leafSize := do
-    let a ← Basalt.ArbitraryFueled.arbitraryFueled leafSize
+    let a ← Basalt.ArbitrarySized.arbitrarySized leafSize
     pure (a, a)
 
-instance instEnumForEqPair {α : Type} [Basalt.ArbitraryFueled α] :
+instance instEnumForEqPair {α : Type} [Basalt.ArbitrarySized α] :
     EnumFor (α × α) (fun (l, r) => l = r) where
   enum _ leafSize := do
-    let a ← Basalt.ArbitraryFueled.arbitraryFueled leafSize
+    let a ← Basalt.ArbitrarySized.arbitrarySized leafSize
     pure (a, a)

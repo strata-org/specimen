@@ -11,7 +11,7 @@ Import this in any file that derives generators or enumerators with
   producers derived under the flag are emitted against, so the names must resolve in the deriving file;
 - the bridges that run a `BacktrackGenFor` wherever an `ArbitrarySizedSuchThat` is expected and an
   `EnumFor` wherever an `EnumSizedSuchThat` is (`Specimen.BasaltBridge`);
-- `deriving instance Basalt.ArbitraryFueled for T` (`Specimen.DeriveBasaltArbitrary`), needed for
+- `deriving instance Basalt.ArbitrarySized for T` (`Specimen.DeriveBasaltArbitrary`), needed for
   every datatype a derived generator or enumerator draws unconstrained values of.
 
 It is not part of `import Specimen`: Basalt puts `Gen` at the root namespace, where it is ambiguous

@@ -37,13 +37,13 @@ the `bind`/`pure` steps, as a `Produces` algebra. So "sound at `SPMF`" is the st
 | `typing_1` (Γ, τ in; term out)   | `lookup_1`, itself |
 
 Each gets its own `induction fuel`. The schedule the deriver picks for `TApp` draws the argument
-type `τ1` from the *unconstrained* `ArbitraryFueled type` and then produces both subterms through
+type `τ1` from the *unconstrained* `ArbitrarySized type` and then produces both subterms through
 `typing_1` itself — there is no auxiliary pair mode (`typing_1_2`) and therefore no simultaneous
 induction. (A scorer that scheduled `TApp` through a pair mode would force a mutual induction over
 both modes; the single-mode schedule keeps the proof to one.)
 
 The `typing → lookup` edge does **not** join the cycle: those calls go through the emitted
-`BacktrackGenFor` instance, whose `gen` field is `fun size => worker 10000 size size args`, resetting
+`BacktrackGenFor` instance, whose `gen` field is `fun size leafSize => worker 10000 leafSize size args`, resetting
 fuel to the literal `10000`. That is why the `lookup` lemma is quantified over all fuel and is then
 applied at `10000`.
 
@@ -64,7 +64,7 @@ the guards and the `filterMap` reduce and membership is a plain `List.mem_cons` 
 * **`TVar` bottoms out in the derived `lookup` producer**, invoked at `initSize`, so the `lookup`
   lemma is a genuine dependency rather than a side result.
 * **`STLCBasaltGenerators` must be imported.** `TConst` draws its literal and `TApp` its argument
-  type from an unconstrained `Basalt.ArbitraryFueled`; without those instances the *derivation*
+  type from an unconstrained `Basalt.ArbitrarySized`; without those instances the *derivation*
   fails before any proof is attempted.
 
 ## Generic machinery this leans on
@@ -220,7 +220,7 @@ theorem typing_gen_sound : ∀ (fuel iS sz : Nat) (G : List type) (t : type) (e 
     simp only [specimen_gen_typing_1__SpecimenTest_Correctness_StlcGeneratorSoundness_StlcGeneratorSoundness] at h
     -- `TConst` at `t = Nat`, shared by the truncated and the full pool.
     have tconst :
-        Produces (((Basalt.ArbitraryFueled.arbitraryFueled iS) >>= fun n => pure (term.Const n))
+        Produces (((Basalt.ArbitrarySized.arbitrarySized iS) >>= fun n => pure (term.Const n))
             : SGen term) e → typing G e type.Nat := by
       intro hqa
       obtain ⟨n, _, he⟩ := produces_bind_iff.mp hqa

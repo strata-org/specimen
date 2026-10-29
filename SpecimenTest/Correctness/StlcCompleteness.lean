@@ -22,7 +22,7 @@ Everything below is complete — no `sorry`, no new axiom, every emitted branch 
 
 * `lookup_gen_complete` — the `lookup` producer.
 * `type_gen_complete` (imported from `StlcMeasures.lean`) — completeness of the *unconstrained*
-  derived `ArbitraryFueled type` generator, which the constrained generator's `TApp` branch
+  derived `ArbitrarySized type` generator, which the constrained generator's `TApp` branch
   depends on.
 * `stlc_gen_complete_worker` — the main theorem, by structural induction on the term.
 * `stlc_gen_complete` — the headline corollary, stated at the *emitted `BacktrackGenFor` instance*
@@ -82,7 +82,7 @@ hypothesis.
 ## The type budget needs the term's *types*, not just the term
 
 The deriver's schedule for `TApp` **draws** the argument type `τ1` from the unconstrained
-`ArbitraryFueled type` generator; there is no auxiliary pair mode synthesising `τ1` by a second
+`ArbitrarySized type` generator; there is no auxiliary pair mode synthesising `τ1` by a second
 `typing` mode.  Completeness of that draw needs `typeDepth τ1 ≤ initSize`, and `τ1` is *not* a subterm of
 `App e1 e2` — it is the type the derivation assigns to `e2`.  Since `typing` is syntax-directed and
 deterministic, that type is computable: `outTy Γ e` recovers it, `typing_outTy` proves the recovery
@@ -214,9 +214,9 @@ theorem stlc_gen_complete_mutual (e : term) : Reach e := by
       cases fuel with
       | zero => exact absurd hf (Nat.not_lt_zero _)
       | succ fuel =>
-        have body : Produces (((Basalt.ArbitraryFueled.arbitraryFueled iS) >>= fun n => pure (term.Const n))
+        have body : Produces (((Basalt.ArbitrarySized.arbitrarySized iS) >>= fun n => pure (term.Const n))
             : SGen term) (term.Const n) :=
-          produces_bind_of (produces_arbitraryFueled_nat _ n (by simpa only [leafBound] using hv))
+          produces_bind_of (produces_arbitrarySized_nat _ n (by simpa only [leafBound] using hv))
             (produces_pure_iff.mpr rfl)
         cases sz with
         | zero =>
@@ -327,10 +327,10 @@ theorem stlc_gen_complete_mutual (e : term) : Reach e := by
           simp only [tyNeed, typing_outTy h2, Option.elim] at ht
           simp only [tdepth] at hf
           -- The drawn argument type is exactly the one the derivation assigns to `b`.
-          have hdraw : Produces ((Basalt.ArbitraryFueled.arbitraryFueled iS) : SGen type) τ1 :=
+          have hdraw : Produces ((Basalt.ArbitrarySized.arbitrarySized iS) : SGen type) τ1 :=
             type_gen_produces τ1 iS (by omega)
           have hbody :
-              Produces (((Basalt.ArbitraryFueled.arbitraryFueled iS) >>= fun τ1 =>
+              Produces (((Basalt.ArbitrarySized.arbitrarySized iS) >>= fun τ1 =>
                 specimen_gen_typing_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness
                   (G := SGen) fuel iS (sz / 2) Γ (type.Fun τ1 τ) >>= fun e1 =>
                 specimen_gen_typing_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness

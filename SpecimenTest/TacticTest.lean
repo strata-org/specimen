@@ -123,7 +123,7 @@ inductive Tree where
 
 -- The Basalt counterpart of `Arbitrary Tree`, for `specimen.emitBasalt`. Declared before the
 -- `specimen_test` below, which generates `Tree`s.
-deriving instance Basalt.ArbitraryFueled for Tree
+deriving instance Basalt.ArbitrarySized for Tree
 
 inductive Elem : Nat → Tree → Prop where
   | here  : Elem x (.node l x r)

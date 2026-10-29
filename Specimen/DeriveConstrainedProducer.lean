@@ -1254,13 +1254,13 @@ def computeSpecConstraints (indSched : InductiveSchedule)
     match step with
     | .Unconstrained _ (.NonRec (indName, args)) ps =>
       -- Under Basalt this becomes an instance *binder* on the emitted declaration, whose body calls
-      -- `Basalt.ArbitraryFueled.arbitraryFueled` on the parameter, so the binder is that class. A
+      -- `Basalt.ArbitrarySized.arbitrarySized` on the parameter, so the binder is that class. A
       -- `Plausible.Arbitrary` binder would leave the call unsatisfiable, and the error would name the
       -- body's class, reading as a missing user instance rather than a wrong binder.
       let emitBasalt := Lean.Option.get (← getOptions) specimen.emitBasalt
       let tcName := match ps with
         | .Generator =>
-          if emitBasalt then Name.mkStr2 "Basalt" "ArbitraryFueled" else ``Plausible.Arbitrary
+          if emitBasalt then Name.mkStr2 "Basalt" "ArbitrarySized" else ``Plausible.Arbitrary
         | .Enumerator => ``Enum
       -- Check if any type param is referenced (directly or nested)
       let refs := args.foldl (fun acc a => acc.union (extractTypeParamRefs typeParamSet a)) ({} : Std.HashSet Name)
@@ -2508,7 +2508,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
                   -- Under Basalt, the classes the emitted code draws unconstrained values through.
                   let basalt := Lean.Option.get (← getOptions) specimen.emitBasalt
                   let tcName := match basalt, ps with
-                    | true, _ => Name.mkStr2 "Basalt" "ArbitraryFueled"
+                    | true, _ => Name.mkStr2 "Basalt" "ArbitrarySized"
                     | false, .Generator => ``Plausible.Arbitrary
                     | false, .Enumerator => ``Enum
                   let instExists ← liftTermElabM <| Meta.withNewMCtxDepth do

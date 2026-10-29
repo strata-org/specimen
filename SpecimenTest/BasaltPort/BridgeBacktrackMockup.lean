@@ -438,7 +438,8 @@ open MockBacktrack
   IO.println "=== StatusQuo HasType (τ = .bool, size = 5) ==="
   for _ in List.range 5 do
     let inst : ArbitrarySizedSuchThat Expr (fun e => HasType e .bool) := inferInstance
-    let result ← Plausible.Gen.run (inst.arbitrarySizedST 5) 10
+    -- Retried: unseeded, a single draw of the status-quo generator fails about one run in three.
+    let result ← Plausible.Gen.runUntil (some 100) (inst.arbitrarySizedST 5) 10
     IO.println s!"  {repr result}"
 
 /-! ## Status quo: what Specimen emits today for unconstrained generators -/

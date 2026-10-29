@@ -328,15 +328,13 @@ def unconstrainedProducer (prodSort : ProducerSort) (ty : TSyntax `term)
   -- Plausible's `Arbitrary` (fixed at `Plausible.Gen`) cannot be used — it type-errors inside a
   -- Basalt-targeted body.
   --
-  -- `Basalt.ArbitraryFueled` rather than `Basalt.Arbitrary`, for two reasons. Basalt's `Gen` has no
-  -- ambient size parameter and hence no `sized`, so there is no `ArbitraryFueled → Arbitrary`
-  -- instance to fall back on and a derived datatype only ever has the fueled form. And an
-  -- unconstrained generator for a *recursive* datatype ought to be bounded anyway: `initSize` is the
-  -- right budget, being the allocation meant for independent dependencies.
+  -- `Basalt.ArbitrarySized` rather than `Basalt.Arbitrary`: Basalt's `Gen` has no ambient size, so the
+  -- size Plausible's leaves read from it is passed instead, as the leaf size `initSize`, and a derived
+  -- datatype only ever has the sized form. Generators and enumerators draw through the same class.
   let useBasalt := (Lean.Option.get (← getOptions) specimen.emitBasalt)
   let typeClassName :=
     match useBasalt, prodSort with
-    | true, _ => Name.mkStr2 "Basalt" "ArbitraryFueled"
+    | true, _ => Name.mkStr2 "Basalt" "ArbitrarySized"
     | false, .Enumerator => ``Enum
     | false, .Generator => ``Arbitrary
   let typeClassInstance ← `( $(Lean.mkIdent typeClassName) $ty:term )
@@ -347,7 +345,7 @@ def unconstrainedProducer (prodSort : ProducerSort) (ty : TSyntax `term)
     let producerMExp :=
       match useBasalt, prodSort with
       | true, _ =>
-        .MApp .allowImplicit (.MConst (Name.mkStr3 "Basalt" "ArbitraryFueled" "arbitraryFueled")) [fuel]
+        .MApp .allowImplicit (.MConst (Name.mkStr3 "Basalt" "ArbitrarySized" "arbitrarySized")) [fuel]
       | false, .Enumerator => .MConst ``Enum.enum
       | false, .Generator => .MConst ``Arbitrary.arbitrary
     (producerMExp, instances.push typeClassInstance)

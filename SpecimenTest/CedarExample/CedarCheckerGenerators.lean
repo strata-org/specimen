@@ -48,8 +48,8 @@ instance : Enum String where
 ASCII, so two independently generated entity names would almost never be equal and every name lookup in
 a generated schema would fail. `local`, like every curated pool in the suite: a global one would be seen
 by every module importing this one. -/
-local instance instCedarBasaltArbitraryString : Basalt.ArbitraryFueled String where
-  arbitraryFueled _ := do
+local instance instCedarBasaltArbitraryString : Basalt.ArbitrarySized String where
+  arbitrarySized _ := do
     let i ← chooseNat 0 8
     pure (["Aaron", "John", "Mike", "Kesha", "Hicks", "A", "B", "C", "D"].getD i "Aaron")
 
@@ -66,7 +66,7 @@ deriving instance Arbitrary for
 -- The same datatypes for the Basalt path: a Basalt-derived generator is polymorphic in the generator
 -- monad and cannot use the `Arbitrary` instances above, which are fixed at `Plausible.Gen`. Unused with
 -- the flag off.
-deriving instance Basalt.ArbitraryFueled for
+deriving instance Basalt.ArbitrarySized for
   EntityName, EntityUID, Prim, Var, PatElem, UnaryOp, BinaryOp, CedarExpr,
   Request, BoolType, CedarType, EntitySchemaEntry, ActionSchemaEntry, Schema,
   RequestType, Environment, PathSet

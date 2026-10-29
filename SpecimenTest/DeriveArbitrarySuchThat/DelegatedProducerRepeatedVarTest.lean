@@ -113,7 +113,7 @@ instance : ArbitrarySizedSuchThat Nat (fun i => p i i = true) where
 
 -- The same producer for `specimen.emitBasalt`, which looks producers up through `BacktrackGenFor`.
 instance : BacktrackGenFor Nat (fun i => p i i = true) where
-  gen _ := return 0
+  gen _ _ := return 0
 
 inductive R : Tm → Prop where
   | mk : p i i = true → R (.var i)
@@ -146,7 +146,7 @@ instance : ArbitrarySizedSuchThat Nat (fun i => g i = i) where
 
 -- The same producer for `specimen.emitBasalt`, which looks producers up through `BacktrackGenFor`.
 instance : BacktrackGenFor Nat (fun i => g i = i) where
-  gen _ := return 0
+  gen _ _ := return 0
 
 inductive R : Tm → Prop where
   | mk : g i = i → R (.var i)
@@ -196,7 +196,7 @@ instance : ArbitrarySizedSuchThat Idx (fun i => g i = i) where
 
 -- The same producer for `specimen.emitBasalt`, which looks producers up through `BacktrackGenFor`.
 instance : BacktrackGenFor Idx (fun i => g i = i) where
-  gen _ := return (.mk 0)
+  gen _ _ := return (.mk 0)
 
 inductive R : ITm → Prop where
   | mk : g i = i → R (.var i)

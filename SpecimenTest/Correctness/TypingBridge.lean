@@ -15,7 +15,7 @@ proves the emitted definition *is* `genRelB (typStep iS)`, and soundness and com
 from the generic theorems, with all relation-specific content confined to per-branch obligations.
 
 The default scorer schedules `TApp` by *drawing* the argument type from the unconstrained
-`ArbitraryFueled type` generator, so `derive_mutual` emits a single self-recursive `typing` worker:
+`ArbitrarySized type` generator, so `derive_mutual` emits a single self-recursive `typing` worker:
 the bridge is through `genRelB`, not `genRelFam` (which keeps its generic theory and its
 `EvGenSPMF`-style uses, but has no emitted instance here). What makes `typing` genuinely harder than
 `lookup`:
@@ -26,7 +26,7 @@ the bridge is through `genRelB`, not `genRelFam` (which keeps its generic theory
 * **Size halving.** `TAdd` and `TApp` recurse at `Nat.div size' 2`, `TAbs` at `size'`. Since the step
   receives `prev` as a family over size, all three are ordinary applications.
 * **External sub-producers.** The `TVar` branch calls `BacktrackGenFor.gen` for `lookup`, and
-  `TConst`/`TApp` call `ArbitraryFueled.arbitraryFueled`. These are *not* part of the recursion; they
+  `TConst`/`TApp` call `ArbitrarySized.arbitrarySized`. These are *not* part of the recursion; they
   appear in the step as constants, which is the right treatment — their own correctness is a separate
   obligation (`lookup` in `DerivedGeneratorViaInterp.lean`, the unconstrained draws in
   `StlcMeasures.lean`), taken here as hypotheses (`LookupSound`, `LookupComplete`).
@@ -75,7 +75,7 @@ noncomputable def typStep (iS : Nat) : SGenStep (List type × type) term :=
               some (4, fun (_ : Unit) =>
                 match i.2 with
                 | type.Nat =>
-                  (Basalt.ArbitraryFueled.arbitraryFueled iS) >>=
+                  (Basalt.ArbitrarySized.arbitrarySized iS) >>=
                     fun n => pure (term.Const n)
                 | _ => Specimen.refute)
             else none,
@@ -102,7 +102,7 @@ noncomputable def typStep (iS : Nat) : SGenStep (List type × type) term :=
               some (4, fun (_ : Unit) =>
                 match i.2 with
                 | type.Nat =>
-                  (Basalt.ArbitraryFueled.arbitraryFueled iS) >>=
+                  (Basalt.ArbitrarySized.arbitrarySized iS) >>=
                     fun n => pure (term.Const n)
                 | _ => Specimen.refute)
             else none,
@@ -127,7 +127,7 @@ noncomputable def typStep (iS : Nat) : SGenStep (List type × type) term :=
                 | _ => Specimen.refute)
             else none,
             some (3, fun (_ : Unit) =>
-              (Basalt.ArbitraryFueled.arbitraryFueled iS) >>=
+              (Basalt.ArbitrarySized.arbitrarySized iS) >>=
                 fun τ1 =>
                   prev (Nat.div size' 2) (i.1, type.Fun τ1 i.2) >>= fun e1 =>
                     prev (Nat.div size' 2) (i.1, τ1) >>= fun e2 =>
@@ -276,9 +276,9 @@ theorem typStep_complete (iS : Nat) (hlkc : LookupComplete iS) :
   cases hty with
   | TConst =>
     rename_i n
-    have body : Produces (((Basalt.ArbitraryFueled.arbitraryFueled iS) >>= fun n => pure (term.Const n))
+    have body : Produces (((Basalt.ArbitrarySized.arbitrarySized iS) >>= fun n => pure (term.Const n))
         : SGen term) (term.Const n) :=
-      produces_bind_of (produces_arbitraryFueled_nat _ n (by simpa only [leafBound] using hv))
+      produces_bind_of (produces_arbitrarySized_nat _ n (by simpa only [leafBound] using hv))
         (produces_pure_iff.mpr rfl)
     cases sz with
     | zero =>
@@ -363,7 +363,7 @@ theorem typStep_complete (iS : Nat) (hlkc : LookupComplete iS) :
       simp only [leafBound] at hv
       simp only [varBound] at hlf
       simp only [tyNeed, typing_outTy h2, Option.elim] at ht
-      have hbody : Produces (((Basalt.ArbitraryFueled.arbitraryFueled iS) >>= fun τ1' =>
+      have hbody : Produces (((Basalt.ArbitrarySized.arbitrarySized iS) >>= fun τ1' =>
             prev (Nat.div sz 2) (Γ, type.Fun τ1' τ) >>= fun e1 =>
               prev (Nat.div sz 2) (Γ, τ1') >>= fun e2 =>
                 pure (term.App e1 e2)) : SGen term) (term.App e1 e2) := by

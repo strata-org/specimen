@@ -14,11 +14,11 @@ open Idents Schedules
 
 
 /-- The class a derived producer's unconstrained values, and its type parameters, are drawn through:
-    under Basalt `Basalt.ArbitraryFueled` for a generator and an enumerator alike, finite at a size;
+    under Basalt `Basalt.ArbitrarySized` for a generator and an enumerator alike, finite at a size;
     otherwise Plausible's `Arbitrary` and Specimen's `Enum`. -/
 def basaltUnconstrainedClass (useBasalt : Bool) : ProducerSort → Name
-  | .Generator => if useBasalt then Name.mkStr2 "Basalt" "ArbitraryFueled" else ``Plausible.Arbitrary
-  | .Enumerator => if useBasalt then Name.mkStr2 "Basalt" "ArbitraryFueled" else ``Enum
+  | .Generator => if useBasalt then Name.mkStr2 "Basalt" "ArbitrarySized" else ``Plausible.Arbitrary
+  | .Enumerator => if useBasalt then Name.mkStr2 "Basalt" "ArbitrarySized" else ``Enum
 
 /-- Extracts the name of the induction relation and its arguments -/
 def parseInductiveApp (body : Term) :
@@ -388,8 +388,8 @@ def mkConstrainedProducerMutualPieces
       | some tcs => tcs
       | none =>
         -- Under Basalt a type parameter needs a `G`-polymorphic unconstrained generator, and the
-        -- *fueled* class specifically: a derived datatype only ever gets `Basalt.ArbitraryFueled`, and
-        -- Basalt's blanket `Arbitrary → ArbitraryFueled` instance means the fueled binder still accepts a
+        -- *fueled* class specifically: a derived datatype only ever gets `Basalt.ArbitrarySized`, and
+        -- Basalt's blanket `Arbitrary → ArbitrarySized` instance means the fueled binder still accepts a
         -- hand-written unfueled instance, so it is the weaker requirement.
         let producerUnconstrainedClass := basaltUnconstrainedClass useBasalt producerSort
         #[producerUnconstrainedClass, ``DecidableEq]
@@ -454,8 +454,8 @@ def mkConstrainedProducerMutualPieces
         | .Checker | .Theorem => #[``Enum, ``DecidableEq]
         | _ => match producerSort with
           -- Must agree with `defTypeParamInstances` above: under Basalt a type parameter needs a
-          -- `G`-polymorphic unconstrained generator, so the binder is `Basalt.ArbitraryFueled`. Emitting
-          -- `Plausible.Arbitrary` here while the body calls `Basalt.ArbitraryFueled.arbitraryFueled`
+          -- `G`-polymorphic unconstrained generator, so the binder is `Basalt.ArbitrarySized`. Emitting
+          -- `Plausible.Arbitrary` here while the body calls `Basalt.ArbitrarySized.arbitrarySized`
           -- leaves the parameter's generator unsatisfiable — and the error names the *body's* class, so
           -- it reads as a missing user instance rather than a mismatched binder.
           | .Generator => #[basaltUnconstrainedClass useBasalt .Generator, ``DecidableEq]

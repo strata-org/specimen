@@ -23,7 +23,7 @@ instance : ArbitrarySizedSuchThat (Nat × Nat) (fun (a, b) => Sums a b n) where
 
 -- The same producer for `specimen.emitBasalt`, which looks producers up through `BacktrackGenFor`.
 instance : BacktrackGenFor (Nat × Nat) (fun (a, b) => Sums a b n) where
-  gen _ := do
+  gen _ _ := do
     let a ← chooseNat 0 n
     pure (a, n - a)
 
