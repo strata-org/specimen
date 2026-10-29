@@ -20,12 +20,12 @@ inductive Split : Nat → Nat → Nat → Prop where
 deriving instance Arbitrary for Nat
 
 -- Multiple outputs: generate both a and b such that Split n a b holds (for a given n)
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun n => ∃ a b, Split n a b)
 
 -- Verify the instance was created for the product type
 #guard_msgs(drop info) in
 #check (inferInstance : ArbitrarySizedSuchThat (Nat × Nat) (fun (a, b) => Split 5 a b))
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (∃ a n b, Split n a b)

@@ -56,10 +56,10 @@ inductive MemNat : List Nat → Nat → Prop where
 | here  : ∀ n xs, MemNat (n :: xs) n
 | there : ∀ n m xs, n ≠ m → MemNat xs n → MemNat (m :: xs) n
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_checker (fun xs n => MemNat xs n)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun n => ∃ xs, MemNat xs n)
 
 /--
@@ -201,31 +201,31 @@ set_option specimen.autoDeriveDeps true
 set_option specimen.multiOutput true
 
 set_option specimen.scoreType "Scoring.DefaultScore" in
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual (fun lo hi => ∃ t, BST_Default lo hi t)
 
 set_option specimen.scoreType "Scoring.WorstLeafScore" in
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual (fun lo hi => ∃ t, BST_WorstLeaf lo hi t)
 
 set_option specimen.scoreType "Scoring.DensityScore" in
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual (fun lo hi => ∃ t, BST_Density lo hi t)
 
 set_option specimen.scoreType "Scoring.GradedUniformDensityScore" in
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual (fun lo hi => ∃ t, BST_Graded lo hi t)
 
 set_option specimen.scoreType "Scoring.BoundedGradedScore" in
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual (fun lo hi => ∃ t, BST_Bounded lo hi t)
 
 set_option specimen.scoreType "Scoring.InputAwareGradedScore" in
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual (fun lo hi => ∃ t, BST_InputAware lo hi t)
 
 set_option specimen.scoreType "Scoring.SourceQualityScore" in
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual (fun lo hi => ∃ t, BST_SourceQuality lo hi t)
 
 #guard_msgs(drop info) in

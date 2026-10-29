@@ -8,14 +8,14 @@ import SpecimenTest.CommonDefinitions.Permutation
 set_option specimen.autoDeriveDeps true
 set_option specimen.multiOutput true
 
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(warning, drop info) in
 derive_mutual enumerator
   (∃ l l', Permutation l' l)
 
 
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_enumerator (fun l' => ∃ (l : List Nat), Permutation l l')
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_enumerator (fun l' => ∃ (l : List Nat), Permutation l' l)

@@ -219,7 +219,7 @@ inductive HasTypeAU : List LMonoTy → LExprU → LMonoTy → Prop where
    (`derive_mutual` also explores synthesis-direction companions; the one for the
    `eq` rule has a fixed `bool` conclusion with nothing to synthesize, yielding a
    harmless "no output types" warning that we drop.) -/
-#guard_msgs(drop info, drop warning) in
+#guard_msgs(warning, drop info) in
 derive_mutual (fun Δ τ => ∃ e : LExprU, HasTypeAU Δ e τ)
 
 /-! ## Pretty-printing -/

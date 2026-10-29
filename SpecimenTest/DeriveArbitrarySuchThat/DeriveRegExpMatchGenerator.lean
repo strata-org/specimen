@@ -65,12 +65,12 @@ def r0 : RegExp :=
 set_option specimen.autoDeriveDeps true
 set_option specimen.multiOutput true
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual
   (fun re => ∃ (s : List Nat), ExpMatch s re)
 
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun re => ∃ (s : List Nat), ExpMatch s re)
 
 -- To sample from this generator and print out 10 successful examples using the `Repr`

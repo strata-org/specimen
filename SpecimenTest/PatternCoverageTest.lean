@@ -474,7 +474,7 @@ deriving instance DecidableEq for MyTy
 deriving instance Basalt.ArbitrarySized for MyTy
 set_option specimen.autoDeriveDeps true
 set_option specimen.multiOutput true
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual
   (fun a c => ∃ b, MyTyping a b c)
 

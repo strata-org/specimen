@@ -23,7 +23,7 @@ inductive Between : Nat → Nat → Nat → Prop where
   | here : ∀ lo hi, lo ≤ hi → Between lo hi lo
   | there : ∀ lo hi n, Between (lo + 1) hi n → Between lo hi n
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun lo hi => ∃ n, Between lo hi n)
 
 inductive Small : Nat → Prop where

@@ -116,7 +116,7 @@ set_option linter.unusedSimpArgs false
 -- whole library is built under `specimen.emitBasalt`.
 namespace StlcCompleteness
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual generator (fun Γ τ => ∃ e, typing Γ e τ)
 
 /-! ## The measures

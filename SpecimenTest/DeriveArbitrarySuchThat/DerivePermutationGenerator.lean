@@ -8,12 +8,12 @@ import Specimen.Basalt
 set_option specimen.autoDeriveDeps true
 set_option specimen.multiOutput true
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_mutual
   (∃ l l', Permutation l' l)
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun l' => ∃ (l : List Nat), Permutation l l')
 
-#guard_msgs(drop info) in
+#guard_msgs(warning, drop info) in
 derive_generator (fun l' => ∃ (l : List Nat), Permutation l' l)
