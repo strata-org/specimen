@@ -2347,7 +2347,12 @@ def compileSpecComponents (components : List (List SpecKey))
             compiledCodeMap := compiledCodeMap.insert key (defStr, instStr)
         catch e =>
           logWarning m!"Failed to compile {key.inductiveName}{key.outputIndices}{repr key.deriveSort}: {e.toMessageData}"
-      | _ => logWarning m!"No schedule found for {key.inductiveName}{key.outputIndices}"
+      | _ =>
+        -- A non-inductive head (`LE.le`, `Not`, …) never has a schedule: the emitted code calls its
+        -- `DecOpt` instance, which the existence check cannot always see with the arguments left open,
+        -- and whose absence the call site reports itself.
+        if ← isInductive key.inductiveName then
+          logWarning m!"No schedule found for {key.inductiveName}{key.outputIndices}"
     compiledComponents := compiledComponents.push (compMeta, defCmds, instCmds)
   if reportTimers then
     logInfo m!"⏱ codegen+pp split (ms): codegen {codegenNs / 1000000}, pp {ppNs / 1000000}{if buildCodeMap then "" else " (pp skipped: richOutput off)"}"
@@ -2529,18 +2534,14 @@ def elabDeriveMutual : CommandElab := fun stx => do
                     | true, _ => Name.mkStr2 "Basalt" "ArbitrarySized"
                     | false, .Generator => ``Plausible.Arbitrary
                     | false, .Enumerator => ``Enum
+                  -- The type is checked as written, arguments included: with its arguments left as
+                  -- metavariables, a parametrized type's instance (`Enum (List α)`, which needs `Enum α`)
+                  -- cannot resolve, and the check reported instances that exist. If the type does not
+                  -- elaborate here, the emitted code reports a missing instance itself.
                   let instExists ← liftTermElabM <| Meta.withNewMCtxDepth do
                     try
-                      let depInfo ← getConstInfoInduct indName
-                      let indLevels ← depInfo.levelParams.mapM (fun _ => do
-                        let lv ← Meta.mkFreshLevelMVar; pure (.succ lv))
-                      let depArgTypes ← getComponentsOfArrowType depInfo.type
-                      let depArgTypes := depArgTypes.pop
-                      let mut ty := Lean.mkConst indName indLevels
-                      for _ in [:depArgTypes.size] do
-                        let argTy := (← inferType ty).bindingDomain!
-                        let mvar ← Meta.mkFreshExprMVar argTy
-                        ty := .app ty mvar
+                      let tyStx ← constructorExprToTSyntaxTerm (.TyCtor indName args)
+                      let ty ← Term.withoutErrToSorry (Term.elabType tyStx)
                       let instTy ← mkAppM tcName #[ty]
                       return (← Meta.synthInstance? instTy).isSome
                     catch _ => pure true
