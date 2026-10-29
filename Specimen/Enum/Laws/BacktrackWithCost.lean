@@ -396,8 +396,9 @@ theorem backtrack {gs' : List (Nat × (Unit → ExceptT ε (CostGraded Finite) �
 @[gen_rule]
 theorem pick {gs' : List (Nat × (Unit → ExceptT ε (CostGraded Finite) α))}
     {gs : List (Nat × (Unit → ExceptT ε (OptionT SPMF.Cost) α))}
-    (hs : GenRel.Weighted (@CostEnumeratesWith ε _) gs' gs) :
-    CostEnumeratesWith (Pick.pick gs') (Pick.pick gs) :=
+    (hs : GenRel.Weighted (@CostEnumeratesWith ε _) gs' gs)
+    {h' : 0 < Backtrack.sumWeights gs'} {h : 0 < Backtrack.sumWeights gs} :
+    CostEnumeratesWith (Pick.pick gs' h') (Pick.pick gs h) :=
   union hs 1 fun _ _ => Nat.one_pos
 
 end CostEnumeratesWith

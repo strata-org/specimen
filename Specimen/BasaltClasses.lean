@@ -1,4 +1,4 @@
-import Specimen.Enum.Backtrack
+import Specimen.Enum.Pick
 import Basalt.Combinators
 
 /-!
@@ -58,11 +58,13 @@ abbrev inconclusive [FailWith Exhaustion G] : G α := FailWith.failWith Exhausti
 
 end Specimen
 
-/-- A generator for `α` whose successes satisfy `P`, taking a fuel; the Basalt counterpart of
-`ArbitrarySizedSuchThat`. -/
+/-- A generator for `α` whose successes satisfy `P`; the Basalt counterpart of
+`ArbitrarySizedSuchThat`. It takes two sizes: the search's, which bounds the structure and is split
+among recursive calls, and the leaf size, which bounds every unconstrained value and is passed
+unchanged, as Plausible's ambient size is. -/
 class BacktrackGenFor (α : Type) (P : α → Prop) where
   gen : ∀ {G : Type → Type} [Gen G] [Specimen.Fail G] [Specimen.FailWith Specimen.Exhaustion G]
-    [Specimen.Backtrack G] [Specimen.MonoBacktrack G], Nat → G α
+    [Specimen.Backtrack G] [Specimen.MonoBacktrack G] [Specimen.Pick G], (size leafSize : Nat) → G α
 
 namespace Basalt
 
@@ -73,13 +75,17 @@ any file that opens `Plausible`. -/
 class Arbitrary (α : Type) where
   arbitrary : ∀ {G : Type → Type} [Gen G], G α
 
-/-- An unconstrained generator for `α` whose fuel bounds its recursion depth. -/
-class ArbitraryFueled (α : Type) where
-  arbitraryFueled : ∀ {G : Type → Type} [Gen G], Nat → G α
+/-- An unconstrained generator for `α` bounded by a size: finitely many values at each size, so the
+same term is a generator when sampled and every value up to the size, each once, at an enumeration.
+Derived generators and enumerators both draw unconstrained values through it. `Pick` is there for a
+weighted instance: at an enumeration it lists each branch once, where `frequency` repeats it per unit
+of weight. -/
+class ArbitrarySized (α : Type) where
+  arbitrarySized : ∀ {G : Type → Type} [Gen G] [Specimen.Pick G], Nat → G α
 
 /-- An unfueled generator ignores the fuel. Low priority, so an instance that uses it wins. -/
-instance (priority := low) [Arbitrary α] : ArbitraryFueled α where
-  arbitraryFueled _ := Arbitrary.arbitrary
+instance (priority := low) [Arbitrary α] : ArbitrarySized α where
+  arbitrarySized _ := Arbitrary.arbitrary
 
 open RandomChoice
 
@@ -140,37 +146,56 @@ instance [Arbitrary α] : Arbitrary (List α) where
 instance : Arbitrary String where
   arbitrary := do pure (String.ofList (← Arbitrary.arbitrary (α := List Char)))
 
-/-! ## Fueled instances for compound types
+/-! ## Sized instances
 
-Each exists because the `Arbitrary` instance for the compound type needs `Arbitrary` components, and a
-type that only has `ArbitraryFueled` would otherwise have no generator for, say, its lists. Fuel passes
-to each component unchanged: components are siblings, not nested. -/
+Bounded by the size, as Plausible's are by its ambient size: `Nat` is uniform on `0..n`, a list's length
+uniform on `0..n` with each element at size `n`. A component of a compound type gets the size
+unchanged: components are siblings, not nested. -/
 
-/-- A list whose length is bounded by the fuel. Nil and cons are weighted `1 : n+1`, so the expected
-length grows with the fuel; a fair coin would give mean length 1 at every fuel. -/
-protected def List.arbitraryFueledGen [Gen G] [ArbitraryFueled α] : Nat → G (List α)
-  | 0 => pure []
-  | n + 1 =>
-    frequency [(1, fun () => pure []), (n + 1, fun () => do
-      let x ← ArbitraryFueled.arbitraryFueled (α := α) (n + 1)
-      let xs ← List.arbitraryFueledGen n
-      pure (x :: xs))] (by simp; omega)
+instance : ArbitrarySized Nat := ⟨fun n => chooseNat 0 n⟩
 
-instance [ArbitraryFueled α] : ArbitraryFueled (List α) where
-  arbitraryFueled := List.arbitraryFueledGen
+instance : ArbitrarySized Bool := ⟨fun _ => do pure ((← chooseNat 0 1) == 0)⟩
 
-instance [ArbitraryFueled α] [ArbitraryFueled β] : ArbitraryFueled (α × β) where
-  arbitraryFueled n := do
-    let a ← ArbitraryFueled.arbitraryFueled (α := α) n
-    let b ← ArbitraryFueled.arbitraryFueled (α := β) n
+instance : ArbitrarySized Unit := ⟨fun _ => pure ()⟩
+
+instance : ArbitrarySized (Fin (n + 1)) := ⟨fun _ => do
+  let m ← choose 0 n (Nat.zero_le n)
+  pure ⟨m.down.val, Nat.lt_succ_of_le m.down.property.2⟩⟩
+
+/-- `-n` to `n`. -/
+instance : ArbitrarySized Int := ⟨fun n => do pure ((← chooseNat 0 (2 * n) : Nat) - (n : Int))⟩
+
+/-- Printable ASCII, `' '` through `'~'`, at every size. -/
+instance : ArbitrarySized Char := ⟨fun _ => do pure (Char.ofNat (← chooseNat 32 126))⟩
+
+instance [ArbitrarySized α] : ArbitrarySized (Option α) where
+  arbitrarySized n := oneOf [fun () => pure none, fun () => some <$> ArbitrarySized.arbitrarySized n]
+
+instance [ArbitrarySized α] [ArbitrarySized β] : ArbitrarySized (α × β) where
+  arbitrarySized n := do
+    let a ← ArbitrarySized.arbitrarySized n
+    let b ← ArbitrarySized.arbitrarySized n
     pure (a, b)
 
-instance [ArbitraryFueled α] : ArbitraryFueled (Option α) where
-  arbitraryFueled n :=
-    oneOf [fun () => pure none, fun () => some <$> ArbitraryFueled.arbitraryFueled (α := α) n]
+instance [ArbitrarySized α] [ArbitrarySized β] : ArbitrarySized (α ⊕ β) where
+  arbitrarySized n := oneOf [fun () => Sum.inl <$> ArbitrarySized.arbitrarySized n,
+    fun () => Sum.inr <$> ArbitrarySized.arbitrarySized n]
 
-instance [ArbitraryFueled α] [ArbitraryFueled β] : ArbitraryFueled (α ⊕ β) where
-  arbitraryFueled n := oneOf [fun () => Sum.inl <$> ArbitraryFueled.arbitraryFueled (α := α) n,
-    fun () => Sum.inr <$> ArbitraryFueled.arbitraryFueled (α := β) n]
+instance [ArbitrarySized α] : ArbitrarySized (List α) where
+  arbitrarySized n := do
+    let k ← chooseNat 0 n
+    vectorOf k (ArbitrarySized.arbitrarySized n)
+
+instance : ArbitrarySized String where
+  arbitrarySized n := do pure (String.ofList (← ArbitrarySized.arbitrarySized (α := List Char) n))
 
 end Basalt
+
+/-- An enumerator for `α` whose successes satisfy `P`, taking the two sizes `BacktrackGenFor` does:
+the Basalt counterpart of `EnumSizedSuchThat`. The same code as a generator's, over the same classes, written with the
+enumerator's schedule; which reading it runs at is the caller's (`Specimen.BasaltBridge` reads it at
+`ExceptT Exhaustion Finite`, everything up to the size). -/
+class EnumFor (α : Type) (P : α → Prop) where
+  enum : ∀ {G : Type → Type} [Gen G] [Specimen.Fail G] [Specimen.FailWith Specimen.Exhaustion G]
+    [Specimen.Backtrack G] [Specimen.MonoBacktrack G] [Specimen.Pick G], (size leafSize : Nat) → G α
+

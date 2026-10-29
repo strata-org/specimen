@@ -22,7 +22,7 @@ Everything below is complete — no `sorry`, no new axiom, every emitted branch 
 
 * `lookup_gen_complete` — the `lookup` producer.
 * `type_gen_complete` (imported from `StlcMeasures.lean`) — completeness of the *unconstrained*
-  derived `ArbitraryFueled type` generator, which the constrained generator's `TApp` branch
+  derived `ArbitrarySized type` generator, which the constrained generator's `TApp` branch
   depends on.
 * `stlc_gen_complete_worker` — the main theorem, by structural induction on the term.
 * `stlc_gen_complete` — the headline corollary, stated at the *emitted `BacktrackGenFor` instance*
@@ -56,7 +56,8 @@ Unconditional completeness is **false**: the emitted `size = 0` branch list cont
 non-recursive constructors (and input dispatch may filter further), so at `size = 0` nothing
 recursive is reachable, and the recursion halves `size` at `Add`/`App`.  A balanced `Add` tree of
 constructor depth `d` genuinely needs `size ≈ 2^d`.  Separately, `TVar` delegates to the `lookup`
-producer at `initSize`, so the reachable de Bruijn indices are capped by the size axis too.
+producer at `initSize`, and `TConst` draws its literal at `initSize`, so the reachable de Bruijn
+indices and literals are capped by the size axis too.
 
 ## The four budget axes
 
@@ -65,8 +66,8 @@ The emitted worker threads three numbers, and the emitted instance adds a consta
 * `size` — halved at `TAdd`/`TApp` (`Nat.div size' 2`), decremented at `TAbs` and at `lookup`'s
   `Later`.  Measured by `budget` (and by `varBound` for the delegated `lookup`).
 * `initSize` — threaded through **unchanged**; it is the size the delegated `lookup` producer gets
-  and the fuel of every unconstrained draw (`TConst`'s `Nat`, `TApp`'s argument type).  Measured by
-  `varBound` and `tyNeed`.
+  and the size of every unconstrained draw (`TConst`'s `Nat`, `TApp`'s argument type).  Measured by
+  `leafBound` and `tyNeed`.
 * `fuel` — decremented once per recursive step.  Measured by `tdepth`.
 * the hard-wired `10000` that the emitted `BacktrackGenFor` instance hands the `lookup` worker as
   *its* fuel.  Measured by `varBound` again — and this is not redundant with the `initSize`
@@ -81,7 +82,7 @@ hypothesis.
 ## The type budget needs the term's *types*, not just the term
 
 The deriver's schedule for `TApp` **draws** the argument type `τ1` from the unconstrained
-`ArbitraryFueled type` generator; there is no auxiliary pair mode synthesising `τ1` by a second
+`ArbitrarySized type` generator; there is no auxiliary pair mode synthesising `τ1` by a second
 `typing` mode.  Completeness of that draw needs `typeDepth τ1 ≤ initSize`, and `τ1` is *not* a subterm of
 `App e1 e2` — it is the type the derivation assigns to `e2`.  Since `typing` is syntax-directed and
 deterministic, that type is computable: `outTy Γ e` recovers it, `typing_outTy` proves the recovery
@@ -120,7 +121,8 @@ derive_mutual generator (fun Γ τ => ∃ e, typing Γ e τ)
 
 /-! ## The measures
 
-`budget` (size), `tdepth` (fuel), `varBound` (lookup's `initSize`) and `typeDepth`/`outTy`/`tyNeed`
+`budget` (size), `tdepth` (fuel), `leafBound` (lookup's and the literals' `initSize`), `varBound`
+(lookup's fuel) and `typeDepth`/`outTy`/`tyNeed`
 (the unconstrained type draws) are imported from `StlcMeasures.lean`, together with the closed form
 `sizeMeasure` and `budget_lt_sizeMeasure` — this file and `TypingBridge.lean` prove completeness by
 different routes over the same budgets, which is the cross-check that the budgets are right. -/
@@ -192,7 +194,7 @@ theorem lookup_gen_complete :
 at every sufficient budget, the worker reaches `e`. -/
 def Reach (e : term) : Prop :=
   ∀ (Γ : List type) (τ : type) (iS fuel sz : Nat), typing Γ e τ →
-    budget e ≤ sz → varBound e ≤ iS → varBound e ≤ 10000 →
+    budget e ≤ sz → leafBound e ≤ iS → varBound e ≤ 10000 →
     tyNeed Γ e ≤ iS → tdepth e < fuel →
     Produces (specimen_gen_typing_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness
       (G := SGen) fuel iS sz Γ τ) e
@@ -206,15 +208,15 @@ constructor (by inversion where the typing rule determines it, by `cases τ` whe
 theorem stlc_gen_complete_mutual (e : term) : Reach e := by
   induction e with
   | Const n =>
-    intro Γ τ iS fuel sz hty _ _ _ _ hf
+    intro Γ τ iS fuel sz hty _ hv _ _ hf
     cases hty
     case TConst =>
       cases fuel with
       | zero => exact absurd hf (Nat.not_lt_zero _)
       | succ fuel =>
-        have body : Produces (((Basalt.ArbitraryFueled.arbitraryFueled iS) >>= fun n => pure (term.Const n))
+        have body : Produces (((Basalt.ArbitrarySized.arbitrarySized iS) >>= fun n => pure (term.Const n))
             : SGen term) (term.Const n) :=
-          produces_bind_of (produces_arbitraryFueled_nat _ n)
+          produces_bind_of (produces_arbitrarySized_nat _ n (by simpa only [leafBound] using hv))
             (produces_pure_iff.mpr rfl)
         cases sz with
         | zero =>
@@ -227,7 +229,8 @@ theorem stlc_gen_complete_mutual (e : term) : Reach e := by
             (by dsimp only; decide) _ body
   | Var x =>
     intro Γ τ iS fuel sz hty _ hv hlf _ hf
-    simp only [varBound] at hv hlf
+    simp only [leafBound] at hv
+    simp only [varBound] at hlf
     cases hty
     case TVar =>
       rename_i hlk
@@ -235,7 +238,7 @@ theorem stlc_gen_complete_mutual (e : term) : Reach e := by
       | zero => exact absurd hf (Nat.not_lt_zero _)
       | succ fuel =>
         have body : Produces ((BacktrackGenFor.gen (α := Nat) (P := fun x => lookup Γ x τ)
-            (G := SGen) iS >>= fun x => pure (term.Var x)) : SGen term)
+            (G := SGen) iS iS >>= fun x => pure (term.Var x)) : SGen term)
             (term.Var x) := by
           refine produces_bind_of ?_ (produces_pure_iff.mpr rfl)
           simp only [BacktrackGenFor.gen]
@@ -274,7 +277,8 @@ theorem stlc_gen_complete_mutual (e : term) : Reach e := by
         | zero => exact absurd hs (by simp only [budget]; omega)
         | succ sz =>
           simp only [budget] at hs
-          simp only [varBound] at hv hlf
+          simp only [leafBound] at hv
+          simp only [varBound] at hlf
           simp only [tyNeed] at ht
           simp only [tdepth] at hf
           simp only [specimen_gen_typing_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness]
@@ -303,7 +307,7 @@ theorem stlc_gen_complete_mutual (e : term) : Reach e := by
             (List.Mem.tail _ (List.Mem.head _)) (by dsimp only; decide) _ ?_
           refine produces_bind_of
             (ih (t :: Γ) τ2 iS fuel sz hbody (need_abs_body hs)
-              (by simpa only [varBound] using hv) (by simpa only [varBound] using hlf)
+              (by simpa only [leafBound] using hv) (by simpa only [varBound] using hlf)
               (by simpa only [tyNeed] using ht) (by simp only [tdepth] at hf; omega))
             (produces_pure_iff.mpr rfl)
   | App a b iha ihb =>
@@ -318,14 +322,15 @@ theorem stlc_gen_complete_mutual (e : term) : Reach e := by
         | zero => exact absurd hs (by simp only [budget]; omega)
         | succ sz =>
           simp only [budget] at hs
-          simp only [varBound] at hv hlf
+          simp only [leafBound] at hv
+          simp only [varBound] at hlf
           simp only [tyNeed, typing_outTy h2, Option.elim] at ht
           simp only [tdepth] at hf
           -- The drawn argument type is exactly the one the derivation assigns to `b`.
-          have hdraw : Produces ((Basalt.ArbitraryFueled.arbitraryFueled iS) : SGen type) τ1 :=
+          have hdraw : Produces ((Basalt.ArbitrarySized.arbitrarySized iS) : SGen type) τ1 :=
             type_gen_produces τ1 iS (by omega)
           have hbody :
-              Produces (((Basalt.ArbitraryFueled.arbitraryFueled iS) >>= fun τ1 =>
+              Produces (((Basalt.ArbitrarySized.arbitrarySized iS) >>= fun τ1 =>
                 specimen_gen_typing_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness
                   (G := SGen) fuel iS (sz / 2) Γ (type.Fun τ1 τ) >>= fun e1 =>
                 specimen_gen_typing_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness
@@ -354,7 +359,7 @@ theorem stlc_gen_complete_mutual (e : term) : Reach e := by
 
 /-- Completeness, unpacked from the induction motive. -/
 theorem stlc_gen_complete_worker (Γ : List type) (e : term) (τ : type) (h : typing Γ e τ)
-    (iS fuel sz : Nat) (hs : budget e ≤ sz) (hv : varBound e ≤ iS) (hlf : varBound e ≤ 10000)
+    (iS fuel sz : Nat) (hs : budget e ≤ sz) (hv : leafBound e ≤ iS) (hlf : varBound e ≤ 10000)
     (ht : tyNeed Γ e ≤ iS) (hf : tdepth e < fuel) :
     Produces (specimen_gen_typing_1__SpecimenTest_Correctness_StlcCompleteness_StlcCompleteness
       (G := SGen) fuel iS sz Γ τ) e :=
@@ -362,26 +367,26 @@ theorem stlc_gen_complete_worker (Γ : List type) (e : term) (τ : type) (h : ty
 
 /-! ## At the emitted `BacktrackGenFor` instance
 
-The instance is `fun size => worker 10000 size size …`, i.e. it sets `initSize := size` and
-hard-wires `fuel := 10000`.  So the axes collapse onto `sz` plus two constant side conditions, both
-`by decide` for any concrete term. -/
+The instance is `fun size leafSize => worker 10000 leafSize size …`, i.e. it sets
+`initSize := leafSize` and hard-wires `fuel := 10000`.  So the axes are the size `sz`, the leaf size
+`iS`, and two constant side conditions, both `by decide` for any concrete term. -/
 
 /-- **Conditional completeness at the derived instance** — the headline statement. -/
-theorem stlc_gen_complete (Γ : List type) (e : term) (τ : type) (h : typing Γ e τ) (sz : Nat)
-    (hs : budget e ≤ sz) (hv : varBound e ≤ sz) (ht : tyNeed Γ e ≤ sz)
+theorem stlc_gen_complete (Γ : List type) (e : term) (τ : type) (h : typing Γ e τ) (sz iS : Nat)
+    (hs : budget e ≤ sz) (hv : leafBound e ≤ iS) (ht : tyNeed Γ e ≤ iS)
     (hlf : varBound e ≤ 10000) (hfd : tdepth e < 10000) :
-    Produces (BacktrackGenFor.gen (α := term) (P := fun e => typing Γ e τ) (G := SGen) sz) e := by
+    Produces (BacktrackGenFor.gen (α := term) (P := fun e => typing Γ e τ) (G := SGen) sz iS) e := by
   simp only [BacktrackGenFor.gen]
-  exact stlc_gen_complete_worker Γ e τ h sz 10000 sz hs hv hlf ht hfd
+  exact stlc_gen_complete_worker Γ e τ h iS 10000 sz hs hv hlf ht hfd
 
 /-- **Closed-form conditional completeness.**  Stated with the readable depth budget
 `2 ^ hdepth e * (ldepth e + 2) - 1 ≤ sz`, obtained from the exact statement for free. -/
-theorem stlc_gen_complete_depth (Γ : List type) (e : term) (τ : type) (h : typing Γ e τ) (sz : Nat)
-    (hs : sizeMeasure e ≤ sz + 1) (hv : varBound e ≤ sz) (ht : tyNeed Γ e ≤ sz)
+theorem stlc_gen_complete_depth (Γ : List type) (e : term) (τ : type) (h : typing Γ e τ)
+    (sz iS : Nat) (hs : sizeMeasure e ≤ sz + 1) (hv : leafBound e ≤ iS) (ht : tyNeed Γ e ≤ iS)
     (hlf : varBound e ≤ 10000) (hfd : tdepth e < 10000) :
-    Produces (BacktrackGenFor.gen (α := term) (P := fun e => typing Γ e τ) (G := SGen) sz) e := by
+    Produces (BacktrackGenFor.gen (α := term) (P := fun e => typing Γ e τ) (G := SGen) sz iS) e := by
   have hdom := budget_lt_sizeMeasure e
-  exact stlc_gen_complete Γ e τ h sz (by omega) hv ht hlf hfd
+  exact stlc_gen_complete Γ e τ h sz iS (by omega) hv ht hlf hfd
 
 /-! ## The measure on concrete terms
 
@@ -399,9 +404,10 @@ the two can be one apart.) -/
 #guard budget (term.Abs type.Nat (term.Add (term.Var 0) (term.Const 0))) = 3
 #guard budget
   (term.Abs type.Nat (term.Add (term.Add (term.Var 0) (term.Var 0)) (term.Var 0))) = 6
--- The `varBound` axis is independent of `budget`: `Var 1` needs `sz ≥ 2` for the *index*, even
--- though its size requirement is `0`.
-#guard varBound (term.Var 1) = 2
+-- The `leafBound` axis is independent of `budget`: `Var 1` needs `sz ≥ 2` for the *index*, and
+-- `Const 7` needs `sz ≥ 7` for the literal, though both have size requirement `0`.
+#guard leafBound (term.Var 1) = 2
+#guard leafBound (term.Const 7) = 7
 #guard tdepth (term.App (term.Abs type.Nat (term.Const 0)) (term.Const 0)) = 2
 -- The `TApp` type draw is budgeted from the argument's computed type.
 #guard tyNeed [] (term.App (term.Abs (type.Fun type.Nat type.Nat) (term.Const 0))
@@ -417,41 +423,41 @@ derived generator's support.  The sizes used are the `budget` values pinned just
 /-- `Abs Nat (Var 0) : Nat → Nat` at exactly `budget = 2`. -/
 example :
     Produces (BacktrackGenFor.gen (α := term)
-      (P := fun e => typing [] e (type.Fun type.Nat type.Nat)) (G := SGen) 2)
+      (P := fun e => typing [] e (type.Fun type.Nat type.Nat)) (G := SGen) 2 2)
       (term.Abs type.Nat (term.Var 0)) :=
   stlc_gen_complete [] _ _
     (typing.TAbs [] (term.Var 0) type.Nat type.Nat
       (typing.TVar [type.Nat] 0 type.Nat (lookup.Now type.Nat [])))
-    2 (by decide) (by decide) (by decide) (by decide) (by decide)
+    2 2 (by decide) (by decide) (by decide) (by decide) (by decide)
 
 /-- `Add (Const 0) (Const 0) : Nat` — a halving branch — at exactly `budget = 2`. -/
 example :
     Produces (BacktrackGenFor.gen (α := term) (P := fun e => typing [] e type.Nat)
-      (G := SGen) 2) (term.Add (term.Const 0) (term.Const 0)) :=
+      (G := SGen) 2 2) (term.Add (term.Const 0) (term.Const 0)) :=
   stlc_gen_complete [] _ _
     (typing.TAdd [] (term.Const 0) (term.Const 0) (typing.TConst [] 0) (typing.TConst [] 0))
-    2 (by decide) (by decide) (by decide) (by decide) (by decide)
+    2 2 (by decide) (by decide) (by decide) (by decide) (by decide)
 
 /-- `App (Abs Nat (Const 0)) (Const 0) : Nat` — the branch whose argument type is *drawn* — at
 exactly `budget = 5`. -/
 example :
     Produces (BacktrackGenFor.gen (α := term) (P := fun e => typing [] e type.Nat)
-      (G := SGen) 5) (term.App (term.Abs type.Nat (term.Const 0)) (term.Const 0)) :=
+      (G := SGen) 5 5) (term.App (term.Abs type.Nat (term.Const 0)) (term.Const 0)) :=
   stlc_gen_complete [] _ _
     (typing.TApp [] (term.Abs type.Nat (term.Const 0)) (term.Const 0) type.Nat type.Nat
       (typing.TConst [] 0)
       (typing.TAbs [] (term.Const 0) type.Nat type.Nat (typing.TConst [type.Nat] 0)))
-    5 (by decide) (by decide) (by decide) (by decide) (by decide)
+    5 5 (by decide) (by decide) (by decide) (by decide) (by decide)
 
-/-- The `varBound` axis in isolation: `budget (Var 1) = 0`, yet index `1` needs `sz ≥ 2`. -/
+/-- The `leafBound` axis in isolation: `budget (Var 1) = 0`, yet index `1` needs `sz ≥ 2`. -/
 example :
     Produces (BacktrackGenFor.gen (α := term)
       (P := fun e => typing [type.Nat, type.Fun type.Nat type.Nat] e
-        (type.Fun type.Nat type.Nat)) (G := SGen) 2) (term.Var 1) :=
+        (type.Fun type.Nat type.Nat)) (G := SGen) 2 2) (term.Var 1) :=
   stlc_gen_complete _ _ _
     (typing.TVar _ 1 _
       (lookup.Later _ type.Nat 0 _ (lookup.Now (type.Fun type.Nat type.Nat) [])))
-    2 (by decide) (by decide) (by decide) (by decide) (by decide)
+    2 2 (by decide) (by decide) (by decide) (by decide) (by decide)
 
 -- Pinned: only Lean's standard axioms. `Classical.choice` comes from `SPMF` and the `partial_fixpoint`
 -- unfolding.

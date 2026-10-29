@@ -122,9 +122,9 @@ def arbitrarySizedST (prop : MExp) (fuel : MExp) : MExp :=
 /-- `MExp` representation of `BacktrackGenFor.gen`, the Basalt-general counterpart of
     `arbitrarySizedST`.
 
-    Six more holes than `arbitrarySizedST` because the field is
+    Seven more holes than `arbitrarySizedST`, and the leaf size, because the field is
     `{α} → (P) → [inst] → {G} → [Gen G] → [Fail G] → [FailWith _ G] → [Backtrack G] →
-    [MonoBacktrack G] → Nat → G α`:
+    [MonoBacktrack G] → [Pick G] → (size leafSize : Nat) → G α`, the leaf size always `initSize`:
     under `@` every binder must be supplied, so `G` gets a hole solved by unification against the
     expected type, and its instances get holes solved by instance synthesis.
 
@@ -132,7 +132,13 @@ def arbitrarySizedST (prop : MExp) (fuel : MExp) : MExp :=
     Specimen's own modules to import Basalt. -/
 def backtrackGenForCall (prop : MExp) (fuel : MExp) : MExp :=
   .MApp .allExplicit (.MConst (Name.mkStr2 "BacktrackGenFor" "gen"))
-    [.MHole, prop, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, fuel]
+    [.MHole, prop, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, fuel, .MId `initSize]
+
+/-- `MExp` representation of `EnumFor.enum`, the enumerator counterpart of `backtrackGenForCall`, with the
+    same binders. -/
+def enumForCall (prop : MExp) (fuel : MExp) : MExp :=
+  .MApp .allExplicit (.MConst (Name.mkStr2 "EnumFor" "enum"))
+    [.MHole, prop, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, fuel, .MId `initSize]
 
 /-- `ok x` is an `MExp` representing `Except.ok x`. -/
 def ok (x : MExp) : MExp :=
@@ -322,29 +328,26 @@ def unconstrainedProducer (prodSort : ProducerSort) (ty : TSyntax `term)
   -- Plausible's `Arbitrary` (fixed at `Plausible.Gen`) cannot be used — it type-errors inside a
   -- Basalt-targeted body.
   --
-  -- `Basalt.ArbitraryFueled` rather than `Basalt.Arbitrary`, for two reasons. Basalt's `Gen` has no
-  -- ambient size parameter and hence no `sized`, so there is no `ArbitraryFueled → Arbitrary`
-  -- instance to fall back on and a derived datatype only ever has the fueled form. And an
-  -- unconstrained generator for a *recursive* datatype ought to be bounded anyway: `initSize` is the
-  -- right budget, being the allocation meant for independent dependencies.
+  -- `Basalt.ArbitrarySized` rather than `Basalt.Arbitrary`: Basalt's `Gen` has no ambient size, so the
+  -- size Plausible's leaves read from it is passed instead, as the leaf size `initSize`, and a derived
+  -- datatype only ever has the sized form. Generators and enumerators draw through the same class.
   let useBasalt := (Lean.Option.get (← getOptions) specimen.emitBasalt)
-    && prodSort matches .Generator
   let typeClassName :=
-    if useBasalt then Name.mkStr2 "Basalt" "ArbitraryFueled"
-    else match prodSort with
-    | .Enumerator => ``Enum
-    | .Generator => ``Arbitrary
+    match useBasalt, prodSort with
+    | true, _ => Name.mkStr2 "Basalt" "ArbitrarySized"
+    | false, .Enumerator => ``Enum
+    | false, .Generator => ``Arbitrary
   let typeClassInstance ← `( $(Lean.mkIdent typeClassName) $ty:term )
 
   -- Add the `typeClassInstance` for the unconstrained producer to the state,
   -- then obtain the `MExp` representing the unconstrained producer
   StateT.modifyGet $ fun instances =>
     let producerMExp :=
-      if useBasalt then
-        .MApp .allowImplicit (.MConst (Name.mkStr3 "Basalt" "ArbitraryFueled" "arbitraryFueled")) [fuel]
-      else match prodSort with
-      | .Enumerator => .MConst ``Enum.enum
-      | .Generator => .MConst ``Arbitrary.arbitrary
+      match useBasalt, prodSort with
+      | true, _ =>
+        .MApp .allowImplicit (.MConst (Name.mkStr3 "Basalt" "ArbitrarySized" "arbitrarySized")) [fuel]
+      | false, .Enumerator => .MConst ``Enum.enum
+      | false, .Generator => .MConst ``Arbitrary.arbitrary
     (producerMExp, instances.push typeClassInstance)
 
 mutual
@@ -386,7 +389,7 @@ mutual
       -- Under Basalt one is a refutation (`Fail`) and the other a labelled failure (`FailWith`).
       do
       let useBasalt := (Lean.Option.get (← getOptions) specimen.emitBasalt)
-        && deriveSort matches .Generator
+        && (deriveSort matches .Generator || deriveSort matches .Enumerator)
       if useBasalt then
         match mexp with
         | .MOutOfFuel => `($backtrackGenExhaustFn)
@@ -424,7 +427,7 @@ mutual
         -- match on its result
         let trueCase ← `(Term.matchAltExpr| | $(mkIdent ``Except.ok) $(mkIdent ``true) => $k1)
         let useBasalt := (Lean.Option.get (← getOptions) specimen.emitBasalt)
-          && deriveSort matches .Generator
+          && (deriveSort matches .Generator || deriveSort matches .Enumerator)
         -- `DecOpt` is three-valued, and the two failures mean different things: `ok false` is a
         -- definite "this constructor does not apply", `error` only says the checker ran out of budget.
         --
@@ -510,15 +513,16 @@ mutual
       let typedArgs := List.zip args argTyExprs
       let argsTuple ← mkTuple typedArgs
       let propBody ← delabMexpAsExpr prop
-      -- Under Basalt a constrained sub-producer is looked up through `BacktrackGenFor` rather than
-      -- `ArbitrarySizedSuchThat`, both for the recorded instance constraint and for the call.
+      -- Under Basalt a constrained sub-producer is looked up through `BacktrackGenFor` (`EnumFor`)
+      -- rather than `ArbitrarySizedSuchThat` (`EnumSizedSuchThat`), both for the recorded instance
+      -- constraint and for the call.
       let useBasalt := (Lean.Option.get (← getOptions) specimen.emitBasalt)
-        && prodSort matches .Generator
       let typeClassName :=
-        if useBasalt then Name.mkStr1 "BacktrackGenFor"
-        else match prodSort with
-        | .Enumerator => ``EnumSizedSuchThat
-        | .Generator => ``ArbitrarySizedSuchThat
+        match useBasalt, prodSort with
+        | true, .Generator => Name.mkStr1 "BacktrackGenFor"
+        | true, .Enumerator => Name.mkStr1 "EnumFor"
+        | false, .Enumerator => ``EnumSizedSuchThat
+        | false, .Generator => ``ArbitrarySizedSuchThat
       let typeClassInstance ← `($(mkIdent typeClassName) `_ (fun $argsTuple:term => $propBody))
 
       -- Add the `typeClassInstance` for the constrained producer to the state,
@@ -526,10 +530,11 @@ mutual
       StateT.modifyGet $ fun instances =>
         let producerWithArgs := MExp.MFun typedArgs prop
         let producerMExp :=
-          if useBasalt then backtrackGenForCall producerWithArgs fuel
-          else match prodSort with
-          | .Enumerator => enumSizedST producerWithArgs fuel
-          | .Generator => arbitrarySizedST producerWithArgs fuel
+          match useBasalt, prodSort with
+          | true, .Generator => backtrackGenForCall producerWithArgs fuel
+          | true, .Enumerator => enumForCall producerWithArgs fuel
+          | false, .Enumerator => enumSizedST producerWithArgs fuel
+          | false, .Generator => arbitrarySizedST producerWithArgs fuel
         (producerMExp, instances.push typeClassInstance)
 
 end
@@ -550,7 +555,8 @@ private def nameAndConstructorExprToTypedVar (v : Name × Option ConstructorExpr
       supplied to the generator/enumerator/checker we're deriving
 -/
 
-def scheduleStepToMExp (step : ScheduleStep) (defFuel : MExp) (k : MExp) (outputType : Expr) (fuelPrimeName : Name) (sizeExpr : MExp) (targetInductive : Name) : CompileScheduleM MExp :=
+def scheduleStepToMExp (step : ScheduleStep) (defFuel : MExp) (k : MExp) (outputType : Expr) (fuelPrimeName : Name) (sizeExpr : MExp) (targetInductive : Name)
+    (basaltWorkers : Bool := false) : CompileScheduleM MExp :=
   match step with
   | .Unconstrained v src prodSort => do
     let monadSort := prodSortToMonadSort prodSort
@@ -577,7 +583,14 @@ def scheduleStepToMExp (step : ScheduleStep) (defFuel : MExp) (k : MExp) (output
       let producer ← constrainedProducer ps varsTys (hypothesisExprToMExp hypExpr) fuel
       pure $ .MBind monadSort producer typedVars k
     | Source.Rec f args | Source.MutRec f args =>
-      pure $ .MBind monadSort (recCall f fuelPrimeName sizeExpr args) typedVars k
+      let call := recCall f fuelPrimeName sizeExpr args
+      -- A checker calling an enumerator of its own block reaches the worker directly rather than
+      -- through `EnumSizedSuchThat`; under Basalt the worker is polymorphic in its monad, so it is read
+      -- as the bridge reads it, not instantiated at the checker's.
+      let call := if basaltWorkers && ps matches .Enumerator then
+          .MApp .allowImplicit (.MConst (Name.mkStr2 "Specimen" "basaltEnumeration")) [call]
+        else call
+      pure $ .MBind monadSort call typedVars k
   | .Check src polarity =>
 
     let checker :=
@@ -627,7 +640,7 @@ def truncationToMExp (steps : List ScheduleStep) (defFuel : MExp) (recType : Exp
       for the function we are deriving (these correspond to `size` and `initSize`
       in the QuickChick code for the derived functions)
     - `targetInductive` is the inductive we're generating for (used to detect same-type deps) -/
-def scheduleToMExp (schedule : Schedule) (mfuel : MExp) (defFuel : MExp) (recType : Expr) (fuelPrimeName : Name := `fuel') (sizePrimeName : Name := `size') (targetInductive : Name := `_unknown) : CompileScheduleM MExp :=
+def scheduleToMExp (schedule : Schedule) (mfuel : MExp) (defFuel : MExp) (recType : Expr) (fuelPrimeName : Name := `fuel') (sizePrimeName : Name := `size') (targetInductive : Name := `_unknown) : CompileScheduleM MExp := do
   let (scheduleSteps, scheduleSort) := schedule
   -- Compute the size expression: split budget across all size-consuming calls
   -- (self-recursive, mutual, and non-recursive calls to the same inductive)
@@ -660,5 +673,12 @@ def scheduleToMExp (schedule : Schedule) (mfuel : MExp) (defFuel : MExp) (recTyp
   -- Fold over the `scheduleSteps` and convert each of them to a functional `MExp`
   -- Note that the fold composes the `MExp`, and we use `foldr` since
   -- we want the `epilogue` to be the base-case of the fold
-  List.foldrM (fun step acc => scheduleStepToMExp step defFuel acc recType fuelPrimeName sizeExpr targetInductive)
-    epilogue scheduleSteps
+  let basalt := Lean.Option.get (← getOptions) specimen.emitBasalt
+  let steps (basaltWorkers : Bool) := List.foldrM (fun step acc => scheduleStepToMExp step defFuel acc
+    recType fuelPrimeName sizeExpr targetInductive basaltWorkers) epilogue scheduleSteps
+  -- A checker stays on `DecOpt` and reads its premises' enumerators through Specimen's own classes,
+  -- which `Specimen.BasaltBridge` serves from the Basalt ones; only its calls into its own block's
+  -- enumerators, which are Basalt workers, need adapting.
+  match scheduleSort with
+  | .CheckerSchedule => withOptions (·.setBool `specimen.emitBasalt false) (steps basalt)
+  | _ => steps false

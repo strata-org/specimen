@@ -32,26 +32,26 @@ def budget : term → Nat
   | .Add a b => max 2 (2 * max (budget a) (budget b) + 1)
   | .App a b => max 2 (2 * max (budget a) (budget b) + 1)
 
-/-- Depth of a type, for budgeting the *derived* `ArbitraryFueled type` generator. -/
+/-- Depth of a type, for budgeting the *derived* `ArbitrarySized type` generator. -/
 def typeDepth : type → Nat
   | .Nat     => 0
   | .Fun a b => max (typeDepth a) (typeDepth b) + 1
 
 /-- **Completeness of a derived UNCONSTRAINED generator.** Needed because `TApp` draws its argument
-    type from `ArbitraryFueled type` instead of synthesising it, so the constrained generator's
+    type from `ArbitrarySized type` instead of synthesising it, so the constrained generator's
     completeness is only as good as this one's. Conditional on fuel, exactly like the constrained
     case: the fuel-`n` generator reaches types of depth at most `n`. -/
 theorem type_gen_complete : ∀ (τ : type) (n : Nat), typeDepth τ ≤ n →
-    τ ∈ (@type.basaltArbitraryFueled SPMF _ n).support := by
+    τ ∈ (@type.basaltArbitrarySized SPMF _ _ n).support := by
   intro τ
   induction τ with
   | Nat =>
     intro n _
     cases n with
     | zero =>
-      simp [type.basaltArbitraryFueled, SPMF.support_oneOf]
+      simp [type.basaltArbitrarySized, SPMF.support_oneOf]
     | succ n =>
-      simp [type.basaltArbitraryFueled, SPMF.support_oneOf]
+      simp [type.basaltArbitrarySized, SPMF.support_oneOf]
   | Fun a b iha ihb =>
     intro n hn
     -- `typeDepth (Fun a b) = max … + 1 ≤ n` rules out fuel 0, which is why the zero branch offering
@@ -61,7 +61,7 @@ theorem type_gen_complete : ∀ (τ : type) (n : Nat), typeDepth τ ≤ n →
     | succ n =>
       have ha : typeDepth a ≤ n := by simp only [typeDepth] at hn; omega
       have hb : typeDepth b ≤ n := by simp only [typeDepth] at hn; omega
-      simp only [type.basaltArbitraryFueled, SPMF.support_oneOf, Set.mem_ofPred_eq,
+      simp only [type.basaltArbitrarySized, SPMF.support_oneOf, Set.mem_ofPred_eq,
         List.mem_cons, List.not_mem_nil, or_false]
       refine ⟨_, .inr rfl, ?_⟩
       simp only [SPMF.mem_support_bind_iff, SPMF.mem_support_pure_iff]
@@ -70,7 +70,7 @@ theorem type_gen_complete : ∀ (τ : type) (n : Nat), typeDepth τ ≤ n →
 /-! ### The type-draw budget
 
 The schedule the deriver now picks for `TApp` *draws* the argument type from the unconstrained
-`ArbitraryFueled type` generator (there is no auxiliary pair mode), and that is the only place a type
+`ArbitrarySized type` generator (there is no auxiliary pair mode), and that is the only place a type
 is drawn — `TAbs` reads its annotation off the target type and pays nothing.  The drawn type is not a
 subterm of the term: it is the type the derivation assigns to the argument.  `typing` is
 syntax-directed and deterministic, so that type is computable from the term and its context — `outTy`
@@ -123,15 +123,15 @@ def tdepth : term → Nat
 
 /-- The unconstrained `type` draw at `SGen` reaches everything it reaches at `SPMF`. -/
 theorem type_gen_reachesAll : ∀ n,
-    Specimen.Correctness.ReachesAll (@type.basaltArbitraryFueled SPMF _ n)
-      (@type.basaltArbitraryFueled Specimen.Correctness.SGen _ n)
-  | 0 => by simp only [type.basaltArbitraryFueled]; walk
-  | n + 1 => by simp only [type.basaltArbitraryFueled]; walk [type_gen_reachesAll n]
+    Specimen.Correctness.ReachesAll (@type.basaltArbitrarySized SPMF _ _ n)
+      (@type.basaltArbitrarySized Specimen.Correctness.SGen _ _ n)
+  | 0 => by simp only [type.basaltArbitrarySized]; walk
+  | n + 1 => by simp only [type.basaltArbitrarySized]; walk [type_gen_reachesAll n]
 
 /-- `type_gen_complete`, at the monad the derived generators draw from. -/
 theorem type_gen_produces (τ : type) (n : Nat) (h : typeDepth τ ≤ n) :
     Specimen.Correctness.Produces
-      (Basalt.ArbitraryFueled.arbitraryFueled (α := type) (G := Specimen.Correctness.SGen) n) τ :=
+      (Basalt.ArbitrarySized.arbitrarySized (α := type) (G := Specimen.Correctness.SGen) n) τ :=
   type_gen_reachesAll n τ (type_gen_complete τ n h)
 
 /-- Largest de Bruijn index appearing, +1: bounds the `initSize` the lookup producer needs. -/
@@ -142,11 +142,14 @@ def varBound : term → Nat
   | .Add a b => max (varBound a) (varBound b)
   | .App a b => max (varBound a) (varBound b)
 
-/-- The `TConst` branch draws its literal from `Arbitrary Nat`, so completeness there is exactly that
-    generator's support lemma, which lives in `Specimen.Correctness.LeafSPMF`. -/
-theorem nat_arbitraryGen_support (n : Nat) :
-    n ∈ (Basalt.Nat.arbitraryGen (G := SPMF)).support :=
-  Specimen.Correctness.nat_arbitraryGen_sound_complete.complete n trivial
+/-- What `initSize` must cover: each de Bruijn index's `lookup` (as `varBound`) and each literal, which
+    the unconstrained `Nat` draw reaches only up to its size. -/
+def leafBound : term → Nat
+  | .Const n => n
+  | .Var x   => x + 1
+  | .Abs _ e => leafBound e
+  | .Add a b => max (leafBound a) (leafBound b)
+  | .App a b => max (leafBound a) (leafBound b)
 
 /-- The halving arithmetic, shared by the `Add` and `App` branches: the measure's doubling is
     exactly what survives the emitter's `Nat.div size' 2`, and the `max 2` floor is what forces

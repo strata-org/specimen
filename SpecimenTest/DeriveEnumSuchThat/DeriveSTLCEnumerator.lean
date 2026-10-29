@@ -2,6 +2,7 @@ import Specimen.DecOpt
 import Specimen.Enumerators
 import Specimen.DeriveConstrainedProducer
 import Specimen.EnumeratorCombinators
+import SpecimenTest.CommonDefinitions.STLCBasaltGenerators
 import Specimen.DeriveChecker
 import SpecimenTest.CommonDefinitions.STLCDefinitions
 import SpecimenTest.DeriveEnum.DeriveSTLCTermTypeEnumerators

@@ -7,7 +7,7 @@ import Specimen.Basalt
 The rest of the suite exercises the Basalt path only when the whole library is built with the flag on.
 This file sets it itself, so the default build covers the main emission shapes: a `DecOpt` premise, a
 recursive call, a delegated `BacktrackGenFor` producer, an unconstrained value of a datatype with a
-derived `Basalt.ArbitraryFueled`, and `derive_mutual` with and without inputs. Each is checked to
+derived `Basalt.ArbitrarySized`, and `derive_mutual` with and without inputs. Each is checked to
 register a `BacktrackGenFor` instance and to generate only values satisfying its relation, run at
 `Plausible.Gen` through the bridge from seeded streams.
 
@@ -50,7 +50,7 @@ inductive OneMod4 : Nat → Prop where
   | mk : n % 4 = 1 → OneMod4 n
 
 instance : BacktrackGenFor Nat (fun n => n % 4 = 1) where
-  gen size := do
+  gen size _ := do
     let k ← chooseNat 0 size
     pure (4 * k + 1)
 
@@ -64,13 +64,13 @@ derive_generator ∃ n, OneMod4 n
     (fun _ => ArbitrarySizedSuchThat.arbitrarySizedST (fun n => OneMod4 n) 10) 10 20261014
   return allSatisfy xs fun n => n % 4 == 1
 
-/-- A datatype drawn unconstrained, through its derived `Basalt.ArbitraryFueled`. -/
+/-- A datatype drawn unconstrained, through its derived `Basalt.ArbitrarySized`. -/
 inductive Tree where
   | leaf : Tree
   | node : Tree → Nat → Tree → Tree
   deriving Repr
 
-deriving instance Basalt.ArbitraryFueled for Tree
+deriving instance Basalt.ArbitrarySized for Tree
 
 inductive Elem : Nat → Tree → Prop where
   | here : Elem x (.node l x r)

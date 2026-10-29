@@ -44,7 +44,7 @@ instance (Γ : List Nat) (τ : Nat) :
 
 -- The same producer for `specimen.emitBasalt`, which looks producers up through `BacktrackGenFor`.
 instance (Γ : List Nat) (τ : Nat) : BacktrackGenFor Nat (fun i => Γ[i]? = some τ) where
-  gen _ := do
+  gen _ _ := do
     return ((List.range Γ.length).filter (fun i => Γ[i]? = some τ)).getLast?.getD 0
 
 inductive DHasTy : List Nat → DTm → Nat → Prop where

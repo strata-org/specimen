@@ -13,6 +13,13 @@ open Lean Elab Command Meta Term Parser Std
 open Idents Schedules
 
 
+/-- The class a derived producer's unconstrained values, and its type parameters, are drawn through:
+    under Basalt `Basalt.ArbitrarySized` for a generator and an enumerator alike, finite at a size;
+    otherwise Plausible's `Arbitrary` and Specimen's `Enum`. -/
+def basaltUnconstrainedClass (useBasalt : Bool) : ProducerSort → Name
+  | .Generator => if useBasalt then Name.mkStr2 "Basalt" "ArbitrarySized" else ``Plausible.Arbitrary
+  | .Enumerator => if useBasalt then Name.mkStr2 "Basalt" "ArbitrarySized" else ``Enum
+
 /-- Extracts the name of the induction relation and its arguments -/
 def parseInductiveApp (body : Term) :
   TermElabM (TSyntax `ident × TSyntaxArray `ident) := do
@@ -102,12 +109,13 @@ def mkConstrainedProducerTypeClassInstance
   (topLevelLocalCtx : LocalContext) : TermElabM (TSyntax `command) := do
     -- Produce fresh names for function parameters
     let freshSizeIdent := mkFreshAccessibleIdent topLevelLocalCtx `size
+    let freshLeafSizeIdent := mkFreshAccessibleIdent topLevelLocalCtx `leafSize
     let freshSize' := mkFreshAccessibleIdent topLevelLocalCtx `size'
     let freshFuel' := mkFreshAccessibleIdent topLevelLocalCtx `fuel'
 
     -- Whether to target Basalt's generator algebra (generators only; see `specimen.emitBasalt`).
     let emitBasalt := Lean.Option.get (← getOptions) specimen.emitBasalt
-    let useBasalt := emitBasalt && producerSort matches .Generator
+    let useBasalt := emitBasalt && (producerSort matches .Generator || producerSort matches .Enumerator)
     if useBasalt then requireBasaltImport
 
     -- The (backtracking) combinator to be invoked
@@ -227,11 +235,7 @@ def mkConstrainedProducerTypeClassInstance
       | .Generator => `($genTypeConstructor $targetTypeSyntax)
       | .Enumerator => `($exceptTTypeConstructor $genErrorType $enumTypeConstructor $targetTypeSyntax)
 
-    let producerUnconstrainedClass :=
-      if useBasalt then Name.mkStr2 "Basalt" "ArbitraryFueled"
-      else match producerSort with
-      | .Generator => ``Plausible.Arbitrary
-      | .Enumerator => ``Enum
+    let producerUnconstrainedClass := basaltUnconstrainedClass useBasalt producerSort
 
     let arbitraryTypeParamInstances ← mkTypeClassInstanceBinders typeParams #[producerUnconstrainedClass, ``DecidableEq]
 
@@ -249,11 +253,14 @@ def mkConstrainedProducerTypeClassInstance
       -- [MonoBacktrack G], Nat → G α`,
       -- so the field's own binders unify with the inner function's at the call below.
       let basaltBinders ← liftMacroM basaltInstBinders
-      `(instance $arbitraryTypeParamInstances:bracketedBinder* : $backtrackGenForTypeclass $targetTypeSyntax (fun $targetVarPattern => @$(mkIdent inductiveName) $args*) where
-          $unqualifiedBacktrackGenForFn:ident :=
+      let (basaltClass, basaltField) := match producerSort with
+        | .Generator => (backtrackGenForTypeclass, unqualifiedBacktrackGenForFn)
+        | .Enumerator => (enumForTypeclass, unqualifiedEnumForFn)
+      `(instance $arbitraryTypeParamInstances:bracketedBinder* : $basaltClass $targetTypeSyntax (fun $targetVarPattern => @$(mkIdent inductiveName) $args*) where
+          $basaltField:ident :=
             let rec $innerFunctionIdent:ident {$basaltGenVar : Type → Type} $basaltBinders:bracketedBinder* $innerParams* $arbitraryTypeParamInstances:bracketedBinder* : $optionTProducerType :=
               $matchExpr
-            fun $freshSizeIdent => $innerFunctionIdent $fuelLit $freshSizeIdent $freshSizeIdent $outerParams*)
+            fun $freshSizeIdent $freshLeafSizeIdent => $innerFunctionIdent $fuelLit $freshLeafSizeIdent $freshSizeIdent $outerParams*)
     else
     `(instance $arbitraryTypeParamInstances:bracketedBinder* : $producerTypeClass $targetTypeSyntax (fun $targetVarPattern => @$(mkIdent inductiveName) $args*) where
         $producerTypeClassFunction:ident :=
@@ -276,12 +283,13 @@ def mkConstrainedProducerMutualPieces
   TermElabM (TSyntax `command × TSyntax `command) := do
     -- Reuse the same computation as mkConstrainedProducerTypeClassInstance
     let freshSizeIdent := mkFreshAccessibleIdent topLevelLocalCtx `size
+    let freshLeafSizeIdent := mkFreshAccessibleIdent topLevelLocalCtx `leafSize
     let freshSize' := mkFreshAccessibleIdent topLevelLocalCtx `size'
     let freshFuel' := mkFreshAccessibleIdent topLevelLocalCtx `fuel'
 
     -- Whether to target Basalt's generator algebra (generators only; see `specimen.emitBasalt`).
     let emitBasalt := Lean.Option.get (← getOptions) specimen.emitBasalt
-    let useBasalt := emitBasalt && deriveSort matches .Generator
+    let useBasalt := emitBasalt && (deriveSort matches .Generator || deriveSort matches .Enumerator)
     if useBasalt then requireBasaltImport
 
     let combinatorFn :=
@@ -380,14 +388,10 @@ def mkConstrainedProducerMutualPieces
       | some tcs => tcs
       | none =>
         -- Under Basalt a type parameter needs a `G`-polymorphic unconstrained generator, and the
-        -- *fueled* class specifically: a derived datatype only ever gets `Basalt.ArbitraryFueled`, and
-        -- Basalt's blanket `Arbitrary → ArbitraryFueled` instance means the fueled binder still accepts a
+        -- *fueled* class specifically: a derived datatype only ever gets `Basalt.ArbitrarySized`, and
+        -- Basalt's blanket `Arbitrary → ArbitrarySized` instance means the fueled binder still accepts a
         -- hand-written unfueled instance, so it is the weaker requirement.
-        let producerUnconstrainedClass :=
-          if useBasalt then Name.mkStr2 "Basalt" "ArbitraryFueled"
-          else match producerSort with
-          | .Generator => ``Plausible.Arbitrary
-          | .Enumerator => ``Enum
+        let producerUnconstrainedClass := basaltUnconstrainedClass useBasalt producerSort
         #[producerUnconstrainedClass, ``DecidableEq]
     let defTypeParamInstances ← mkTypeClassInstanceBinders typeParams typeClasses
 
@@ -432,10 +436,10 @@ def mkConstrainedProducerMutualPieces
     let recurses := [baseGenerators, inductiveGenerators].any (mentionsIdent freshFuel'.getId ·)
     let defCmd ←
       if !recurses then `(command| def $defIdent : $defType := $lambdaBody)
-      -- `termination_by` binds every parameter after the colon, so the six holes skip `{G}` and its
-      -- five instances.
+      -- `termination_by` binds every parameter after the colon, so the seven holes skip `{G}` and its
+      -- six instances.
       else if useBasalt then `(command| def $defIdent : $defType := $lambdaBody
-        termination_by structural _ _ _ _ _ _ $fuelIdent:ident => $fuelIdent)
+        termination_by structural _ _ _ _ _ _ _ $fuelIdent:ident => $fuelIdent)
       else `(command| def $defIdent : $defType := $lambdaBody
         termination_by structural $fuelIdent:ident => $fuelIdent)
 
@@ -450,14 +454,12 @@ def mkConstrainedProducerMutualPieces
         | .Checker | .Theorem => #[``Enum, ``DecidableEq]
         | _ => match producerSort with
           -- Must agree with `defTypeParamInstances` above: under Basalt a type parameter needs a
-          -- `G`-polymorphic unconstrained generator, so the binder is `Basalt.ArbitraryFueled`. Emitting
-          -- `Plausible.Arbitrary` here while the body calls `Basalt.ArbitraryFueled.arbitraryFueled`
+          -- `G`-polymorphic unconstrained generator, so the binder is `Basalt.ArbitrarySized`. Emitting
+          -- `Plausible.Arbitrary` here while the body calls `Basalt.ArbitrarySized.arbitrarySized`
           -- leaves the parameter's generator unsatisfiable — and the error names the *body's* class, so
           -- it reads as a missing user instance rather than a mismatched binder.
-          | .Generator =>
-            if useBasalt then #[Name.mkStr2 "Basalt" "ArbitraryFueled", ``DecidableEq]
-            else #[``Plausible.Arbitrary, ``DecidableEq]
-          | .Enumerator => #[``Enum, ``DecidableEq]
+          | .Generator => #[basaltUnconstrainedClass useBasalt .Generator, ``DecidableEq]
+          | .Enumerator => #[basaltUnconstrainedClass useBasalt .Enumerator, ``DecidableEq]
     let instCmd ← match deriveSort with
       | .Checker | .Theorem => do
         let arbitraryTypeParamInstances ← mkTypeClassInstanceBinders typeParams instTypeClasses
@@ -466,16 +468,27 @@ def mkConstrainedProducerMutualPieces
             $unqualifiedDecOptFn:ident := fun $freshSizeIdent => $callExpr)
       | _ => do
         let producerTypeClass :=
-          if useBasalt then backtrackGenForTypeclass
-          else match producerSort with
-          | .Generator => arbitrarySizedSuchThatTypeclass
-          | .Enumerator => enumSizedSuchThatTypeclass
+          match useBasalt, producerSort with
+          | true, .Generator => backtrackGenForTypeclass
+          | true, .Enumerator => enumForTypeclass
+          | false, .Generator => arbitrarySizedSuchThatTypeclass
+          | false, .Enumerator => enumSizedSuchThatTypeclass
         let producerTypeClassFunction :=
-          if useBasalt then unqualifiedBacktrackGenForFn
-          else match producerSort with
-          | .Generator => unqualifiedArbitrarySizedSTFn
-          | .Enumerator => unqualifiedEnumSizedSTFn
+          match useBasalt, producerSort with
+          | true, .Generator => unqualifiedBacktrackGenForFn
+          | true, .Enumerator => unqualifiedEnumForFn
+          | false, .Generator => unqualifiedArbitrarySizedSTFn
+          | false, .Enumerator => unqualifiedEnumSizedSTFn
         let arbitraryTypeParamInstances ← mkTypeClassInstanceBinders typeParams instTypeClasses
+        if useBasalt then
+          -- The leaf size is the worker's `initSize`; the search's size is its `size`.
+          let leafCallArgs : TSyntaxArray `term := #[(⟨fuelLit⟩ : TSyntax `term),
+            (freshLeafSizeIdent : TSyntax `term), (freshSizeIdent : TSyntax `term)] ++
+            (TSyntaxArray.mk outerParams)
+          `(command|
+            instance $arbitraryTypeParamInstances:bracketedBinder* : $producerTypeClass $targetTypeSyntax (fun $targetVarPattern => @$(mkIdent inductiveName) $args*) where
+              $producerTypeClassFunction:ident := fun $freshSizeIdent $freshLeafSizeIdent => $defIdent $leafCallArgs*)
+        else
         `(command|
           instance $arbitraryTypeParamInstances:bracketedBinder* : $producerTypeClass $targetTypeSyntax (fun $targetVarPattern => @$(mkIdent inductiveName) $args*) where
             $producerTypeClassFunction:ident := fun $freshSizeIdent => $callExpr)

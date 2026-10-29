@@ -23,7 +23,7 @@ inductive NotIn {α : Type} : α → List α → Prop where
 
 -- Pinned to the Plausible emission path. The `inferInstance` checks below assert which classes the
 -- deriver demands, spelled `ArbitrarySizedSuchThat α` with a `[Plausible.Arbitrary α]` binder; under
--- `specimen.emitBasalt` they are `BacktrackGenFor α` and `[Basalt.ArbitraryFueled α]`, and the
+-- `specimen.emitBasalt` they are `BacktrackGenFor α` and `[Basalt.ArbitrarySized α]`, and the
 -- constraint propagation under test is the same.
 set_option specimen.emitBasalt false
 

@@ -801,8 +801,9 @@ theorem WeighsSome.backtrack {α : Type} {gs' : List (Nat × (Unit → WFinite �
 /-- Each branch weighted by its share of the weight has the distribution of the draw. -/
 @[gen_rule]
 theorem WeighsSome.pick {α : Type} {gs' : List (Nat × (Unit → WFinite α))}
-    {gs : List (Nat × (Unit → OptionT SPMF α))} (hs : GenRel.Weighted @WeighsSome gs' gs) :
-    WeighsSome (Pick.pick gs') (Pick.pick gs) :=
+    {gs : List (Nat × (Unit → OptionT SPMF α))} (hs : GenRel.Weighted @WeighsSome gs' gs)
+    {h' : 0 < Backtrack.sumWeights gs'} {h : 0 < Backtrack.sumWeights gs} :
+    WeighsSome (Pick.pick gs' h') (Pick.pick gs h) :=
   WFinite.weighsSome_runBranches hs 1 _ (WFinite.ofNNRat_pickReach _)
 
 end Specimen

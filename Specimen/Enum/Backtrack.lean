@@ -50,6 +50,11 @@ def sumWeights (gs : List (Nat × β)) : Nat := (gs.map Prod.fst).sum
     sumWeights (p :: rest) = p.1 + sumWeights rest := by
   simp [sumWeights]
 
+/-- Rewriting the branches and keeping the weights keeps the total. -/
+@[simp] theorem sumWeights_map_snd (gs : List (Nat × β)) (f : Nat × β → γ) :
+    sumWeights (gs.map fun p => (p.1, f p)) = sumWeights gs := by
+  simp [sumWeights, Function.comp_def]
+
 /-- The entry whose weight interval contains `n`, its weight, and the others; `none` past the total
 weight. -/
 def pickDrop : List (Nat × β) → Nat → Option (Nat × β × List (Nat × β))

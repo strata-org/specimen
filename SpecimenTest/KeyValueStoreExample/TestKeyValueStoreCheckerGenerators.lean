@@ -33,8 +33,8 @@ instance instKeyValueStoreArbitraryString : Arbitrary String where
 /-- The same nine-letter pool for the Basalt path. Basalt's own `Arbitrary String` draws random printable
 ASCII, so generated keys would almost never collide and every key-lookup premise would take its trivial
 branch. -/
-local instance instKeyValueStoreBasaltArbitraryString : Basalt.ArbitraryFueled String where
-  arbitraryFueled _ := do
+local instance instKeyValueStoreBasaltArbitraryString : Basalt.ArbitrarySized String where
+  arbitrarySized _ := do
     let i ← chooseNat 0 8
     pure (["A", "B", "C", "D", "E", "F", "G", "H", "I"].getD i "A")
 
