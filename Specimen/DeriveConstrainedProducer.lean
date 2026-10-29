@@ -2508,8 +2508,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
                   -- Under Basalt, the classes the emitted code draws unconstrained values through.
                   let basalt := Lean.Option.get (← getOptions) specimen.emitBasalt
                   let tcName := match basalt, ps with
-                    | true, .Generator => Name.mkStr2 "Basalt" "ArbitraryFueled"
-                    | true, .Enumerator => Name.mkStr2 "Specimen" "EnumFueled"
+                    | true, _ => Name.mkStr2 "Basalt" "ArbitraryFueled"
                     | false, .Generator => ``Plausible.Arbitrary
                     | false, .Enumerator => ``Enum
                   let instExists ← liftTermElabM <| Meta.withNewMCtxDepth do

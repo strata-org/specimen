@@ -42,7 +42,7 @@ def typeDepth : type → Nat
     completeness is only as good as this one's. Conditional on fuel, exactly like the constrained
     case: the fuel-`n` generator reaches types of depth at most `n`. -/
 theorem type_gen_complete : ∀ (τ : type) (n : Nat), typeDepth τ ≤ n →
-    τ ∈ (@type.basaltArbitraryFueled SPMF _ n).support := by
+    τ ∈ (@type.basaltArbitraryFueled SPMF _ _ n).support := by
   intro τ
   induction τ with
   | Nat =>
@@ -123,8 +123,8 @@ def tdepth : term → Nat
 
 /-- The unconstrained `type` draw at `SGen` reaches everything it reaches at `SPMF`. -/
 theorem type_gen_reachesAll : ∀ n,
-    Specimen.Correctness.ReachesAll (@type.basaltArbitraryFueled SPMF _ n)
-      (@type.basaltArbitraryFueled Specimen.Correctness.SGen _ n)
+    Specimen.Correctness.ReachesAll (@type.basaltArbitraryFueled SPMF _ _ n)
+      (@type.basaltArbitraryFueled Specimen.Correctness.SGen _ _ n)
   | 0 => by simp only [type.basaltArbitraryFueled]; walk
   | n + 1 => by simp only [type.basaltArbitraryFueled]; walk [type_gen_reachesAll n]
 
@@ -142,11 +142,14 @@ def varBound : term → Nat
   | .Add a b => max (varBound a) (varBound b)
   | .App a b => max (varBound a) (varBound b)
 
-/-- The `TConst` branch draws its literal from `Arbitrary Nat`, so completeness there is exactly that
-    generator's support lemma, which lives in `Specimen.Correctness.LeafSPMF`. -/
-theorem nat_arbitraryGen_support (n : Nat) :
-    n ∈ (Basalt.Nat.arbitraryGen (G := SPMF)).support :=
-  Specimen.Correctness.nat_arbitraryGen_sound_complete.complete n trivial
+/-- What `initSize` must cover: each de Bruijn index's `lookup` (as `varBound`) and each literal, which
+    the unconstrained `Nat` draw reaches only up to its size. -/
+def leafBound : term → Nat
+  | .Const n => n
+  | .Var x   => x + 1
+  | .Abs _ e => leafBound e
+  | .Add a b => max (leafBound a) (leafBound b)
+  | .App a b => max (leafBound a) (leafBound b)
 
 /-- The halving arithmetic, shared by the `Add` and `App` branches: the measure's doubling is
     exactly what survives the emitter's `Nat.div size' 2`, and the `max 2` floor is what forces

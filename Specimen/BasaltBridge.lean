@@ -64,7 +64,7 @@ instance (priority := low) [Basalt.ArbitraryFueled α] : Plausible.ArbitraryFuel
 
 /-- A Basalt-derived enumerator's run at `ExceptT Exhaustion Finite`, as the lazy list Specimen's
 enumerator consumers read: each success, and each label as `Gen.outOfFuelError`, which a checker reads
-as inconclusive. An undefined run (infinite, which a derived enumerator over `EnumFueled` leaves is not)
+as inconclusive. An undefined run (infinite, which a derived enumerator over `Basalt.ArbitraryFueled` leaves is not)
 is one inconclusive entry. -/
 def Specimen.toEnumeratorEntries (x : Specimen.Finite (Except Specimen.Exhaustion α)) :
     LazyList (Except GenError α) :=
@@ -82,11 +82,11 @@ instance (priority := low) {α : Type} {P : α → Prop} [EnumFor α P] : EnumSi
     Specimen.toEnumeratorEntries
       (EnumFor.enum (P := P) (G := ExceptT Specimen.Exhaustion Specimen.Finite) size).run
 
-/-- A Basalt unconstrained enumeration is one of Specimen's, read at `Finite`: the values up to the
-size. A derived checker draws an unconstrained value this way. Low priority, as above. -/
-instance (priority := low) [Specimen.EnumFueled α] : Enum α where
+/-- A Basalt unconstrained generator is one of Specimen's enumerators, read at `Finite`: the values up
+to the size. A derived checker draws an unconstrained value this way. Low priority, as above. -/
+instance (priority := low) [Basalt.ArbitraryFueled α] : Enum α where
   enum size := LazyList.fromList
-    ((Specimen.EnumFueled.enumFueled (G := Specimen.Finite) size).toList?.getD [])
+    ((Basalt.ArbitraryFueled.arbitraryFueled (G := Specimen.Finite) size).toList?.getD [])
 
 /-! ## Leaf instances for equality constraints
 
@@ -118,8 +118,8 @@ instance instBacktrackGenForEqPair {α : Type} [Basalt.Arbitrary α] :
     let a ← Basalt.Arbitrary.arbitrary
     pure (a, a)
 
-instance instEnumForEqPair {α : Type} [Specimen.EnumFueled α] :
+instance instEnumForEqPair {α : Type} [Basalt.ArbitraryFueled α] :
     EnumFor (α × α) (fun (l, r) => l = r) where
   enum n := do
-    let a ← Specimen.EnumFueled.enumFueled n
+    let a ← Basalt.ArbitraryFueled.arbitraryFueled n
     pure (a, a)

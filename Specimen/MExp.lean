@@ -132,13 +132,13 @@ def arbitrarySizedST (prop : MExp) (fuel : MExp) : MExp :=
     Specimen's own modules to import Basalt. -/
 def backtrackGenForCall (prop : MExp) (fuel : MExp) : MExp :=
   .MApp .allExplicit (.MConst (Name.mkStr2 "BacktrackGenFor" "gen"))
-    [.MHole, prop, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, fuel]
+    [.MHole, prop, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, fuel]
 
 /-- `MExp` representation of `EnumFor.enum`, the enumerator counterpart of `backtrackGenForCall`, with the
     same binders. -/
 def enumForCall (prop : MExp) (fuel : MExp) : MExp :=
   .MApp .allExplicit (.MConst (Name.mkStr2 "EnumFor" "enum"))
-    [.MHole, prop, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, fuel]
+    [.MHole, prop, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, fuel]
 
 /-- `ok x` is an `MExp` representing `Except.ok x`. -/
 def ok (x : MExp) : MExp :=
@@ -336,8 +336,7 @@ def unconstrainedProducer (prodSort : ProducerSort) (ty : TSyntax `term)
   let useBasalt := (Lean.Option.get (← getOptions) specimen.emitBasalt)
   let typeClassName :=
     match useBasalt, prodSort with
-    | true, .Generator => Name.mkStr2 "Basalt" "ArbitraryFueled"
-    | true, .Enumerator => Name.mkStr2 "Specimen" "EnumFueled"
+    | true, _ => Name.mkStr2 "Basalt" "ArbitraryFueled"
     | false, .Enumerator => ``Enum
     | false, .Generator => ``Arbitrary
   let typeClassInstance ← `( $(Lean.mkIdent typeClassName) $ty:term )
@@ -347,10 +346,8 @@ def unconstrainedProducer (prodSort : ProducerSort) (ty : TSyntax `term)
   StateT.modifyGet $ fun instances =>
     let producerMExp :=
       match useBasalt, prodSort with
-      | true, .Generator =>
+      | true, _ =>
         .MApp .allowImplicit (.MConst (Name.mkStr3 "Basalt" "ArbitraryFueled" "arbitraryFueled")) [fuel]
-      | true, .Enumerator =>
-        .MApp .allowImplicit (.MConst (Name.mkStr3 "Specimen" "EnumFueled" "enumFueled")) [fuel]
       | false, .Enumerator => .MConst ``Enum.enum
       | false, .Generator => .MConst ``Arbitrary.arbitrary
     (producerMExp, instances.push typeClassInstance)

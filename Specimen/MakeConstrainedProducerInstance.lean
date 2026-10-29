@@ -14,11 +14,11 @@ open Idents Schedules
 
 
 /-- The class a derived producer's unconstrained values, and its type parameters, are drawn through:
-    under Basalt `Basalt.ArbitraryFueled` for a generator and `Specimen.EnumFueled` for an enumerator,
-    each finite at a size where it has to be; otherwise Plausible's `Arbitrary` and Specimen's `Enum`. -/
+    under Basalt `Basalt.ArbitraryFueled` for a generator and an enumerator alike, finite at a size;
+    otherwise Plausible's `Arbitrary` and Specimen's `Enum`. -/
 def basaltUnconstrainedClass (useBasalt : Bool) : ProducerSort → Name
   | .Generator => if useBasalt then Name.mkStr2 "Basalt" "ArbitraryFueled" else ``Plausible.Arbitrary
-  | .Enumerator => if useBasalt then Name.mkStr2 "Specimen" "EnumFueled" else ``Enum
+  | .Enumerator => if useBasalt then Name.mkStr2 "Basalt" "ArbitraryFueled" else ``Enum
 
 /-- Extracts the name of the induction relation and its arguments -/
 def parseInductiveApp (body : Term) :
@@ -434,10 +434,10 @@ def mkConstrainedProducerMutualPieces
     let recurses := [baseGenerators, inductiveGenerators].any (mentionsIdent freshFuel'.getId ·)
     let defCmd ←
       if !recurses then `(command| def $defIdent : $defType := $lambdaBody)
-      -- `termination_by` binds every parameter after the colon, so the six holes skip `{G}` and its
-      -- five instances.
+      -- `termination_by` binds every parameter after the colon, so the seven holes skip `{G}` and its
+      -- six instances.
       else if useBasalt then `(command| def $defIdent : $defType := $lambdaBody
-        termination_by structural _ _ _ _ _ _ $fuelIdent:ident => $fuelIdent)
+        termination_by structural _ _ _ _ _ _ _ $fuelIdent:ident => $fuelIdent)
       else `(command| def $defIdent : $defType := $lambdaBody
         termination_by structural $fuelIdent:ident => $fuelIdent)
 

@@ -60,7 +60,7 @@ theorem guard_emitted_refute (iS : Nat) (hchain : ChainRefuteSound iS) :
   have branch : ∀ k : Nat,
       Refutes ((match @DecOpt.decOpt (Chain k) _ iS with
          | .ok true =>
-             @BacktrackGenFor.gen Nat (fun o => o = 0) _ SGen _ _ _ _ _ iS >>= fun o => pure o
+             @BacktrackGenFor.gen Nat (fun o => o = 0) _ SGen _ _ _ _ _ _ iS >>= fun o => pure o
          | .ok false => Specimen.refute
          | _ => Specimen.inconclusive) : SGen Nat) →
       ∀ o, ¬ Guard k o := by

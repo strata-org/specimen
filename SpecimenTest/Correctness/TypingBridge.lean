@@ -37,7 +37,7 @@ the bridge is through `genRelB`, not `genRelFam` (which keeps its generic theory
 * `typStep_sound` / `typing_emitted_sound` — soundness, with the external `lookup` producer's
   soundness as a hypothesis.
 * `typStep_complete` / `typing_emitted_complete` — completeness relative to the measures of
-  `StlcMeasures.lean`. The `initSize`-dependent conditions (`varBound`, `tyNeed`) cannot live in the
+  `StlcMeasures.lean`. The `initSize`-dependent conditions (`leafBound`, `tyNeed`) cannot live in the
   measure pair, which budgets fuel and size, so they go into the *specification* (`typSpecC`). The
   interpreter allows this because the soundness and completeness predicates are independent:
   soundness concludes only `typing`, completeness assumes the `initSize`-bounded strengthening.
@@ -80,7 +80,7 @@ noncomputable def typStep (iS : Nat) : SGenStep (List type × type) term :=
                 | _ => Specimen.refute)
             else none,
             some (3, fun (_ : Unit) =>
-              @BacktrackGenFor.gen _ (fun (x : Nat) => @lookup i.1 x i.2) _ SGen _ _ _ _ _ iS >>=
+              @BacktrackGenFor.gen _ (fun (x : Nat) => @lookup i.1 x i.2) _ SGen _ _ _ _ _ _ iS >>=
                 fun x => pure (term.Var x)),
             if (match i.2 with | type.Nat => true | _ => false) then
               some (1, fun (_ : Unit) =>
@@ -107,7 +107,7 @@ noncomputable def typStep (iS : Nat) : SGenStep (List type × type) term :=
                 | _ => Specimen.refute)
             else none,
             some (3, fun (_ : Unit) =>
-              @BacktrackGenFor.gen _ (fun (x : Nat) => @lookup i.1 x i.2) _ SGen _ _ _ _ _ iS >>=
+              @BacktrackGenFor.gen _ (fun (x : Nat) => @lookup i.1 x i.2) _ SGen _ _ _ _ _ _ iS >>=
                 fun x => pure (term.Var x)),
             if (match i.2 with | type.Nat => true | _ => false) then
               some (3, fun (_ : Unit) =>
@@ -172,7 +172,7 @@ theorem typStep_sound (iS : Nat) (hlk : LookupSound iS) : StepGenSoundB (typStep
     cases produces_pure_iff.mp he
     exact typing.TConst Γ n
   have tvar : ∀ τ,
-      Produces ((@BacktrackGenFor.gen _ (fun (x : Nat) => @lookup Γ x τ) _ SGen _ _ _ _ _ iS >>=
+      Produces ((@BacktrackGenFor.gen _ (fun (x : Nat) => @lookup Γ x τ) _ SGen _ _ _ _ _ _ iS >>=
         fun x => pure (term.Var x)) : SGen term) x → typing Γ x τ := by
     intro τ hqa
     obtain ⟨n, hn, he⟩ := produces_bind_iff.mp hqa
@@ -253,7 +253,7 @@ theorem typing_emitted_sound (iS : Nat) (hlk : LookupSound iS)
 /-- The strengthened specification completeness is relative to: the `initSize`-dependent bounds
 live here, because the measure pair only budgets fuel and size. -/
 def typSpecC (iS : Nat) : (List type × type) → term → Prop := fun i e =>
-  typing i.1 e i.2 ∧ varBound e ≤ iS ∧ varBound e ≤ 10000 ∧ tyNeed i.1 e ≤ iS
+  typing i.1 e i.2 ∧ leafBound e ≤ iS ∧ varBound e ≤ 10000 ∧ tyNeed i.1 e ≤ iS
 
 /-- Fuel measure: `tdepth`, one level per constructor. -/
 def typPhi : (List type × type) → term → Nat := fun _ e => tdepth e
@@ -278,7 +278,7 @@ theorem typStep_complete (iS : Nat) (hlkc : LookupComplete iS) :
     rename_i n
     have body : Produces (((Basalt.ArbitraryFueled.arbitraryFueled iS) >>= fun n => pure (term.Const n))
         : SGen term) (term.Const n) :=
-      produces_bind_of (produces_arbitraryFueled_nat _ n)
+      produces_bind_of (produces_arbitraryFueled_nat _ n (by simpa only [leafBound] using hv))
         (produces_pure_iff.mpr rfl)
     cases sz with
     | zero =>
@@ -291,8 +291,9 @@ theorem typStep_complete (iS : Nat) (hlkc : LookupComplete iS) :
         (by exact Nat.zero_lt_succ _) _ body
   | TVar =>
     rename_i x hlkd
-    simp only [varBound] at hv hlf
-    have body : Produces ((@BacktrackGenFor.gen _ (fun (x : Nat) => @lookup Γ x τ) _ SGen _ _ _ _ _ iS >>=
+    simp only [leafBound] at hv
+    simp only [varBound] at hlf
+    have body : Produces ((@BacktrackGenFor.gen _ (fun (x : Nat) => @lookup Γ x τ) _ SGen _ _ _ _ _ _ iS >>=
         fun x => pure (term.Var x)) : SGen term) (term.Var x) :=
       produces_bind_of (hlkc Γ τ x hlkd (by omega) (by omega)) (produces_pure_iff.mpr rfl)
     cases τ with
@@ -322,7 +323,8 @@ theorem typStep_complete (iS : Nat) (hlkc : LookupComplete iS) :
     | zero => exact absurd hsz (by simp only [typSigma, budget]; omega)
     | succ sz =>
       simp only [typSigma, budget] at hsz
-      simp only [varBound] at hv hlf
+      simp only [leafBound] at hv
+      simp only [varBound] at hlf
       simp only [tyNeed] at ht
       simp only [typStep]
       refine produces_backtrack_of_branch _ _
@@ -347,7 +349,7 @@ theorem typStep_complete (iS : Nat) (hlkc : LookupComplete iS) :
         (List.Mem.tail _ (List.Mem.head _)) (by exact Nat.zero_lt_succ _) _ ?_
       refine produces_bind_of
         (hrec (τ1 :: Γ, τ2) e0
-          ⟨hbody, by simpa only [varBound] using hv, by simpa only [varBound] using hlf,
+          ⟨hbody, by simpa only [leafBound] using hv, by simpa only [varBound] using hlf,
             by simpa only [tyNeed] using ht⟩
           (by simp only [typPhi, tdepth]; omega) sz
           (by simp only [typSigma]; omega)) ?_
@@ -358,7 +360,8 @@ theorem typStep_complete (iS : Nat) (hlkc : LookupComplete iS) :
     | zero => exact absurd hsz (by simp only [typSigma, budget]; omega)
     | succ sz =>
       simp only [typSigma, budget] at hsz
-      simp only [varBound] at hv hlf
+      simp only [leafBound] at hv
+      simp only [varBound] at hlf
       simp only [tyNeed, typing_outTy h2, Option.elim] at ht
       have hbody : Produces (((Basalt.ArbitraryFueled.arbitraryFueled iS) >>= fun τ1' =>
             prev (Nat.div sz 2) (Γ, type.Fun τ1' τ) >>= fun e1 =>
@@ -394,7 +397,7 @@ conditions are the measures of `StlcMeasures.lean`, and they match the hand-roll
 theorem typing_emitted_complete (iS : Nat) (hlkc : LookupComplete iS)
     (Γ : List type) (τ : type) (e : term) (h : typing Γ e τ)
     (fuel sz : Nat) (hf : tdepth e < fuel) (hs : budget e ≤ sz)
-    (hv : varBound e ≤ iS) (hlf : varBound e ≤ 10000) (ht : tyNeed Γ e ≤ iS) :
+    (hv : leafBound e ≤ iS) (hlf : varBound e ≤ 10000) (ht : tyNeed Γ e ≤ iS) :
     Produces (specimen_gen_typing_1__SpecimenTest_Correctness_TypingBridge_TypingBridge
       (G := SGen) fuel iS sz Γ τ) e := by
   rw [Produces, typ_bridge]
@@ -404,7 +407,7 @@ theorem typing_emitted_complete (iS : Nat) (hlkc : LookupComplete iS)
 theorem typing_emitted_complete_depth (iS : Nat) (hlkc : LookupComplete iS)
     (Γ : List type) (τ : type) (e : term) (h : typing Γ e τ)
     (fuel sz : Nat) (hf : tdepth e < fuel) (hs : sizeMeasure e ≤ sz + 1)
-    (hv : varBound e ≤ iS) (hlf : varBound e ≤ 10000) (ht : tyNeed Γ e ≤ iS) :
+    (hv : leafBound e ≤ iS) (hlf : varBound e ≤ 10000) (ht : tyNeed Γ e ≤ iS) :
     Produces (specimen_gen_typing_1__SpecimenTest_Correctness_TypingBridge_TypingBridge
       (G := SGen) fuel iS sz Γ τ) e := by
   have hdom := budget_lt_sizeMeasure e

@@ -114,6 +114,7 @@ def basaltFailWithClass : Ident := mkIdent $ Name.mkStr2 "Specimen" "FailWith"
 def basaltExhaustionType : Ident := mkIdent $ Name.mkStr2 "Specimen" "Exhaustion"
 def basaltBacktrackClass : Ident := mkIdent $ Name.mkStr2 "Specimen" "Backtrack"
 def basaltMonoBacktrackClass : Ident := mkIdent $ Name.mkStr2 "Specimen" "MonoBacktrack"
+def basaltPickClass : Ident := mkIdent $ Name.mkStr2 "Specimen" "Pick"
 
 def basaltInstBinders : MacroM (Array (TSyntax ``Lean.Parser.Term.bracketedBinder)) := do
   let g := basaltGenVar
@@ -121,21 +122,24 @@ def basaltInstBinders : MacroM (Array (TSyntax ``Lean.Parser.Term.bracketedBinde
     ← `(Lean.Parser.Term.bracketedBinderF| [$basaltFailClass $g]),
     ← `(Lean.Parser.Term.bracketedBinderF| [$basaltFailWithClass $basaltExhaustionType $g]),
     ← `(Lean.Parser.Term.bracketedBinderF| [$basaltBacktrackClass $g]),
-    ← `(Lean.Parser.Term.bracketedBinderF| [$basaltMonoBacktrackClass $g])]
+    ← `(Lean.Parser.Term.bracketedBinderF| [$basaltMonoBacktrackClass $g]),
+    ← `(Lean.Parser.Term.bracketedBinderF| [$basaltPickClass $g])]
 
-/-- `fun {G} [Gen G] [Fail G] [FailWith Specimen.Exhaustion G] [Specimen.Backtrack G] [Specimen.MonoBacktrack G] => body`. -/
+/-- `fun {G} [Gen G] [Fail G] [FailWith Specimen.Exhaustion G] [Specimen.Backtrack G] [Specimen.MonoBacktrack G]
+    [Specimen.Pick G] => body`. -/
 def basaltFun (body : TSyntax `term) : MacroM (TSyntax `term) := do
   let g := basaltGenVar
   `(fun {$g : Type → Type} [$basaltGenClass $g] [$basaltFailClass $g]
       [$basaltFailWithClass $basaltExhaustionType $g] [$basaltBacktrackClass $g]
-      [$basaltMonoBacktrackClass $g] => $body)
+      [$basaltMonoBacktrackClass $g] [$basaltPickClass $g] => $body)
 
-/-- `∀ {G} [Gen G] [Fail G] [FailWith Specimen.Exhaustion G] [Specimen.Backtrack G] [Specimen.MonoBacktrack G], ty`. -/
+/-- `∀ {G} [Gen G] [Fail G] [FailWith Specimen.Exhaustion G] [Specimen.Backtrack G] [Specimen.MonoBacktrack G]
+    [Specimen.Pick G], ty`. -/
 def basaltForall (ty : TSyntax `term) : MacroM (TSyntax `term) := do
   let g := basaltGenVar
   `(∀ {$g : Type → Type} [$basaltGenClass $g] [$basaltFailClass $g]
       [$basaltFailWithClass $basaltExhaustionType $g] [$basaltBacktrackClass $g]
-      [$basaltMonoBacktrackClass $g], $ty)
+      [$basaltMonoBacktrackClass $g] [$basaltPickClass $g], $ty)
 
 /-- `BacktrackGenFor α P`, the Basalt counterpart of `ArbitrarySizedSuchThat`. Its `gen` field is
     itself quantified over `{G}` and `basaltInstBinders`. -/

@@ -89,7 +89,7 @@ emitter, the scorer's schedule, the dispatch guards or the weights, and they sto
 - **`DerivedCheckerSoundness.lean`** — the checker `derive_checker` emits for `Sorted`, proved sound
   through the generic two-counter theory.
 - **`StlcMeasures.lean`** — the budget measures for the derived STLC generators (`budget`, `tdepth`,
-  `varBound`, and the type-draw budget `tyNeed` through `outTy`), plus completeness of the derived
+  `varBound`, `leafBound`, and the type-draw budget `tyNeed` through `outTy`), plus completeness of the derived
   unconstrained `type` generator.
 - **`StlcGeneratorSoundness.lean`** — the derived well-typed-term generator is sound at `SPMF`, by
   direct decomposition of the emitted pools; with non-vacuity witnesses.
@@ -114,8 +114,9 @@ Unconditional completeness is false by design: the emitted `size = 0` pool withh
 constructor, and the schedule halves `size` at branching constructors — a balanced binary tree of
 constructor depth `d` genuinely needs `size ≈ 2^d`. Completeness statements therefore carry a measure
 pair `(φ, σ)` — fuel and size — plus, where the emitted code delegates at `initSize`, bounds like
-`varBound` (de Bruijn indices the `lookup` producer must reach) and `tyNeed` (depth of the types the
-`TApp` branch draws unconstrained). The emitted `BacktrackGenFor` instance hard-wires the delegated
+`leafBound` (de Bruijn indices the `lookup` producer must reach, and literals the unconstrained `Nat`
+draw reaches only up to its size) and `tyNeed` (depth of the types the `TApp` branch draws
+unconstrained). The emitted `BacktrackGenFor` instance hard-wires the delegated
 fuel to `10000`, which is a real (if remote) incompleteness ceiling, and it is visible in the
 side conditions.
 

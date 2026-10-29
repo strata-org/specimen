@@ -81,9 +81,12 @@ theorem nat_arbitraryGen_reachesAll :
     ReachesAll (Basalt.Nat.arbitraryGen (G := SPMF)) (Basalt.Nat.arbitraryGen (G := SGen)) := by
   walk fixpoint
 
-/-- An unconstrained `Nat` draw produces every number, at any fuel. -/
-theorem produces_arbitraryFueled_nat (fuel n : Nat) :
-    Produces (Basalt.ArbitraryFueled.arbitraryFueled (α := Nat) (G := SGen) fuel) n :=
-  nat_arbitraryGen_reachesAll n (nat_arbitraryGen_sound_complete.complete n trivial)
+/-- An unconstrained `Nat` draw produces every number up to its size. -/
+theorem produces_arbitraryFueled_nat (fuel n : Nat) (h : n ≤ fuel) :
+    Produces (Basalt.ArbitraryFueled.arbitraryFueled (α := Nat) (G := SGen) fuel) n := by
+  have hr : ReachesAll (chooseNat 0 fuel : SPMF Nat) (chooseNat 0 fuel : SGen Nat) := by walk
+  apply hr
+  rw [SPMF.mem_support_iff_may]; walk
+  exact ⟨Nat.zero_le _, h⟩
 
 end Specimen.Correctness

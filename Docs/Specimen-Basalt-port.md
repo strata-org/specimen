@@ -75,13 +75,13 @@ inductive Specimen.Exhaustion where | fuel | truncated | inconclusive
 
 class BacktrackGenFor (α : Type) (P : α → Prop) where
   gen : ∀ {G : Type → Type} [Gen G] [Fail G] [FailWith Specimen.Exhaustion G] [Backtrack G]
-    [MonoBacktrack G], Nat → G α
+    [MonoBacktrack G] [Pick G], Nat → G α
 
 namespace Basalt
 class Arbitrary (α : Type) where
   arbitrary : ∀ {G : Type → Type} [Gen G], G α
 class ArbitraryFueled (α : Type) where
-  arbitraryFueled : ∀ {G : Type → Type} [Gen G], Nat → G α
+  arbitraryFueled : ∀ {G : Type → Type} [Gen G] [Pick G], Nat → G α
 end Basalt
 ```
 
@@ -95,8 +95,13 @@ end Basalt
 - **`BacktrackGenFor α P`** is the counterpart of `ArbitrarySizedSuchThat α P`, polymorphic in `G`.
 - **`Basalt.Arbitrary` / `Basalt.ArbitraryFueled`** are the counterparts of Plausible's
   unconstrained classes; a blanket instance gives `ArbitraryFueled` from `Arbitrary`. Basalt has no
-  lookup classes of its own, so these and `BacktrackGenFor` are Specimen's, with base instances for
-  `Nat`, `Bool`, `Int`, `Char`, `String`, `Fin`, and `List`, `Option`, `Prod` and `Sum` of them.
+  lookup classes of its own, so these and `BacktrackGenFor` are Specimen's. `ArbitraryFueled`'s base
+  instances (`Nat`, `Bool`, `Int`, `Char`, `String`, `Fin`, and `List`, `Option`, `Prod` and `Sum` of
+  them) are bounded by the size as Plausible's are by its ambient size, so the same instance serves a
+  generator and an enumeration.
+- **`pick`** is a weighted choice without retry, taking the proof that some weight is positive; it
+  runs where nothing fails (`Plausible.Gen`, `SPMF`) as `frequency`, and at an enumeration lists each
+  branch once. `pickOr` is the choice whose weights may all be `0`.
 
 ## 3. What is emitted
 
@@ -235,7 +240,7 @@ deriving instance Basalt.ArbitraryFueled for Tree
 emits
 
 ```lean
-def Tree.basaltArbitraryFueled {G : Type → Type} [_root_.Gen G] : Nat → G Tree
+def Tree.basaltArbitraryFueled {G : Type → Type} [_root_.Gen G] [Specimen.Pick G] : Nat → G Tree
   | 0     => oneOf [fun (_ : Unit) => pure Tree.leaf]
   | n + 1 => oneOf [fun (_ : Unit) => pure Tree.leaf,
                     fun (_ : Unit) => Tree.basaltArbitraryFueled n >>= fun a0 => … pure (Tree.node a0 a1 a2)]
@@ -255,13 +260,11 @@ instances by hand.
 
 Under the flag, `derive_mutual enumerator` emits the generator's code shape over the same classes, from
 the enumerator's own schedules. It is registered as `EnumFor α P` rather than `BacktrackGenFor`, and
-unconstrained values come from `Specimen.EnumFueled`, derived with `deriving instance
-Specimen.EnumFueled for T` and kept apart from `Basalt.ArbitraryFueled` so that a type's generator and
-enumeration never constrain each other.
+draws unconstrained values from `Basalt.ArbitraryFueled`, as a generator does.
 
 An enumerator is read at `ExceptT Exhaustion Finite`: everything up to the size, with truncation and
 out-of-fuel as labels. `Specimen.BasaltBridge` serves `EnumSizedSuchThat` from `EnumFor` and `Enum` from
-`EnumFueled` at that reading, which is how a derived checker draws its premises; checkers themselves
+`Basalt.ArbitraryFueled` at that reading, which is how a derived checker draws its premises; checkers themselves
 stay on `DecOpt`. The law that the reading lists exactly what the sampler can succeed with
 (`EnumeratesWith`) is walked for a derived enumerator in `SpecimenTest/Correctness/DerivedEnumLaw.lean`.
 
