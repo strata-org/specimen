@@ -1557,7 +1557,7 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
     neither `Between` nor the leaf that caused it.
 
     So: one predicate, asked by both sides. -/
-def instanceExistsFor (key : SpecKey) : TermElabM Bool := do
+def instanceExistsFor (key : SpecKey) (plausible : Bool := false) : TermElabM Bool := do
   let indInfo ← getConstInfoInduct key.inductiveName
   let indTypeComponents ← getComponentsOfArrowType indInfo.type
   let argTypes := indTypeComponents.pop
@@ -1606,11 +1606,18 @@ def instanceExistsFor (key : SpecKey) : TermElabM Bool := do
             -- All fvars created — now build predicate and try synthesis
             let outputFVars := nonSortOutputIndices.filterMap (fun i => fvars[i]?)
             let outputTypes ← outputFVars.mapM (fun e => inferType e)
+            -- `BacktrackGenFor` takes `α : Type`, so under Basalt the tuple's universes are inferred from its
+            -- components: the fresh level metavariables used otherwise belong to an outer depth, cannot be
+            -- assigned here, and the application would fail as if no instance existed.
+            let basaltCheck := !plausible && (key.deriveSort == .Generator || key.deriveSort == .Enumerator)
+              && Lean.Option.get (← getOptions) specimen.emitBasalt
             let outType ← tupleOfListM (throwError "empty")
               (fun t' rest => do
-                let u ← Meta.mkFreshLevelMVar
-                let v ← Meta.mkFreshLevelMVar
-                pure (Lean.mkApp2 (Lean.mkConst ``Prod [u, v]) t' rest)) outputTypes
+                if basaltCheck then mkAppM ``Prod #[t', rest]
+                else
+                  let u ← Meta.mkFreshLevelMVar
+                  let v ← Meta.mkFreshLevelMVar
+                  pure (Lean.mkApp2 (Lean.mkConst ``Prod [u, v]) t' rest)) outputTypes
             withLocalDecl `x .default outType fun xFvar => do
               let mut projections : Array Expr := #[]
               let mut currentExpr := xFvar
@@ -1630,9 +1637,16 @@ def instanceExistsFor (key : SpecKey) : TermElabM Bool := do
                   appArgs := appArgs.push fvars[i]!
               let body := mkAppN (.const key.inductiveName indLevelsForCheck) appArgs
               let pred ← mkLambdaFVars #[xFvar] body
+              -- Under `specimen.emitBasalt` a derived generator calls its sub-producers through
+              -- `BacktrackGenFor`, and an enumerator through `EnumFor`, so that is the instance that has to
+              -- exist; a Plausible-path instance alone does not satisfy the call, and the dependency is
+              -- derived. `plausible` asks for the Plausible class
+              -- regardless, which is how emission finds a hand-written instance it bypassed.
+              let basaltGen := !plausible && (key.deriveSort == .Generator || key.deriveSort == .Enumerator)
+                && Lean.Option.get (← getOptions) specimen.emitBasalt && (← getEnv).contains `BacktrackGenFor
               let tcName ← match key.deriveSort with
-                | .Generator => pure ``ArbitrarySizedSuchThat
-                | .Enumerator => pure ``EnumSizedSuchThat
+                | .Generator => pure (if basaltGen then `BacktrackGenFor else ``ArbitrarySizedSuchThat)
+                | .Enumerator => pure (if basaltGen then `EnumFor else ``EnumSizedSuchThat)
                 | .Checker | .Theorem => throwError "synthInstance check: checker case should be handled above"
               let ty ← mkAppM tcName #[outType, pred]
               let result ← Meta.synthInstance? ty
@@ -1642,10 +1656,21 @@ def instanceExistsFor (key : SpecKey) : TermElabM Bool := do
             let argTy := (← inferType t).bindingDomain!
             let name := Name.mkSimple s!"arg_{idx}"
             let bi := if argTy.isSort then BinderInfo.implicit else .default
+            -- Under Basalt the check assumes what the emitted producer binds a type parameter with:
+            -- a `Type` (`BacktrackGenFor` takes `α : Type`) carrying Basalt's instances, rather than a
+            -- `Sort` carrying Plausible's.
+            let basaltParams := !plausible && (key.deriveSort == .Generator || key.deriveSort == .Enumerator)
+              && Lean.Option.get (← getOptions) specimen.emitBasalt && (← getEnv).contains `BacktrackGenFor
+            if basaltParams && argTy.isSort then
+              discard <| Meta.isDefEq argTy (mkSort Level.one)
+            let argTy ← instantiateMVars argTy
             withLocalDecl name bi argTy fun fv => do
               -- If Sort-typed, add Arbitrary + DecidableEq instance fvars
               if argTy.isSort then
-                let arbTy ← mkAppM ``Plausible.Arbitrary #[fv]
+                -- Under Basalt, `Basalt.Arbitrary`, which also yields `ArbitraryFueled`: the built-in
+                -- producers (the pair of equal values, say) ask for it, as Plausible's ask for `Arbitrary`.
+                let arbTy ← mkAppM (if basaltParams then Name.mkStr2 "Basalt" "Arbitrary"
+                  else ``Plausible.Arbitrary) #[fv]
                 let decEqTy ← mkAppM ``DecidableEq #[fv]
                 withLocalDecl (Name.mkSimple s!"inst_arb_{instIdx}") .instImplicit arbTy fun _ =>
                 withLocalDecl (Name.mkSimple s!"inst_deceq_{instIdx}") .instImplicit decEqTy fun _ =>
@@ -2362,9 +2387,26 @@ def compileSpecComponents (components : List (List SpecKey))
     block, single defs directly, followed by their instances at the given visibility. -/
 def emitSpecComponents
     (compiledComponents : Array (Array (SpecKey × Name) × Array (TSyntax `command) × Array (TSyntax `command)))
-    (attrKind : AttributeKind) : CommandElabM Unit := do
-  for (_compMeta, defCmds, instCmds) in compiledComponents do
+    (attrKind : AttributeKind) (rootNames : List Name := []) : CommandElabM Unit := do
+  let basalt := Lean.Option.get (← getOptions) specimen.emitBasalt
+  for (compMeta, defCmds, instCmds) in compiledComponents do
     if defCmds.isEmpty then continue
+    -- A dependency derived under Basalt although a hand-written Plausible instance exists: the derived
+    -- code needs a `BacktrackGenFor`, so the hand-written generator is not the one that runs. Said here,
+    -- before the derived instances exist, because the scheduler's search discards its own messages.
+    if basalt then
+      for (key, _) in compMeta do
+        if key.deriveSort == .Generator && !rootNames.contains key.inductiveName then
+          -- A `BacktrackGenFor` also satisfies the Plausible check, through the bridge, so a hand-written
+          -- Plausible instance is bypassed only when no `BacktrackGenFor` exists yet.
+          let bypassed ← liftTermElabM do
+            try pure ((← instanceExistsFor key (plausible := true)) && !(← instanceExistsFor key))
+            catch _ => pure false
+          if bypassed then
+            logWarning m!"{key.inductiveName} has an `ArbitrarySizedSuchThat` instance but no \
+              `BacktrackGenFor` instance, which generators derived under `specimen.emitBasalt` call. \
+              Deriving one instead; to keep the hand-written generator, give it a `BacktrackGenFor` \
+              counterpart."
     if defCmds.size > 1 then
       elabCommand (← `(command| mutual $defCmds* end))
     else
@@ -3068,7 +3110,8 @@ def elabDeriveMutual : CommandElab := fun stx => do
               logInfo m!"  ● {specDescs.head!}"
         -- Emit compiled components (mutual blocks + instances) — shared with the tactic
         let tWidget ← IO.monoMsNow
-        emitSpecComponents compiledComponents attrKind
+        -- The specs the user wrote come first in `specMeta`; auto-derived dependencies follow them.
+        emitSpecComponents compiledComponents attrKind ((specMeta.toList.take specEntries.size).map (·.1))
         let tEmit ← IO.monoMsNow
         if Lean.Option.get (← getOptions) specimen.reportPhaseTimers then
           logInfo m!"⏱ derive_mutual phases (ms): search {tSearch - tStart}, scc {tSCC - tSearch}, constraints+checks {tPreCodegen - tSCC}, codegen+pp {tCodegen - tPreCodegen}, widget+text {tWidget - tCodegen}, emit/elab {tEmit - tWidget}  |  total {tEmit - tStart}"
