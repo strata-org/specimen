@@ -123,7 +123,7 @@ instance : BacktrackGenFor Expr (fun e => HasType e τ) where
   gen :=
     let rec aux_arb {G : Type → Type} [_root_.Gen G] [Specimen.Fail G]
         [Specimen.FailWith Specimen.Exhaustion G] [Specimen.Backtrack G] [Specimen.MonoBacktrack G]
-        (fuel initSize size : Nat) (τ : Ty) : G Expr :=
+        [Specimen.Pick G] (fuel initSize size : Nat) (τ : Ty) : G Expr :=
       match fuel with
       | 0 => Specimen.outOfFuel
       | fuel' + 1 =>
@@ -154,7 +154,7 @@ instance : BacktrackGenFor Expr (fun e => HasType e τ) where
                   let r ← aux_arb fuel' initSize size' .nat
                   return Expr.add l r
                 | _ => Specimen.refute)]
-    fun size => aux_arb 10000 size size τ
+    fun size leafSize => aux_arb 10000 leafSize size τ
 ```
 
 Compared with the Plausible output, the size and fuel structure, weights, schedule and dispatch guards
@@ -163,14 +163,15 @@ are identical. What changes:
 | Plausible path | Basalt path |
 |---|---|
 | `instance : ArbitrarySizedSuchThat …`, field `arbitrarySizedST` | `instance : BacktrackGenFor …`, field `gen` |
-| worker returns `Plausible.Gen α` | worker binds `{G} [Gen G] [Fail G] [FailWith Exhaustion G] [Backtrack G] [MonoBacktrack G]`, returns `G α` |
+| worker returns `Plausible.Gen α` | worker binds `{G} [Gen G] [Fail G] [FailWith Exhaustion G] [Backtrack G] [MonoBacktrack G] [Pick G]`, returns `G α` |
+| one size; leaves read Plausible's ambient size | two, the search's `size` and the leaf size `initSize`; the bridge (§4) passes the ambient size as the leaf size |
 | `GeneratorCombinators.backtrack [(w, b), …]` | `Specimen.Backtrack.backtrack [(w, fun (_ : Unit) => b), …]` |
 | `throw Gen.genericFailure` | `Specimen.refute` (`Fail.fail`) |
 | `throw Gen.outOfFuelError` (fuel 0) | `Specimen.outOfFuel` (`failWith .fuel`) |
 | `DecOpt` premise: anything but `ok true` throws | `ok false` → `refute`, error → `inconclusive` |
 | size 0 list as is | each recursive constructor as its conclusion match, then `Specimen.truncated` |
 | `Arbitrary.arbitrary` | `Basalt.ArbitraryFueled.arbitraryFueled initSize` |
-| `ArbitrarySizedSuchThat.arbitrarySizedST P n` | `BacktrackGenFor.gen P n` |
+| `ArbitrarySizedSuchThat.arbitrarySizedST P n` | `BacktrackGenFor.gen P n initSize` |
 | type parameter binder `[Plausible.Arbitrary α]` | `[Basalt.ArbitraryFueled α]` |
 
 Notes:
@@ -192,9 +193,10 @@ Notes:
   constructor could have applied, and refuted if none could, which is a genuine refutation. The
   branch has weight `1`, since a recursive constructor's own weight is `0` at size 0 and a branch of
   weight `0` is never tried. `backtrack` retries past a truncation, so the successes are unchanged.
-- **Unconstrained values use the fueled class**, at `initSize`: a derived datatype only ever has
-  `Basalt.ArbitraryFueled` (§5), and `Gen` alone has no ambient size from which an unfueled generator
-  could take one.
+- **Unconstrained values use the sized class, at the leaf size `initSize`**, which is passed unchanged
+  while the search's `size` is split: `Gen` has no ambient size, so the leaf size Plausible's leaves
+  read from it is an argument instead. Constrained dependencies on other relations get the leaf size
+  too.
 - **The `specimen_test` theorem checker stays on the Plausible path** with the flag on: it runs in
   `Plausible.Gen` and calls generators through `ArbitrarySizedSuchThat`, which the bridge (§4)
   supplies for Basalt-derived ones.

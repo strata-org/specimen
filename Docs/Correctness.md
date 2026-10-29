@@ -67,7 +67,8 @@ own adequacy lemma and bridge.
   algebra, soundness **and** measure-pair completeness, fuel monotonicity, refutation from a failed
   search (`refutes_of_not_produces`), and the mutually-recursive family form (`genRelFam`).
 - **`LeafSPMF.lean`** — an unconstrained draw at `SGen` reaches its `SPMF` support (`ReachesAll`, a
-  `GenRel`, so `walk fixpoint` proves it per leaf), and the base `Nat` generator's completeness.
+  `GenRel`, so `walk fixpoint` proves it per leaf), and the base `Nat` draw's completeness up to its
+  size.
   A generator emitted under `specimen.emitBasalt` is polymorphic in Basalt's `Gen` class, so the same
   emitted definition is read at `SPMF` for reasoning and at `Plausible.Gen` for running.
 - **`Specimen.Enum.Laws`** — the laws of the enumeration readings hosted in `Specimen.Enum`: at

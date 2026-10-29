@@ -80,7 +80,7 @@ noncomputable def typStep (iS : Nat) : SGenStep (List type × type) term :=
                 | _ => Specimen.refute)
             else none,
             some (3, fun (_ : Unit) =>
-              @BacktrackGenFor.gen _ (fun (x : Nat) => @lookup i.1 x i.2) _ SGen _ _ _ _ _ _ iS >>=
+              @BacktrackGenFor.gen _ (fun (x : Nat) => @lookup i.1 x i.2) _ SGen _ _ _ _ _ _ iS iS >>=
                 fun x => pure (term.Var x)),
             if (match i.2 with | type.Nat => true | _ => false) then
               some (1, fun (_ : Unit) =>
@@ -107,7 +107,7 @@ noncomputable def typStep (iS : Nat) : SGenStep (List type × type) term :=
                 | _ => Specimen.refute)
             else none,
             some (3, fun (_ : Unit) =>
-              @BacktrackGenFor.gen _ (fun (x : Nat) => @lookup i.1 x i.2) _ SGen _ _ _ _ _ _ iS >>=
+              @BacktrackGenFor.gen _ (fun (x : Nat) => @lookup i.1 x i.2) _ SGen _ _ _ _ _ _ iS iS >>=
                 fun x => pure (term.Var x)),
             if (match i.2 with | type.Nat => true | _ => false) then
               some (3, fun (_ : Unit) =>
@@ -157,7 +157,7 @@ def typSpec : (List type × type) → term → Prop := fun i e => typing i.1 e i
 `DerivedGeneratorViaInterp.lean` discharges exactly this statement for its own derivation. -/
 def LookupSound (iS : Nat) : Prop :=
   ∀ (Γ : List type) (τ : type) (x : Nat),
-    Produces (BacktrackGenFor.gen (α := Nat) (P := fun x => lookup Γ x τ) (G := SGen) iS) x →
+    Produces (BacktrackGenFor.gen (α := Nat) (P := fun x => lookup Γ x τ) (G := SGen) iS iS) x →
     lookup Γ x τ
 
 theorem typStep_sound (iS : Nat) (hlk : LookupSound iS) : StepGenSoundB (typStep iS) typSpec := by
@@ -172,7 +172,7 @@ theorem typStep_sound (iS : Nat) (hlk : LookupSound iS) : StepGenSoundB (typStep
     cases produces_pure_iff.mp he
     exact typing.TConst Γ n
   have tvar : ∀ τ,
-      Produces ((@BacktrackGenFor.gen _ (fun (x : Nat) => @lookup Γ x τ) _ SGen _ _ _ _ _ _ iS >>=
+      Produces ((@BacktrackGenFor.gen _ (fun (x : Nat) => @lookup Γ x τ) _ SGen _ _ _ _ _ _ iS iS >>=
         fun x => pure (term.Var x)) : SGen term) x → typing Γ x τ := by
     intro τ hqa
     obtain ⟨n, hn, he⟩ := produces_bind_iff.mp hqa
@@ -266,7 +266,7 @@ are the emitted instance's: it runs the `lookup` worker at size `iS` and at the 
 `10000`. -/
 def LookupComplete (iS : Nat) : Prop :=
   ∀ (Γ : List type) (τ : type) (x : Nat), lookup Γ x τ → x < iS → x < 10000 →
-    Produces (BacktrackGenFor.gen (α := Nat) (P := fun x => lookup Γ x τ) (G := SGen) iS) x
+    Produces (BacktrackGenFor.gen (α := Nat) (P := fun x => lookup Γ x τ) (G := SGen) iS iS) x
 
 theorem typStep_complete (iS : Nat) (hlkc : LookupComplete iS) :
     StepGenCompleteB (typStep iS) (typSpecC iS) typPhi typSigma := by
@@ -293,7 +293,7 @@ theorem typStep_complete (iS : Nat) (hlkc : LookupComplete iS) :
     rename_i x hlkd
     simp only [leafBound] at hv
     simp only [varBound] at hlf
-    have body : Produces ((@BacktrackGenFor.gen _ (fun (x : Nat) => @lookup Γ x τ) _ SGen _ _ _ _ _ _ iS >>=
+    have body : Produces ((@BacktrackGenFor.gen _ (fun (x : Nat) => @lookup Γ x τ) _ SGen _ _ _ _ _ _ iS iS >>=
         fun x => pure (term.Var x)) : SGen term) (term.Var x) :=
       produces_bind_of (hlkc Γ τ x hlkd (by omega) (by omega)) (produces_pure_iff.mpr rfl)
     cases τ with

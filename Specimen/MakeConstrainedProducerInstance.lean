@@ -109,6 +109,7 @@ def mkConstrainedProducerTypeClassInstance
   (topLevelLocalCtx : LocalContext) : TermElabM (TSyntax `command) := do
     -- Produce fresh names for function parameters
     let freshSizeIdent := mkFreshAccessibleIdent topLevelLocalCtx `size
+    let freshLeafSizeIdent := mkFreshAccessibleIdent topLevelLocalCtx `leafSize
     let freshSize' := mkFreshAccessibleIdent topLevelLocalCtx `size'
     let freshFuel' := mkFreshAccessibleIdent topLevelLocalCtx `fuel'
 
@@ -259,7 +260,7 @@ def mkConstrainedProducerTypeClassInstance
           $basaltField:ident :=
             let rec $innerFunctionIdent:ident {$basaltGenVar : Type → Type} $basaltBinders:bracketedBinder* $innerParams* $arbitraryTypeParamInstances:bracketedBinder* : $optionTProducerType :=
               $matchExpr
-            fun $freshSizeIdent => $innerFunctionIdent $fuelLit $freshSizeIdent $freshSizeIdent $outerParams*)
+            fun $freshSizeIdent $freshLeafSizeIdent => $innerFunctionIdent $fuelLit $freshLeafSizeIdent $freshSizeIdent $outerParams*)
     else
     `(instance $arbitraryTypeParamInstances:bracketedBinder* : $producerTypeClass $targetTypeSyntax (fun $targetVarPattern => @$(mkIdent inductiveName) $args*) where
         $producerTypeClassFunction:ident :=
@@ -282,6 +283,7 @@ def mkConstrainedProducerMutualPieces
   TermElabM (TSyntax `command × TSyntax `command) := do
     -- Reuse the same computation as mkConstrainedProducerTypeClassInstance
     let freshSizeIdent := mkFreshAccessibleIdent topLevelLocalCtx `size
+    let freshLeafSizeIdent := mkFreshAccessibleIdent topLevelLocalCtx `leafSize
     let freshSize' := mkFreshAccessibleIdent topLevelLocalCtx `size'
     let freshFuel' := mkFreshAccessibleIdent topLevelLocalCtx `fuel'
 
@@ -478,6 +480,15 @@ def mkConstrainedProducerMutualPieces
           | false, .Generator => unqualifiedArbitrarySizedSTFn
           | false, .Enumerator => unqualifiedEnumSizedSTFn
         let arbitraryTypeParamInstances ← mkTypeClassInstanceBinders typeParams instTypeClasses
+        if useBasalt then
+          -- The leaf size is the worker's `initSize`; the search's size is its `size`.
+          let leafCallArgs : TSyntaxArray `term := #[(⟨fuelLit⟩ : TSyntax `term),
+            (freshLeafSizeIdent : TSyntax `term), (freshSizeIdent : TSyntax `term)] ++
+            (TSyntaxArray.mk outerParams)
+          `(command|
+            instance $arbitraryTypeParamInstances:bracketedBinder* : $producerTypeClass $targetTypeSyntax (fun $targetVarPattern => @$(mkIdent inductiveName) $args*) where
+              $producerTypeClassFunction:ident := fun $freshSizeIdent $freshLeafSizeIdent => $defIdent $leafCallArgs*)
+        else
         `(command|
           instance $arbitraryTypeParamInstances:bracketedBinder* : $producerTypeClass $targetTypeSyntax (fun $targetVarPattern => @$(mkIdent inductiveName) $args*) where
             $producerTypeClassFunction:ident := fun $freshSizeIdent => $callExpr)

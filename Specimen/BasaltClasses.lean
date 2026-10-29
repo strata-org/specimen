@@ -58,11 +58,13 @@ abbrev inconclusive [FailWith Exhaustion G] : G α := FailWith.failWith Exhausti
 
 end Specimen
 
-/-- A generator for `α` whose successes satisfy `P`, taking a fuel; the Basalt counterpart of
-`ArbitrarySizedSuchThat`. -/
+/-- A generator for `α` whose successes satisfy `P`; the Basalt counterpart of
+`ArbitrarySizedSuchThat`. It takes two sizes: the search's, which bounds the structure and is split
+among recursive calls, and the leaf size, which bounds every unconstrained value and is passed
+unchanged, as Plausible's ambient size is. -/
 class BacktrackGenFor (α : Type) (P : α → Prop) where
   gen : ∀ {G : Type → Type} [Gen G] [Specimen.Fail G] [Specimen.FailWith Specimen.Exhaustion G]
-    [Specimen.Backtrack G] [Specimen.MonoBacktrack G] [Specimen.Pick G], Nat → G α
+    [Specimen.Backtrack G] [Specimen.MonoBacktrack G] [Specimen.Pick G], (size leafSize : Nat) → G α
 
 namespace Basalt
 
@@ -189,11 +191,11 @@ instance : ArbitraryFueled String where
 
 end Basalt
 
-/-- An enumerator for `α` whose successes satisfy `P`, taking a size: the Basalt counterpart of
-`EnumSizedSuchThat`. The same code as a generator's, over the same classes, written with the
+/-- An enumerator for `α` whose successes satisfy `P`, taking the two sizes `BacktrackGenFor` does:
+the Basalt counterpart of `EnumSizedSuchThat`. The same code as a generator's, over the same classes, written with the
 enumerator's schedule; which reading it runs at is the caller's (`Specimen.BasaltBridge` reads it at
 `ExceptT Exhaustion Finite`, everything up to the size). -/
 class EnumFor (α : Type) (P : α → Prop) where
   enum : ∀ {G : Type → Type} [Gen G] [Specimen.Fail G] [Specimen.FailWith Specimen.Exhaustion G]
-    [Specimen.Backtrack G] [Specimen.MonoBacktrack G] [Specimen.Pick G], Nat → G α
+    [Specimen.Backtrack G] [Specimen.MonoBacktrack G] [Specimen.Pick G], (size leafSize : Nat) → G α
 

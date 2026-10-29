@@ -122,9 +122,9 @@ def arbitrarySizedST (prop : MExp) (fuel : MExp) : MExp :=
 /-- `MExp` representation of `BacktrackGenFor.gen`, the Basalt-general counterpart of
     `arbitrarySizedST`.
 
-    Six more holes than `arbitrarySizedST` because the field is
+    Seven more holes than `arbitrarySizedST`, and the leaf size, because the field is
     `{α} → (P) → [inst] → {G} → [Gen G] → [Fail G] → [FailWith _ G] → [Backtrack G] →
-    [MonoBacktrack G] → Nat → G α`:
+    [MonoBacktrack G] → [Pick G] → (size leafSize : Nat) → G α`, the leaf size always `initSize`:
     under `@` every binder must be supplied, so `G` gets a hole solved by unification against the
     expected type, and its instances get holes solved by instance synthesis.
 
@@ -132,13 +132,13 @@ def arbitrarySizedST (prop : MExp) (fuel : MExp) : MExp :=
     Specimen's own modules to import Basalt. -/
 def backtrackGenForCall (prop : MExp) (fuel : MExp) : MExp :=
   .MApp .allExplicit (.MConst (Name.mkStr2 "BacktrackGenFor" "gen"))
-    [.MHole, prop, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, fuel]
+    [.MHole, prop, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, fuel, .MId `initSize]
 
 /-- `MExp` representation of `EnumFor.enum`, the enumerator counterpart of `backtrackGenForCall`, with the
     same binders. -/
 def enumForCall (prop : MExp) (fuel : MExp) : MExp :=
   .MApp .allExplicit (.MConst (Name.mkStr2 "EnumFor" "enum"))
-    [.MHole, prop, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, fuel]
+    [.MHole, prop, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, fuel, .MId `initSize]
 
 /-- `ok x` is an `MExp` representing `Except.ok x`. -/
 def ok (x : MExp) : MExp :=

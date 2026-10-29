@@ -50,7 +50,7 @@ inductive OneMod4 : Nat → Prop where
   | mk : n % 4 = 1 → OneMod4 n
 
 instance : BacktrackGenFor Nat (fun n => n % 4 = 1) where
-  gen size := do
+  gen size _ := do
     let k ← chooseNat 0 size
     pure (4 * k + 1)
 

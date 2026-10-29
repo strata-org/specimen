@@ -229,7 +229,7 @@ theorem typing_gen_sound : ∀ (fuel iS sz : Nat) (G : List type) (t : type) (e 
     -- `TVar`, unguarded, in both pools and at every target type: the delegated `lookup` producer at
     -- the emitted instance's literal fuel `10000`.
     have tvar : ∀ t,
-        Produces ((BacktrackGenFor.gen (α := Nat) (P := fun x => lookup G x t) (G := SGen) iS
+        Produces ((BacktrackGenFor.gen (α := Nat) (P := fun x => lookup G x t) (G := SGen) iS iS
             >>= fun x => pure (term.Var x)) : SGen term) e → typing G e t := by
       intro t hqa
       obtain ⟨x, hx, he⟩ := produces_bind_iff.mp hqa
@@ -302,25 +302,25 @@ theorem typing_gen_sound : ∀ (fuel iS sz : Nat) (G : List type) (t : type) (e 
 /-! ## User-facing statements
 
 Stated against `BacktrackGenFor.gen` — the interface a caller actually uses — rather than against the
-emitted worker. `simp only [BacktrackGenFor.gen]` reduces the instance to `worker 10000 sz sz args`,
+emitted worker. `simp only [BacktrackGenFor.gen]` reduces the instance to `worker 10000 leaf sz args`,
 which is where the literal fuel `10000` comes from.
 -/
 
 /-- **Soundness of the derived well-typed-term generator.** Every term the generator for
-`fun e => typing G e t` can produce, at the `SPMF` interpretation and at any size, really has
-type `t` in context `G`. -/
-theorem stlc_gen_sound (G : List type) (t : type) (sz : Nat) (e : term)
-    (h : Produces (BacktrackGenFor.gen (P := fun e => typing G e t) (G := SGen) sz) e) :
+`fun e => typing G e t` can produce, at the `SPMF` interpretation and at any size and leaf size,
+really has type `t` in context `G`. -/
+theorem stlc_gen_sound (G : List type) (t : type) (sz leaf : Nat) (e : term)
+    (h : Produces (BacktrackGenFor.gen (P := fun e => typing G e t) (G := SGen) sz leaf) e) :
     typing G e t := by
   simp only [BacktrackGenFor.gen] at h
-  exact typing_gen_sound 10000 sz sz G t e h
+  exact typing_gen_sound 10000 leaf sz G t e h
 
 /-- Soundness of the derived `lookup` producer, at the `BacktrackGenFor` interface. -/
-theorem lookup_gen_sound' (G : List type) (t : type) (sz : Nat) (x : Nat)
-    (h : Produces (BacktrackGenFor.gen (P := fun x => lookup G x t) (G := SGen) sz) x) :
+theorem lookup_gen_sound' (G : List type) (t : type) (sz leaf : Nat) (x : Nat)
+    (h : Produces (BacktrackGenFor.gen (P := fun x => lookup G x t) (G := SGen) sz leaf) x) :
     lookup G x t := by
   simp only [BacktrackGenFor.gen] at h
-  exact lookup_gen_sound 10000 sz sz G t x h
+  exact lookup_gen_sound 10000 leaf sz G t x h
 
 /-! ## Non-vacuity
 
@@ -389,7 +389,7 @@ theorem typing_var_witness (fuel iS sz : Nat) (τ : type) (Γ : List type) :
 `Var 0` already at size `0`. -/
 theorem stlc_gen_nonvacuous :
     Produces (BacktrackGenFor.gen (P := fun e => typing [type.Nat] e type.Nat)
-        (G := SGen) 0) (term.Var 0) := by
+        (G := SGen) 0 0) (term.Var 0) := by
   simp only [BacktrackGenFor.gen]
   exact typing_var_witness 9999 0 0 type.Nat []
 
@@ -398,7 +398,7 @@ theorem stlc_gen_nonvacuous :
 soundness theorem is not confined to the base constructors. -/
 theorem stlc_gen_nonvacuous_abs :
     Produces (BacktrackGenFor.gen (P := fun e => typing [] e (type.Fun type.Nat type.Nat))
-        (G := SGen) 2) (term.Abs type.Nat (term.Var 0)) := by
+        (G := SGen) 2 2) (term.Abs type.Nat (term.Var 0)) := by
   simp only [BacktrackGenFor.gen,
     specimen_gen_typing_1__SpecimenTest_Correctness_StlcGeneratorSoundness_StlcGeneratorSoundness]
   refine produces_backtrack_of_branch _ _
@@ -408,10 +408,10 @@ theorem stlc_gen_nonvacuous_abs :
 
 /-- The payoff, spelled out: soundness applied to a witness yields a real typing judgement. -/
 example : typing [type.Nat] (term.Var 0) type.Nat :=
-  stlc_gen_sound [type.Nat] type.Nat 0 (term.Var 0) stlc_gen_nonvacuous
+  stlc_gen_sound [type.Nat] type.Nat 0 0 (term.Var 0) stlc_gen_nonvacuous
 
 example : typing [] (term.Abs type.Nat (term.Var 0)) (type.Fun type.Nat type.Nat) :=
-  stlc_gen_sound [] (type.Fun type.Nat type.Nat) 2 _ stlc_gen_nonvacuous_abs
+  stlc_gen_sound [] (type.Fun type.Nat type.Nat) 2 2 _ stlc_gen_nonvacuous_abs
 
 /-- info: 'StlcGeneratorSoundness.stlc_gen_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in
