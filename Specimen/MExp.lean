@@ -611,8 +611,13 @@ def scheduleStepToMExp (step : ScheduleStep) (defFuel : MExp) (k : MExp) (output
       else .MApp .allowImplicit (.MConst ``DecOpt.negOpt) [checker]
 
     pure $ .MBind .Checker checker [] k
-  | .Match explicit scrutinee pattern =>
-    pure $ .MMatch explicit (.MId scrutinee) [(pattern, k), (wildCardPattern, .MFail)]
+  | .Match explicit scrutinee pattern => do
+    -- A pattern that matches every value (only sole constructors, as in a one-constructor structure)
+    -- gets no failure arm: Lean rejects `| _ => …` after it as redundant.
+    if irrefutableErased (← getEnv) pattern then
+      pure $ .MMatch explicit (.MId scrutinee) [(pattern, k)]
+    else
+      pure $ .MMatch explicit (.MId scrutinee) [(pattern, k), (wildCardPattern, .MFail)]
 
 /-- The steps of a recursive constructor's schedule that decide whether its conclusion applies to the
     inputs: its leading input matches, and the checks on inputs alone that follow them (a non-linear
