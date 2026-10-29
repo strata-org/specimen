@@ -266,9 +266,19 @@ draws unconstrained values from `Basalt.ArbitrarySized`, as a generator does.
 
 An enumerator is read at `ExceptT Exhaustion Finite`: everything up to the size, with truncation and
 out-of-fuel as labels. `Specimen.BasaltBridge` serves `EnumSizedSuchThat` from `EnumFor` and `Enum` from
-`Basalt.ArbitrarySized` at that reading, which is how a derived checker draws its premises; checkers themselves
-stay on `DecOpt`. The law that the reading lists exactly what the sampler can succeed with
-(`EnumeratesWith`) is walked for a derived enumerator in `SpecimenTest/Correctness/DerivedEnumLaw.lean`.
+`Basalt.ArbitrarySized` at that reading. The law that the reading lists exactly what the sampler can
+succeed with (`EnumeratesWith`) is walked for a derived enumerator in
+`SpecimenTest/Correctness/DerivedEnumLaw.lean`.
+
+Checkers stay on `DecOpt`, and ask a premise's enumerator a question rather than reading its list:
+whether some value makes the rest of the checker true. They ask through `Specimen.CheckerSearch` and
+`Specimen.CheckerSearchAll`, which run the Basalt enumerator at `Specimen.Search` and stop at the first
+success, and fall back to the lazy-list `EnumSizedSuchThat` and `Enum` where only those exist. `Finite`
+is strict, so reading a premise there would build the whole enumeration before testing any of it.
+Its answer to every continuation is the Kleene disjunction of what `Finite` lists (`SearchesAs`, in
+`Specimen.Enum.Laws.Search`), walked for a derived enumerator in
+`SpecimenTest/Correctness/DerivedSearchLaw.lean`; `SpecimenTest/CheckerSearchTest.lean` checks the
+same by running both readings.
 
 `derive_enumerator`, the single-relation command `derive_mutual` superseded, ignores the flag and emits
 the lazy-list enumerator.

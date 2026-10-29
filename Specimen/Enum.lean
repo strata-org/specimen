@@ -4,6 +4,7 @@ import Specimen.Enum.Finite
 import Specimen.Enum.Weighted
 import Specimen.Enum.Backtrack
 import Specimen.Enum.Pick
+import Specimen.Enum.Search
 import Specimen.Enum.BacktrackWith
 import Specimen.Enum.Graded
 import Specimen.Enum.GradedWith
