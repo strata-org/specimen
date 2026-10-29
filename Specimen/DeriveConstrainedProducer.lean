@@ -1609,7 +1609,7 @@ def instanceExistsFor (key : SpecKey) (plausible : Bool := false) : TermElabM Bo
             -- `BacktrackGenFor` takes `α : Type`, so under Basalt the tuple's universes are inferred from its
             -- components: the fresh level metavariables used otherwise belong to an outer depth, cannot be
             -- assigned here, and the application would fail as if no instance existed.
-            let basaltCheck := !plausible && key.deriveSort == .Generator
+            let basaltCheck := !plausible && (key.deriveSort == .Generator || key.deriveSort == .Enumerator)
               && Lean.Option.get (← getOptions) specimen.emitBasalt
             let outType ← tupleOfListM (throwError "empty")
               (fun t' rest => do
@@ -1638,14 +1638,15 @@ def instanceExistsFor (key : SpecKey) (plausible : Bool := false) : TermElabM Bo
               let body := mkAppN (.const key.inductiveName indLevelsForCheck) appArgs
               let pred ← mkLambdaFVars #[xFvar] body
               -- Under `specimen.emitBasalt` a derived generator calls its sub-producers through
-              -- `BacktrackGenFor`, so that is the instance that has to exist; a Plausible instance alone does
-              -- not satisfy the call, and the dependency is derived. `plausible` asks for the Plausible class
+              -- `BacktrackGenFor`, and an enumerator through `EnumFor`, so that is the instance that has to
+              -- exist; a Plausible-path instance alone does not satisfy the call, and the dependency is
+              -- derived. `plausible` asks for the Plausible class
               -- regardless, which is how emission finds a hand-written instance it bypassed.
-              let basaltGen := !plausible && key.deriveSort == .Generator
+              let basaltGen := !plausible && (key.deriveSort == .Generator || key.deriveSort == .Enumerator)
                 && Lean.Option.get (← getOptions) specimen.emitBasalt && (← getEnv).contains `BacktrackGenFor
               let tcName ← match key.deriveSort with
                 | .Generator => pure (if basaltGen then `BacktrackGenFor else ``ArbitrarySizedSuchThat)
-                | .Enumerator => pure ``EnumSizedSuchThat
+                | .Enumerator => pure (if basaltGen then `EnumFor else ``EnumSizedSuchThat)
                 | .Checker | .Theorem => throwError "synthInstance check: checker case should be handled above"
               let ty ← mkAppM tcName #[outType, pred]
               let result ← Meta.synthInstance? ty
@@ -1655,10 +1656,10 @@ def instanceExistsFor (key : SpecKey) (plausible : Bool := false) : TermElabM Bo
             let argTy := (← inferType t).bindingDomain!
             let name := Name.mkSimple s!"arg_{idx}"
             let bi := if argTy.isSort then BinderInfo.implicit else .default
-            -- Under Basalt the check assumes what the emitted generator binds a type parameter with:
+            -- Under Basalt the check assumes what the emitted producer binds a type parameter with:
             -- a `Type` (`BacktrackGenFor` takes `α : Type`) carrying Basalt's instances, rather than a
             -- `Sort` carrying Plausible's.
-            let basaltParams := !plausible && key.deriveSort == .Generator
+            let basaltParams := !plausible && (key.deriveSort == .Generator || key.deriveSort == .Enumerator)
               && Lean.Option.get (← getOptions) specimen.emitBasalt && (← getEnv).contains `BacktrackGenFor
             if basaltParams && argTy.isSort then
               discard <| Meta.isDefEq argTy (mkSort Level.one)
