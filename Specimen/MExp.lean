@@ -555,7 +555,8 @@ private def nameAndConstructorExprToTypedVar (v : Name × Option ConstructorExpr
       supplied to the generator/enumerator/checker we're deriving
 -/
 
-def scheduleStepToMExp (step : ScheduleStep) (defFuel : MExp) (k : MExp) (outputType : Expr) (fuelPrimeName : Name) (sizeExpr : MExp) (targetInductive : Name) : CompileScheduleM MExp :=
+def scheduleStepToMExp (step : ScheduleStep) (defFuel : MExp) (k : MExp) (outputType : Expr) (fuelPrimeName : Name) (sizeExpr : MExp) (targetInductive : Name)
+    (basaltWorkers : Bool := false) : CompileScheduleM MExp :=
   match step with
   | .Unconstrained v src prodSort => do
     let monadSort := prodSortToMonadSort prodSort
@@ -582,7 +583,14 @@ def scheduleStepToMExp (step : ScheduleStep) (defFuel : MExp) (k : MExp) (output
       let producer ← constrainedProducer ps varsTys (hypothesisExprToMExp hypExpr) fuel
       pure $ .MBind monadSort producer typedVars k
     | Source.Rec f args | Source.MutRec f args =>
-      pure $ .MBind monadSort (recCall f fuelPrimeName sizeExpr args) typedVars k
+      let call := recCall f fuelPrimeName sizeExpr args
+      -- A checker calling an enumerator of its own block reaches the worker directly rather than
+      -- through `EnumSizedSuchThat`; under Basalt the worker is polymorphic in its monad, so it is read
+      -- as the bridge reads it, not instantiated at the checker's.
+      let call := if basaltWorkers && ps matches .Enumerator then
+          .MApp .allowImplicit (.MConst (Name.mkStr2 "Specimen" "basaltEnumeration")) [call]
+        else call
+      pure $ .MBind monadSort call typedVars k
   | .Check src polarity =>
 
     let checker :=
@@ -632,7 +640,7 @@ def truncationToMExp (steps : List ScheduleStep) (defFuel : MExp) (recType : Exp
       for the function we are deriving (these correspond to `size` and `initSize`
       in the QuickChick code for the derived functions)
     - `targetInductive` is the inductive we're generating for (used to detect same-type deps) -/
-def scheduleToMExp (schedule : Schedule) (mfuel : MExp) (defFuel : MExp) (recType : Expr) (fuelPrimeName : Name := `fuel') (sizePrimeName : Name := `size') (targetInductive : Name := `_unknown) : CompileScheduleM MExp :=
+def scheduleToMExp (schedule : Schedule) (mfuel : MExp) (defFuel : MExp) (recType : Expr) (fuelPrimeName : Name := `fuel') (sizePrimeName : Name := `size') (targetInductive : Name := `_unknown) : CompileScheduleM MExp := do
   let (scheduleSteps, scheduleSort) := schedule
   -- Compute the size expression: split budget across all size-consuming calls
   -- (self-recursive, mutual, and non-recursive calls to the same inductive)
@@ -665,10 +673,12 @@ def scheduleToMExp (schedule : Schedule) (mfuel : MExp) (defFuel : MExp) (recTyp
   -- Fold over the `scheduleSteps` and convert each of them to a functional `MExp`
   -- Note that the fold composes the `MExp`, and we use `foldr` since
   -- we want the `epilogue` to be the base-case of the fold
-  let steps := List.foldrM (fun step acc => scheduleStepToMExp step defFuel acc recType fuelPrimeName
-    sizeExpr targetInductive) epilogue scheduleSteps
+  let basalt := Lean.Option.get (← getOptions) specimen.emitBasalt
+  let steps (basaltWorkers : Bool) := List.foldrM (fun step acc => scheduleStepToMExp step defFuel acc
+    recType fuelPrimeName sizeExpr targetInductive basaltWorkers) epilogue scheduleSteps
   -- A checker stays on `DecOpt` and reads its premises' enumerators through Specimen's own classes,
-  -- which `Specimen.BasaltBridge` serves from the Basalt ones.
+  -- which `Specimen.BasaltBridge` serves from the Basalt ones; only its calls into its own block's
+  -- enumerators, which are Basalt workers, need adapting.
   match scheduleSort with
-  | .CheckerSchedule => withOptions (·.setBool `specimen.emitBasalt false) steps
-  | _ => steps
+  | .CheckerSchedule => withOptions (·.setBool `specimen.emitBasalt false) (steps basalt)
+  | _ => steps false

@@ -1257,11 +1257,15 @@ def computeSpecConstraints (indSched : InductiveSchedule)
       -- `Basalt.ArbitrarySized.arbitrarySized` on the parameter, so the binder is that class. A
       -- `Plausible.Arbitrary` binder would leave the call unsatisfiable, and the error would name the
       -- body's class, reading as a missing user instance rather than a wrong binder.
+      -- A derived enumerator is on the Basalt path as a generator is; a checker is not, and reads its
+      -- enumerators through `Enum`.
       let emitBasalt := Lean.Option.get (← getOptions) specimen.emitBasalt
       let tcName := match ps with
         | .Generator =>
           if emitBasalt then Name.mkStr2 "Basalt" "ArbitrarySized" else ``Plausible.Arbitrary
-        | .Enumerator => ``Enum
+        | .Enumerator =>
+          if emitBasalt && ownDeriveSort == .Enumerator then Name.mkStr2 "Basalt" "ArbitrarySized"
+          else ``Enum
       -- Check if any type param is referenced (directly or nested)
       let refs := args.foldl (fun acc a => acc.union (extractTypeParamRefs typeParamSet a)) ({} : Std.HashSet Name)
       if indName == tcName then
@@ -2301,6 +2305,13 @@ def compileSpecComponents (components : List (List SpecKey))
       let globalName := specimenWorkerName key.inductiveName key.outputIndices key.deriveSort
         (← getCurrNamespace) (← getMainModule)
       compMeta := compMeta.push (key, globalName)
+    -- Under Basalt a producer's worker quantifies over its monad, so its type is in `Type 1` and a
+    -- checker's in `Type`. Structural recursion over the block takes the first declaration's universe:
+    -- a checker first fails it with "brecOn is type incorrect", so the producers go first.
+    if Lean.Option.get (← getOptions) specimen.emitBasalt then
+      let (checkers, producers) := compMeta.partition fun (k, _) =>
+        k.deriveSort == .Checker || k.deriveSort == .Theorem
+      compMeta := producers ++ checkers
     let compSiblings : List (Name × List Nat × Name × DeriveSort) :=
       compMeta.toList.map (fun (k, gn) => (k.inductiveName, k.outputIndices, gn, k.deriveSort))
     let mut defCmds : Array (TSyntax `command) := #[]
@@ -2475,7 +2486,10 @@ def elabDeriveMutual : CommandElab := fun stx => do
             displayConstraintMap := displayConstraintMap.insert key merged
         -- Warn about required constraints that Specimen cannot provide
         let providedConstraints : Std.HashSet Name := Std.HashSet.ofList
-          [``Plausible.Arbitrary, ``Enum, ``DecidableEq]
+          ([``Plausible.Arbitrary, ``Enum, ``DecidableEq] ++
+            -- Under Basalt a type parameter's binder is `Basalt.ArbitrarySized`, which the caller supplies.
+            (if Lean.Option.get (← getOptions) specimen.emitBasalt then [Name.mkStr2 "Basalt" "ArbitrarySized"]
+             else []))
         for (key, cs) in constraintMap.toList do
           if cs.isEmpty then continue
           let numArgs ← liftTermElabM do

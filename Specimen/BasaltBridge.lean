@@ -75,6 +75,13 @@ def Specimen.toEnumeratorEntries (x : Specimen.Finite (Except Specimen.Exhaustio
       | .ok a => .ok a
       | .error _ => .error Gen.outOfFuelError)
 
+/-- A Basalt-derived enumerator called by a checker of its own `derive_mutual` block, which reaches the
+worker directly rather than through `EnumSizedSuchThat`: read as that instance reads it, with the
+worker's own budgets. -/
+def Specimen.basaltEnumeration (x : ExceptT Specimen.Exhaustion Specimen.Finite α) :
+    ExceptT GenError Enumerator α :=
+  fun _ => Specimen.toEnumeratorEntries x.run
+
 /-- A Basalt-derived enumerator runs as an `EnumSizedSuchThat`, read at `ExceptT Exhaustion Finite`:
 everything up to the size, by its law exactly what the enumerator can succeed with. A derived
 checker's premise is enumerated this way, at the checker's budget, its leaf size the size a checker

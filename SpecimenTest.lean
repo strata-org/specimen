@@ -181,6 +181,7 @@ import SpecimenTest.Interp.DiagnoseTest
 -- default build covers the Basalt path too. Test files that derive generators import `Specimen.Basalt`
 -- so the whole library can also be built with the flag on (see the comment in `lakefile.toml`).
 import SpecimenTest.BasaltEmissionTest
+import SpecimenTest.BasaltEnumeratorTest
 -- …and without `Specimen.Basalt`, Basalt stays unloaded and the flag asks for the import
 import SpecimenTest.BasaltNotImportedTest
 -- Constraint propagation for polymorphic dependencies (issue #38)
