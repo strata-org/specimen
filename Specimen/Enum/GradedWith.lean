@@ -42,7 +42,7 @@ variable {ε : Type} {G : Type → Type}
 
 /-- The same tiers as `backtrack`, as without labels. -/
 instance instExceptTCostGraded [Fail G] [Union G] : Pick (ExceptT ε (CostGraded G)) :=
-  ⟨fun gs => Backtrack.backtrack gs⟩
+  ⟨fun gs _ => Backtrack.backtrack gs⟩
 
 instance instMonoExceptTCostGraded [Gen G] [Fail G] [Union G] [MonoUnion G] :
     MonoPick (ExceptT ε (CostGraded G)) where

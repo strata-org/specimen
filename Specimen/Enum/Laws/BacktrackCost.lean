@@ -416,8 +416,9 @@ theorem CostEnumeratesSome.backtrack {α : Type} {gs' : List (Nat × (Unit → C
 @[gen_rule]
 theorem CostEnumeratesSome.pick {α : Type} {gs' : List (Nat × (Unit → CostGraded Finite α))}
     {gs : List (Nat × (Unit → OptionT SPMF.Cost α))}
-    (hs : GenRel.Weighted @CostEnumeratesSome gs' gs) :
-    CostEnumeratesSome (Pick.pick gs') (Pick.pick gs) :=
+    (hs : GenRel.Weighted @CostEnumeratesSome gs' gs)
+    {h' : 0 < Backtrack.sumWeights gs'} {h : 0 < Backtrack.sumWeights gs} :
+    CostEnumeratesSome (Pick.pick gs' h') (Pick.pick gs h) :=
   union hs (Backtrack.mem_support_search_cost 1 gs) fun p hp hk =>
     Backtrack.mem_support_search_cost_of_branch 1 gs p hp hk Nat.one_pos
 

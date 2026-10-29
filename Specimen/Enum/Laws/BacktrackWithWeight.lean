@@ -770,11 +770,12 @@ theorem backtrack [SemilatticeSup ε] [DecidableEq ε] {gs' : List (Nat × (Unit
 @[gen_rule]
 theorem pick [Max ε] {gs' : List (Nat × (Unit → ExceptT ε WFinite α))}
     {gs : List (Nat × (Unit → ExceptT ε (OptionT SPMF) α))}
-    (hs : GenRel.Weighted (@WeighsWith ε) gs' gs) :
-    WeighsWith (Pick.pick gs') (Pick.pick gs) := by
-  show WeighsSome (Pick.pick _ : WFinite _) (Backtrack.searchWith 1 gs none)
+    (hs : GenRel.Weighted (@WeighsWith ε) gs' gs)
+    {h' : 0 < Backtrack.sumWeights gs'} {h : 0 < Backtrack.sumWeights gs} :
+    WeighsWith (Pick.pick gs' h') (Pick.pick gs h) := by
+  show WeighsSome (Pick.pick _ (by simpa using h') : WFinite _) (Backtrack.searchWith 1 gs none)
   rw [Backtrack.searchWith_one]
-  exact WeighsSome.pick (weighted_run hs)
+  exact WeighsSome.pick (h := by simpa using h) (weighted_run hs)
 
 end WeighsWith
 

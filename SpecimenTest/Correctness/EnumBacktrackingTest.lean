@@ -60,6 +60,23 @@ def drawn [Monad G] [RandomChoice G] [Fail G] [Pick G] : G Nat :=
 #guard (drawn (G := OptionT Specimen.Finite)).run.toList? ==
   some [some 1, some 2, some 1, some 2, some 1, some 2, some 3]
 
+/-- A draw that cannot fail, so it runs where there is no failure. -/
+def drawnTotal [Monad G] [Pick G] : G Nat :=
+  Pick.pick [(3, fun _ => pure 1), (0, fun _ => pure 9), (1, fun _ => pure 3)]
+
+-- Where nothing fails, the draw is `frequency`: the same term, sampled.
+example : (drawnTotal (G := Plausible.Gen)) =
+    (frequency [(3, fun _ => pure 1), (0, fun _ => pure 9), (1, fun _ => pure 3)] : Plausible.Gen Nat) :=
+  rfl
+#guard (drawnTotal (G := Specimen.Finite)).toList? == some [1, 3]
+
+/-- Weights that can all be `0`: the draw among the positive ones, or the default. -/
+def drawnOr [Monad G] [RandomChoice G] [Pick G] (n : Nat) : G Nat :=
+  pickOr (fun _ => pure 0) [(n, fun _ => pure 1), (n, fun _ => pure 2)]
+
+#guard (drawnOr (G := Specimen.Finite) 0).toList? == some [0]
+#guard (drawnOr (G := Specimen.Finite) 2).toList? == some [1, 2]
+
 -- Graded by cost, tier `n + 1` is each branch's tier `n`: `3` costs the pick alone, `pickFrom`'s
 -- values one draw more.
 #guard (List.range 4).map (rules (G := CostGraded Specimen.Finite) 1).tier? ==

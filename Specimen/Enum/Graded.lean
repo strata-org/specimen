@@ -111,7 +111,7 @@ instance instBacktrack [Fail G] [Union G] : Backtrack (CostGraded G) where
 /-- The same tiers as `backtrack`: the draw costs one choice, and its branch what it costs. With no
 retry, the tiers are exact for `pick`; `CostEnumeratesSome` asks only that they be complete up to
 cost. -/
-instance instPick [Fail G] [Union G] : Pick (CostGraded G) := ⟨fun gs => Backtrack.backtrack gs⟩
+instance instPick [Fail G] [Union G] : Pick (CostGraded G) := ⟨fun gs _ => Backtrack.backtrack gs⟩
 
 section monotonicity
 

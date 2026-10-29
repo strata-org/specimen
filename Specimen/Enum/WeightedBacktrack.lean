@@ -112,7 +112,7 @@ instance instBacktrack : Backtrack WFinite where
 
 /-- The draw's distribution: each branch's entries weighted by its share of the weight. -/
 instance instPick : Pick WFinite where
-  pick gs := runWith (runBranches gs) (pickReach (runBranches gs))
+  pick gs _ := runWith (runBranches gs) (pickReach (runBranches gs))
 
 end WFinite
 

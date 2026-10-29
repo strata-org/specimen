@@ -354,8 +354,9 @@ theorem backtrack {gs' : List (Nat × (Unit → ExceptT ε Finite α))}
 @[gen_rule]
 theorem pick {gs' : List (Nat × (Unit → ExceptT ε Finite α))}
     {gs : List (Nat × (Unit → ExceptT ε (OptionT SPMF) α))}
-    (hs : GenRel.Weighted (@EnumeratesWith ε _) gs' gs) :
-    EnumeratesWith (Pick.pick gs') (Pick.pick gs) :=
+    (hs : GenRel.Weighted (@EnumeratesWith ε _) gs' gs)
+    {h' : 0 < Backtrack.sumWeights gs'} {h : 0 < Backtrack.sumWeights gs} :
+    EnumeratesWith (Pick.pick gs' h') (Pick.pick gs h) :=
   union hs 1 fun _ _ => Nat.one_pos
 
 end EnumeratesWith

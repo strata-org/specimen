@@ -83,7 +83,7 @@ instance instBacktrackExceptT [Max ε] [DecidableEq ε] : Backtrack (ExceptT ε 
 
 /-- The draw over labelled failures: each branch's entries weighted by its share of the weight. -/
 instance instPickExceptT : Pick (ExceptT ε WFinite) where
-  pick gs := ExceptT.mk (Pick.pick (gs.map fun p => (p.1, fun u => (p.2 u).run)))
+  pick gs h := ExceptT.mk (Pick.pick (gs.map fun p => (p.1, fun u => (p.2 u).run)) (by simpa using h))
 
 end WFinite
 
@@ -112,7 +112,9 @@ instance instMonoBacktrackExceptT [Max ε] [DecidableEq ε] : MonoBacktrack (Exc
     (Backtrack.map_runE_rel h)
 
 instance instMonoPickExceptT : MonoPick (ExceptT ε WFinite) where
-  pick_mono h := MonoPick.pick_mono (G := WFinite) (Backtrack.map_runE_rel h)
+  pick_mono {_ _ _ h₁ h₂} h :=
+    MonoPick.pick_mono (G := WFinite) (h₁ := by simpa using h₁) (h₂ := by simpa using h₂)
+      (Backtrack.map_runE_rel h)
 
 end WFinite
 

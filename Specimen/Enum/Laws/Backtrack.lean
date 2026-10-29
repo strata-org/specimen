@@ -149,9 +149,12 @@ open Backtrack
 
 variable {α : Type}
 
+/-- Where nothing fails, the draw is `frequency`: the sampler's distribution, as at `Plausible.Gen`. -/
+noncomputable instance instSPMF : Pick SPMF := ofFrequency
+
 /-- What `pick` can succeed with is what its branches of positive weight can. -/
-theorem mem_support_pick_iff (gs : List (Nat × (Unit → OptionT SPMF α))) (a : α) :
-    some a ∈ (pick gs : OptionT SPMF α).run.support ↔
+theorem mem_support_pick_iff (gs : List (Nat × (Unit → OptionT SPMF α))) (h : 0 < sumWeights gs)
+    (a : α) : some a ∈ (pick gs h : OptionT SPMF α).run.support ↔
       ∃ p ∈ gs, 0 < p.1 ∧ some a ∈ (p.2 ()).run.support :=
   ⟨mem_support_search 1 gs a, fun ⟨p, hp, hk, h⟩ =>
     mem_support_search_of_branch 1 gs p hp hk Nat.one_pos a h⟩
@@ -191,8 +194,9 @@ theorem EnumeratesSome.backtrack {α : Type} {gs' : List (Nat × (Unit → Finit
 /-- The union at `Finite` lists exactly what the draw at `OptionT SPMF` can succeed with. -/
 @[gen_rule]
 theorem EnumeratesSome.pick {α : Type} {gs' : List (Nat × (Unit → Finite α))}
-    {gs : List (Nat × (Unit → OptionT SPMF α))} (hs : GenRel.Weighted @EnumeratesSome gs' gs) :
-    EnumeratesSome (Pick.pick gs') (Pick.pick gs) :=
-  union hs (Pick.mem_support_pick_iff gs)
+    {gs : List (Nat × (Unit → OptionT SPMF α))} (hs : GenRel.Weighted @EnumeratesSome gs' gs)
+    {h' : 0 < Backtrack.sumWeights gs'} {h : 0 < Backtrack.sumWeights gs} :
+    EnumeratesSome (Pick.pick gs' h') (Pick.pick gs h) :=
+  union hs (Pick.mem_support_pick_iff gs h)
 
 end Specimen

@@ -67,10 +67,10 @@ variable {ε : Type} {G : Type → Type}
 
 /-- One draw, no retry: the search with fuel for one branch. -/
 instance instExceptTOptionT [Monad G] [RandomChoice G] [Max ε] : Pick (ExceptT ε (OptionT G)) :=
-  ⟨fun gs => ExceptT.mk (Backtrack.searchWith 1 gs none)⟩
+  ⟨fun gs _ => ExceptT.mk (Backtrack.searchWith 1 gs none)⟩
 
 instance instExceptTFinite : Pick (ExceptT ε Finite) :=
-  ⟨fun gs => Backtrack.backtrack gs⟩
+  ⟨fun gs _ => Backtrack.backtrack gs⟩
 
 end Pick
 
