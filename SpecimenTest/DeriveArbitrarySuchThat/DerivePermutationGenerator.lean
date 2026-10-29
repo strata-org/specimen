@@ -1,6 +1,7 @@
 import Specimen.DeriveConstrainedProducer
 import Specimen.ArbitrarySizedSuchThat
 import SpecimenTest.CommonDefinitions.Permutation
+import Specimen.Basalt
 
 /-! Snapshot test: derived constrained generator for list permutations. -/
 

@@ -162,7 +162,7 @@ structure LExprParamsT : Type 1 where
   deriving Inhabited
 
 /-- `T.mono` transforms `LExprParams` into `LExprParamsT` with `LMonoTy`. -/
-@[expose] abbrev LExprParams.mono (T : LExprParams) : LExprParamsT := ⟨T, LMonoTy⟩
+abbrev LExprParams.mono (T : LExprParams) : LExprParamsT := ⟨T, LMonoTy⟩
 
 /-- Whether a quantifier is universal or existential. -/
 inductive QuantifierKind
@@ -185,7 +185,7 @@ inductive LConst : Type where
   deriving Repr, DecidableEq, Hashable
 
 /-- The type of a constant `c`. -/
-@[expose] def LConst.ty (c : LConst) : LMonoTy :=
+def LConst.ty (c : LConst) : LMonoTy :=
   match c with
   | .intConst _ => .int
   | .strConst _ => .string

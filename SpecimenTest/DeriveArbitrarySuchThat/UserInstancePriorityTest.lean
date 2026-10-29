@@ -8,6 +8,7 @@
 import Specimen.DeriveConstrainedProducer
 import Plausible.Gen
 import Specimen.ArbitrarySizedSuchThat
+import Specimen.Basalt
 
 open Plausible
 
@@ -19,6 +20,12 @@ instance : ArbitrarySizedSuchThat (Nat × Nat) (fun (a, b) => Sums a b n) where
   arbitrarySizedST _ := do
     let a ← Gen.choose Nat 0 n (by omega)
     pure (a.1, n - a.1)
+
+-- The same producer for `specimen.emitBasalt`, which looks producers up through `BacktrackGenFor`.
+instance : BacktrackGenFor (Nat × Nat) (fun (a, b) => Sums a b n) where
+  gen _ := do
+    let a ← chooseNat 0 n
+    pure (a, n - a)
 
 structure NatPair where
   x : Nat

@@ -1,5 +1,6 @@
 import Specimen.DeriveConstrainedProducer
 import Plausible.Attr
+import Specimen.Basalt
 
 /-! Tests for `derive_generator` command syntax variations and namespace handling. -/
 

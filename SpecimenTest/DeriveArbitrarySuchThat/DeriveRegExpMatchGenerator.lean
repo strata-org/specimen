@@ -3,6 +3,7 @@ import Specimen.DecOpt
 import Specimen.ArbitrarySizedSuchThat
 import Specimen.DeriveConstrainedProducer
 import SpecimenTest.DeriveArbitrary.DeriveRegExpGenerator
+import Specimen.Basalt
 
 /-! Snapshot test: derived constrained generator for strings matching regular expressions. -/
 

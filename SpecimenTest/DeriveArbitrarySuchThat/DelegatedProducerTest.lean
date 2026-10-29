@@ -4,6 +4,7 @@ import Specimen.DecOpt
 import Specimen.ArbitrarySizedSuchThat
 import Specimen.DeriveConstrainedProducer
 import Specimen.DeriveArbitrary
+import Specimen.Basalt
 
 /-! Tests for *delegated producers*.
 
@@ -39,6 +40,11 @@ deriving instance Arbitrary for DTm
 instance (Γ : List Nat) (τ : Nat) :
     ArbitrarySizedSuchThat Nat (fun i => Γ[i]? = some τ) where
   arbitrarySizedST _ := do
+    return ((List.range Γ.length).filter (fun i => Γ[i]? = some τ)).getLast?.getD 0
+
+-- The same producer for `specimen.emitBasalt`, which looks producers up through `BacktrackGenFor`.
+instance (Γ : List Nat) (τ : Nat) : BacktrackGenFor Nat (fun i => Γ[i]? = some τ) where
+  gen _ := do
     return ((List.range Γ.length).filter (fun i => Γ[i]? = some τ)).getLast?.getD 0
 
 inductive DHasTy : List Nat → DTm → Nat → Prop where

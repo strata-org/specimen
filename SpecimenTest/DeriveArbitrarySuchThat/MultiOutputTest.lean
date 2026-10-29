@@ -3,6 +3,7 @@ import Specimen.ArbitrarySizedSuchThat
 import Specimen.DeriveConstrainedProducer
 import Specimen.DeriveArbitrary
 import Plausible.Arbitrary
+import Specimen.Basalt
 
 /-! Test: derive constrained generators with multiple existential output variables. -/
 

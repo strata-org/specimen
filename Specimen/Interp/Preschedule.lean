@@ -204,7 +204,7 @@ inductive PlanError where
   /-- The plan generates a variable the constructor does not declare, or declares without a type. -/
   | unknownVar (v : Name)
   /-- The `CtorSpec` is malformed: the conclusion has more or fewer arguments than the relation. -/
-  | arityMismatch (given expected : Nat)
+  | arityMismatch (passed expected : Nat)
   /-- The conclusion is not linearized: an input position holds a function application, so its
       variables can be neither matched nor solved for. -/
   | conclusionNotLinearized (arg : String)
@@ -238,8 +238,8 @@ def PlanError.message : PlanError → String
   | unknownVar v =>
     s!"'{v}' is not a declared binder of this constructor (add it to `CtorSpec.vars`, with its \
       type, so an unconstrained generator can be found for it)."
-  | arityMismatch given expected =>
-    s!"the conclusion has {given} argument(s) but the relation takes {expected}."
+  | arityMismatch passed expected =>
+    s!"the conclusion has {passed} argument(s) but the relation takes {expected}."
   | conclusionNotLinearized arg =>
     s!"the conclusion's input argument `{arg}` is a function application. Flatten it into a fresh \
       variable plus an equality premise first (the compile-time pipeline's `linearizeAndFlatten`)."

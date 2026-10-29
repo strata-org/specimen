@@ -1,4 +1,5 @@
 import Specimen
+import Specimen.Basalt
 
 /-!
 # Regression: `derive_mutual` on relations with **no inputs**
@@ -14,6 +15,10 @@ Nothing else in the suite reaches it, since `derive_generator` uses a different 
 `BST lo hi t`). The two shapes below are the minimum that pin the path down: one purely recursive, one
 whose only constructor carries a side condition, so the schedule has to draw-and-check rather than
 construct.
+
+The path also has its own copy of the Basalt branch emission (each branch wrapped as a function for
+`Specimen.Backtrack.backtrack`), so this file has to build with `specimen.emitBasalt` both off and on;
+`BasaltEmissionTest` derives an input-free relation with the flag set.
 -/
 
 open Plausible

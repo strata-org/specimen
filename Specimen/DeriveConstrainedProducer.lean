@@ -798,6 +798,20 @@ private def foldedWeight (weightFnIdent : Ident) (modifierIdent : Option Ident)
         if stx.isIdent && stx.getId == baseName then some base else none⟩
     `(have $baseIdent := $base; $modBody)
 
+/-- One weighted branch of a derived generator. Basalt's `Backtrack.backtrack` takes its branches as
+    functions (`Nat × (Unit → G α)`), so under `specimen.emitBasalt` the producer is
+    wrapped in `fun (_ : Unit) => …` and only the branch `backtrack` selects is ever built. Plausible's
+    `backtrack` takes the generator itself.
+
+    The binder type is written out because under input dispatch the branch sits inside
+    `List.filterMap`, where it has no expected type, and `fun () => …` there leaves a universe
+    constraint unsolved (Cedar's `HasType`). -/
+private def weightedBranch (weight subProducer : TSyntax `term) : TermElabM (TSyntax `term) := do
+  if Lean.Option.get (← getOptions) specimen.emitBasalt then
+    `( ($weight, fun (_ : $(mkIdent ``Unit)) => $subProducer) )
+  else
+    `( ($weight, $subProducer) )
+
 /-- Whether this derive filters its generator branches by their input guard (`specimen.dispatchInputs`). -/
 private def dispatching (sort : DeriveSort) : CoreM Bool :=
   return sort == .Generator && specimen.dispatchInputs.get (← getOptions)
@@ -810,6 +824,21 @@ private def guardIf (sort : DeriveSort) (steps : List ScheduleStep) (t : TSyntax
   match ← MExp.inputGuard? steps with
   | some g => `(if $g then some $t else none)
   | none => `(some $t)
+
+/-- Under `specimen.emitBasalt`, a recursive constructor's branch for the `size = 0` pool, where it cannot
+    recurse: its conclusion matched against the inputs and, where it matches, `Specimen.truncated`
+    (`MExp.truncationToMExp`). Weight `1`, not the constructor's weight: the default weight function
+    gives a recursive constructor `0` at size `0`, and a branch of weight `0` is never tried, so it
+    could never say the search was cut short. `none` off the Basalt path, where the size-`0` pool is
+    the non-recursive constructors alone. -/
+private def truncationBranch (sort : DeriveSort) (steps : List ScheduleStep) (outputType : Expr)
+    (fuelPrimeName targetInductive : Name) : TermElabM (Option (TSyntax `term)) := do
+  unless Lean.Option.get (← getOptions) specimen.emitBasalt && sort == .Generator do return none
+  let (body, _) ← StateT.run (s := #[]) (do
+    let mexp ← MExp.truncationToMExp steps (.MId `initSize) outputType
+      (fuelPrimeName := fuelPrimeName) (targetInductive := targetInductive)
+    MExp.mexpToTSyntax mexp sort)
+  return some (← guardIf sort steps (← weightedBranch (← `(1)) body))
 
 /-- The branch list handed to `backtrack`: the guarded branches that pass, or the plain list when not
     dispatching. When no branch has a guard, the plain list is emitted too — every entry would be `some`,
@@ -921,6 +950,7 @@ def deriveConstrainedProducer
 
       let mut nonRecursiveProducers := #[]
       let mut recursiveProducers := #[]
+      let mut truncationProducers := #[]
 
       let freshFuelPrimeName := localCtx.getUnusedName `fuel'
       let freshSizePrimeName := localCtx.getUnusedName `size'
@@ -997,9 +1027,11 @@ def deriveConstrainedProducer
                   #[ctorNameLit, outputIndicesLit, deriveSortLit, (← `(0)), (← `(true)), freshSize',
                      numBaseLit, numRecLit, numRecCallsLit]
                 let finalWeight ← foldedWeight weightFnIdent modifierIdent args freshSizePrimeName
-                `( ($finalWeight, $subProducer) )
+                weightedBranch finalWeight subProducer
               | .Enumerator => pure subProducer
             recursiveProducers := recursiveProducers.push (← guardIf deriveSort schedule.1 subProducerTerm)
+            if let some t ← truncationBranch deriveSort schedule.1 outputType freshFuelPrimeName inductiveName then
+              truncationProducers := truncationProducers.push t
           else
             let subGeneratorTerm ←
               match producerSort with
@@ -1008,7 +1040,7 @@ def deriveConstrainedProducer
                   #[ctorNameLit, outputIndicesLit, deriveSortLit, (← `(0)), (← `(false)), (← `(0)),
                      numBaseLit, numRecLit, numRecCallsLit]
                 let finalWeight ← foldedWeight weightFnIdent modifierIdent args freshSizePrimeName
-                `( ($finalWeight, $subProducer) )
+                weightedBranch finalWeight subProducer
               | .Enumerator => pure subProducer
             nonRecursiveProducers := nonRecursiveProducers.push (← guardIf deriveSort schedule.1 subGeneratorTerm)
 
@@ -1025,7 +1057,7 @@ def deriveConstrainedProducer
 
       -- Collect all the base / inductive producers into two Lean list terms
       -- Base producers are invoked when `size = 0`, inductive producers are invoked when `size > 0`
-      let baseProducers ← producerListTerm deriveSort nonRecursiveProducers
+      let baseProducers ← producerListTerm deriveSort (nonRecursiveProducers ++ truncationProducers)
       let inductiveProducers ← producerListTerm deriveSort (nonRecursiveProducers ++ recursiveProducers)
 
       return (baseProducers, inductiveProducers, freshenedOutputNames, Lean.mkIdent <$> freshUnknowns, localCtx))
@@ -1070,7 +1102,7 @@ private def compileWeightedProducer
       #[ctorNameLit, outputIndicesLit, deriveSortLit, badnessLit, isRecLit, sizeArg,
          numBaseLit, numRecLit, numRecCallsLit]
     let finalWeight ← foldedWeight weightFnIdent modifierIdent args sizePrimeName
-    `( ($finalWeight, $subProducer) )
+    weightedBranch finalWeight subProducer
   | .Enumerator => pure subProducer
   | .Checker | .Theorem => `(fun (_ : Unit) => $subProducer)
 
@@ -1214,8 +1246,14 @@ def computeSpecConstraints (indSched : InductiveSchedule)
   for step in allSteps do
     match step with
     | .Unconstrained _ (.NonRec (indName, args)) ps =>
+      -- Under Basalt this becomes an instance *binder* on the emitted declaration, whose body calls
+      -- `Basalt.ArbitraryFueled.arbitraryFueled` on the parameter, so the binder is that class. A
+      -- `Plausible.Arbitrary` binder would leave the call unsatisfiable, and the error would name the
+      -- body's class, reading as a missing user instance rather than a wrong binder.
+      let emitBasalt := Lean.Option.get (← getOptions) specimen.emitBasalt
       let tcName := match ps with
-        | .Generator => ``Plausible.Arbitrary
+        | .Generator =>
+          if emitBasalt then Name.mkStr2 "Basalt" "ArbitraryFueled" else ``Plausible.Arbitrary
         | .Enumerator => ``Enum
       -- Check if any type param is referenced (directly or nested)
       let refs := args.foldl (fun acc a => acc.union (extractTypeParamRefs typeParamSet a)) ({} : Std.HashSet Name)
@@ -1389,6 +1427,7 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
     let freshSizePrimeName := `size'
     let mut nonRecursiveProducers : Array (TSyntax `term) := #[]
     let mut recursiveProducers : Array (TSyntax `term) := #[]
+    let mut truncationProducers : Array (TSyntax `term) := #[]
     let freshSize' := Lean.mkIdent freshSizePrimeName
     -- Helper: rewrite Source.Rec to use globalName + rewrite sibling calls
     let rewriteSchedule := fun (steps : List ScheduleStep) =>
@@ -1428,7 +1467,11 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
         freshFuelPrimeName freshSizePrimeName key.inductiveName
         weightFnIdent modifierIdent ctorName key.outputIndices (lookupCtorBadness ctorName) isRec freshSize' numBaseLit numRecLit
       let term ← guardIf key.deriveSort rewrittenSteps term
-      if isRec then recursiveProducers := recursiveProducers.push term
+      if isRec then
+        recursiveProducers := recursiveProducers.push term
+        if let some t ← truncationBranch key.deriveSort rewrittenSteps outputType freshFuelPrimeName
+            key.inductiveName then
+          truncationProducers := truncationProducers.push t
       else nonRecursiveProducers := nonRecursiveProducers.push term
     for (ctorName, schedule) in indSched.recSchedules do
       let (steps, sort) := schedule
@@ -1436,6 +1479,9 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
         freshFuelPrimeName freshSizePrimeName key.inductiveName
         weightFnIdent modifierIdent ctorName key.outputIndices (lookupCtorBadness ctorName) true freshSize' numBaseLit numRecLit
       recursiveProducers := recursiveProducers.push (← guardIf key.deriveSort (rewriteSchedule steps) term)
+      if let some t ← truncationBranch key.deriveSort (rewriteSchedule steps) outputType freshFuelPrimeName
+          key.inductiveName then
+        truncationProducers := truncationProducers.push t
     -- For checkers/enumerators with recursive constructors, add a failsafe to the base case:
     -- if no base constructor matches, return "unknown" (error) rather than "false",
     -- since a recursive constructor might succeed at a larger size.
@@ -1451,7 +1497,7 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
         | .Enumerator =>
           let failsafe ← `($failFn $(mkIdent ``Gen.outOfFuelError))
           pure (nonRecursiveProducers.push failsafe)
-        | .Generator => pure nonRecursiveProducers
+        | .Generator => pure (nonRecursiveProducers ++ truncationProducers)
       else
         pure nonRecursiveProducers
     let baseProducers ← producerListTerm key.deriveSort baseProducersWithFailsafe
@@ -1874,6 +1920,7 @@ def deriveConstrainedProducerParts
           (freshenedOutputNames[i]!, outputTypes[i]!, outputIdxs[i]!))
       let mut nonRecursiveProducers := #[]
       let mut recursiveProducers := #[]
+      let mut truncationProducers := #[]
       let freshFuelPrimeName := localCtx.getUnusedName `fuel'
       let freshSizePrimeName := localCtx.getUnusedName `size'
       let freshSize' := mkIdent freshSizePrimeName
@@ -1929,9 +1976,12 @@ def deriveConstrainedProducerParts
                   #[ctorNameLit, outputIndicesLit, deriveSortLit, (← `(0)), (← `(true)), freshSize',
                      numBaseLit, numRecLit, numRecCallsLit]
                 let finalWeight ← foldedWeight weightFnIdent modifierIdent args freshSizePrimeName
-                `( ($finalWeight, $subProducer) )
+                weightedBranch finalWeight subProducer
               | .Enumerator => pure subProducer
             recursiveProducers := recursiveProducers.push (← guardIf deriveSort rewrittenSteps subProducerTerm)
+            if let some t ← truncationBranch deriveSort rewrittenSteps _outputType freshFuelPrimeName
+                inductiveName then
+              truncationProducers := truncationProducers.push t
           else
             let subGeneratorTerm ← match producerSort with
               | .Generator =>
@@ -1939,7 +1989,7 @@ def deriveConstrainedProducerParts
                   #[ctorNameLit, outputIndicesLit, deriveSortLit, (← `(0)), (← `(false)), (← `(0)),
                      numBaseLit, numRecLit, numRecCallsLit]
                 let finalWeight ← foldedWeight weightFnIdent modifierIdent args freshSizePrimeName
-                `( ($finalWeight, $subProducer) )
+                weightedBranch finalWeight subProducer
               | .Enumerator => pure subProducer
             nonRecursiveProducers := nonRecursiveProducers.push (← guardIf deriveSort rewrittenSteps subGeneratorTerm)
         | none => throwError m!"Unable to derive producer schedule for constructor {ctorName}"
@@ -1947,7 +1997,7 @@ def deriveConstrainedProducerParts
         throwError "Cannot derive constrained producer for '{inductiveName}': no constructor schedules were generated"
       if nonRecursiveProducers.isEmpty then
         throwError "Cannot derive constrained producer for '{inductiveName}': all constructors are recursive (no finite base case)"
-      let baseProducers ← producerListTerm deriveSort nonRecursiveProducers
+      let baseProducers ← producerListTerm deriveSort (nonRecursiveProducers ++ truncationProducers)
       let inductiveProducers ← producerListTerm deriveSort (nonRecursiveProducers ++ recursiveProducers)
       return (baseProducers, inductiveProducers, freshenedOutputNames, Lean.mkIdent <$> freshUnknowns, localCtx))
   return (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, outputTypes, localCtx, inductiveName, inductiveLevels, producerSort)

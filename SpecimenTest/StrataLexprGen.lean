@@ -6,6 +6,7 @@ import Specimen.ArbitrarySizedSuchThat
 import Specimen.DeriveConstrainedProducer
 import Specimen.DeriveArbitrary
 import Specimen.DeriveEnum
+import Specimen.Basalt
 
 /-! # Deriving a Specimen generator for well-typed Strata `LExpr`s
 
@@ -91,6 +92,41 @@ instance : Arbitrary LMonoTy where
 
 deriving instance Arbitrary for LExprU
 
+/-! ## The same unconstrained producers for the Basalt path
+
+Under `specimen.emitBasalt` the derived generator is polymorphic in the generator monad, so the
+`Arbitrary` instances above, fixed at `Plausible.Gen`, cannot serve it. These are their counterparts;
+unused with the flag off. -/
+
+/-- As for `Arbitrary Rat`: Basalt ships no instance either. -/
+instance : Basalt.Arbitrary Rat where
+  arbitrary := do return (Rat.ofInt (← Basalt.Arbitrary.arbitrary))
+
+deriving instance Basalt.ArbitraryFueled for QuantifierKind
+deriving instance Basalt.ArbitraryFueled for Identifier
+
+/-- Hand-written: `LConst.bitvecConst (n : Nat) (b : BitVec n)` has a field whose type depends on an
+earlier field, which the deriving handler rejects. The width is fixed at 32; the typing relation treats
+all bitvector constants alike. -/
+instance : Basalt.ArbitraryFueled LConst where
+  arbitraryFueled _ :=
+    oneOf [fun () => .intConst <$> Basalt.Arbitrary.arbitrary,
+           fun () => .strConst <$> Basalt.Arbitrary.arbitrary,
+           fun () => .realConst <$> Basalt.Arbitrary.arbitrary,
+           fun () => do
+             let v ← Basalt.Arbitrary.arbitrary (α := Nat)
+             pure (.bitvecConst 32 (BitVec.ofNat 32 v)),
+           fun () => .boolConst <$> Basalt.Arbitrary.arbitrary]
+
+/-- The same fixed pool as `Arbitrary LMonoTy`, for the same reason. -/
+instance : Basalt.ArbitraryFueled LMonoTy where
+  arbitraryFueled _ := do
+    let choices : List LMonoTy :=
+      [.int, .bool, .string,
+       .arrow .int .bool, .arrow .bool .bool, .arrow .int .int]
+    let n ← chooseNat 0 (choices.length - 1)
+    return choices.getD n .int
+
 /-! ## The hand-written delegated producer for the de-Bruijn lookup
 
 The `bvar` rule's premise is `Δ[i]? = some t` — list indexing, which the deriver
@@ -122,6 +158,29 @@ instance lookupProducerSyn (Δ : List LMonoTy) :
     if h : 0 < Δ.length then
       let n ← Plausible.Gen.chooseNatLt 0 Δ.length h
       return (n.val, Δ[n.val]?)
+    else
+      return (0, none)
+
+/-! The two lookup producers again for `specimen.emitBasalt`, which looks producers up through
+`BacktrackGenFor`. Flag off, the instances above win: the bridge from `BacktrackGenFor` is low
+priority. -/
+
+instance lookupProducerBasalt (Δ : List LMonoTy) (t : LMonoTy) :
+    BacktrackGenFor Nat (fun i => Δ[i]? = some t) where
+  gen _ := do
+    match (List.range Δ.length).filter (fun i => Δ[i]? = some t) with
+    -- `refute`, not `outOfFuel`: no budget would find an in-scope variable of type `t`.
+    | [] => Specimen.refute
+    | c :: cs =>
+      let n ← chooseNat 0 cs.length
+      return (c :: cs).getD n c
+
+instance lookupProducerSynBasalt (Δ : List LMonoTy) :
+    BacktrackGenFor (Nat × Option LMonoTy) (fun p => Δ[p.1]? = p.2) where
+  gen _ := do
+    if 0 < Δ.length then
+      let n ← chooseNat 0 (Δ.length - 1)
+      return (n, Δ[n]?)
     else
       return (0, none)
 

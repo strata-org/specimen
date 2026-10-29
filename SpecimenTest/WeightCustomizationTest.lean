@@ -1,5 +1,6 @@
 import Specimen.DeriveConstrainedProducer
 import Plausible.Gen
+import Specimen.Basalt
 
 /-!
 # Weight Function and Modifier Distribution Tests

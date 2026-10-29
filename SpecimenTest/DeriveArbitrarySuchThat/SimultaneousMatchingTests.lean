@@ -5,6 +5,7 @@ import Specimen.DeriveConstrainedProducer
 import Specimen.DeriveChecker
 import SpecimenTest.CommonDefinitions.ListRelations
 import SpecimenTest.DeriveDecOpt.SimultaneousMatchingTests
+import Specimen.Basalt
 
 /-! Tests for `derive_generator` on relations requiring simultaneous pattern matching on multiple inputs. -/
 

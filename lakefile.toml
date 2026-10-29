@@ -9,23 +9,36 @@ linter.missingDocs = false
 
 [[lean_lib]]
 name = "SpecimenTest"
+# To build the whole test library against Basalt, uncomment. It has to be library-wide, since a module
+# compiled with the flag off cannot serve one compiled with it on, and `weak.` is required for the modules
+# that never import the option. See Docs/Specimen-Basalt-port.md.
+# leanOptions = { weak.specimen.emitBasalt = true }
 
 [[lean_lib]]
 name = "Specimen"
-# `Specimen.Interp` is opt-in, not imported by `Specimen`, so it is a root of its own.
-roots = ["Specimen", "Specimen.Interp"]
+# `Specimen.Interp`, `Specimen.Basalt` and `Specimen.Enum` are opt-in, not imported by `Specimen`, so
+# they are roots of their own.
+roots = ["Specimen", "Specimen.Interp", "Specimen.Basalt", "Specimen.Enum"]
 
 [[require]]
 name = "batteries"
 scope = "leanprover-community"
-rev = "f2effa3d803fda822b1f97b806c47cf2adfbcbc2"
+rev = "66e469188fe07963e5cf666c7d4433f45b8131c5"
 
 [[require]]
 name = "plausible"
 scope = "leanprover-community"
-rev = "118aa17ee84656b8bd727fef7c458ee8c833385c"
+rev = "dfa4f38190d07c37e315953e08b90fe2d95b3c24"
 
 [[require]]
 name = "proofwidgets"
 scope = "leanprover-community"
-rev = "106ff4fafc74ef4ac99d81dbf3ab399118f497a5"
+rev = "df72b022e558978a1c50264cfc4d7fec86fa8e04"
+
+# Basalt, for `specimen.emitBasalt`. It requires Mathlib, which comes with it: run `lake exe cache get`
+# after cloning to download Mathlib's build rather than compiling it (`lake update` runs it by itself). The batteries, plausible and
+# proofwidgets revisions above are the ones Mathlib's release pins; keep them in step with it.
+[[require]]
+name = "basalt"
+git = "https://github.com/hgoldstein95/basalt"
+rev = "2c6e912897f96ab8838617f69494a5916b2ef078"

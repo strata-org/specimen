@@ -149,7 +149,7 @@ instance [Inhabited ε] [Enum α] : Enum (Except ε α) where
   ]
 
 /-- `Enum` instances for pairs -/
-instance [Enum α] [Enum β] : Enum (α × β) where
+instance {α β : Type u} [Enum α] [Enum β] : Enum (α × β) where
   enum := fun n => do
     let a ← Enum.enum n
     let b ← Enum.enum n

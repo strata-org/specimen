@@ -74,7 +74,7 @@ def enumDependencySatisfyingOrderingsTree {α v} [BEq α] [Repr α] [Repr v] [BE
 
 
 -- Prune tree with global best score state
-partial def pruneTreeWithScore {α σ} [LT σ] [Min σ] [DecidableRel (fun a b : σ => a < b)] (tree : LazyRoseTree α) (score : α → σ) (bestScore : σ) : Option (LazyRoseTree α × σ) :=
+partial def pruneTreeWithScore {α σ : Type u} [LT σ] [Min σ] [DecidableRel (fun a b : σ => a < b)] (tree : LazyRoseTree α) (score : α → σ) (bestScore : σ) : Option (LazyRoseTree α × σ) :=
 
   let nodeScore := score tree.val
   if nodeScore > bestScore then none else
@@ -98,7 +98,7 @@ partial def pruneTreeWithScore {α σ} [LT σ] [Min σ] [DecidableRel (fun a b :
     some (⟨tree.val, ⟨fun _ => prunedChildren.reverse⟩⟩, finalBest)
 
 -- Prune tree with global best score state
-partial def minTreePruning {α σ} [LT σ] [Min σ] [DecidableRel (fun a b : σ => a < b)] (tree : LazyRoseTree α) (score : α → σ) (bestScore : σ) : Option (α × σ) :=
+partial def minTreePruning {α σ : Type u} [LT σ] [Min σ] [DecidableRel (fun a b : σ => a < b)] (tree : LazyRoseTree α) (score : α → σ) (bestScore : σ) : Option (α × σ) :=
 
   let nodeScore := score tree.val
   if nodeScore > bestScore then none else

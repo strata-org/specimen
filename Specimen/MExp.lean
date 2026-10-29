@@ -119,6 +119,21 @@ def enumSizedST (prop : MExp) (fuel : MExp) : MExp :=
 def arbitrarySizedST (prop : MExp) (fuel : MExp) : MExp :=
   .MApp .allExplicit (.MConst ``ArbitrarySizedSuchThat.arbitrarySizedST) [.MHole, prop, .MHole, fuel]
 
+/-- `MExp` representation of `BacktrackGenFor.gen`, the Basalt-general counterpart of
+    `arbitrarySizedST`.
+
+    Six more holes than `arbitrarySizedST` because the field is
+    `{α} → (P) → [inst] → {G} → [Gen G] → [Fail G] → [FailWith _ G] → [Backtrack G] →
+    [MonoBacktrack G] → Nat → G α`:
+    under `@` every binder must be supplied, so `G` gets a hole solved by unification against the
+    expected type, and its instances get holes solved by instance synthesis.
+
+    The name is unqualified so it resolves in the *emitted* code's scope rather than requiring
+    Specimen's own modules to import Basalt. -/
+def backtrackGenForCall (prop : MExp) (fuel : MExp) : MExp :=
+  .MApp .allExplicit (.MConst (Name.mkStr2 "BacktrackGenFor" "gen"))
+    [.MHole, prop, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, .MHole, fuel]
+
 /-- `ok x` is an `MExp` representing `Except.ok x`. -/
 def ok (x : MExp) : MExp :=
   .MApp .allowImplicit (.MConst ``Except.ok) [x]
@@ -301,9 +316,22 @@ abbrev CompileScheduleM (α : Type) := StateT (TSyntaxArray `term) TermElabM α
 /-- `MExp` representation of an unconstrained producer,
     parameterized by a `producerSort` and the type `ty` (represented as a `TSyntax term`)
     of the value being generated -/
-def unconstrainedProducer (prodSort : ProducerSort) (ty : TSyntax `term) : CompileScheduleM MExp := do
+def unconstrainedProducer (prodSort : ProducerSort) (ty : TSyntax `term)
+    (fuel : MExp := .MId `initSize) : CompileScheduleM MExp := do
+  -- Under Basalt an unconstrained sub-producer must be polymorphic in the generator monad, so
+  -- Plausible's `Arbitrary` (fixed at `Plausible.Gen`) cannot be used — it type-errors inside a
+  -- Basalt-targeted body.
+  --
+  -- `Basalt.ArbitraryFueled` rather than `Basalt.Arbitrary`, for two reasons. Basalt's `Gen` has no
+  -- ambient size parameter and hence no `sized`, so there is no `ArbitraryFueled → Arbitrary`
+  -- instance to fall back on and a derived datatype only ever has the fueled form. And an
+  -- unconstrained generator for a *recursive* datatype ought to be bounded anyway: `initSize` is the
+  -- right budget, being the allocation meant for independent dependencies.
+  let useBasalt := (Lean.Option.get (← getOptions) specimen.emitBasalt)
+    && prodSort matches .Generator
   let typeClassName :=
-    match prodSort with
+    if useBasalt then Name.mkStr2 "Basalt" "ArbitraryFueled"
+    else match prodSort with
     | .Enumerator => ``Enum
     | .Generator => ``Arbitrary
   let typeClassInstance ← `( $(Lean.mkIdent typeClassName) $ty:term )
@@ -312,7 +340,9 @@ def unconstrainedProducer (prodSort : ProducerSort) (ty : TSyntax `term) : Compi
   -- then obtain the `MExp` representing the unconstrained producer
   StateT.modifyGet $ fun instances =>
     let producerMExp :=
-      match prodSort with
+      if useBasalt then
+        .MApp .allowImplicit (.MConst (Name.mkStr3 "Basalt" "ArbitraryFueled" "arbitraryFueled")) [fuel]
+      else match prodSort with
       | .Enumerator => .MConst ``Enum.enum
       | .Generator => .MConst ``Arbitrary.arbitrary
     (producerMExp, instances.push typeClassInstance)
@@ -351,8 +381,17 @@ mutual
         let args ← mkTuple vars
         `((fun $args:term => $compiledBody))
     | .MFail | .MOutOfFuel =>
-      -- Note: right now we compile `MFail` and `MOutOfFuel` to the same Lean terms
-      -- for simplicity, but in the future we may want to distinguish them
+      -- Outside the Basalt path these two compile to the same term, and the distinction survives only
+      -- because `Gen.outOfFuelError` carries a message that `GenError.isInconclusive` recognises.
+      -- Under Basalt one is a refutation (`Fail`) and the other a labelled failure (`FailWith`).
+      do
+      let useBasalt := (Lean.Option.get (← getOptions) specimen.emitBasalt)
+        && deriveSort matches .Generator
+      if useBasalt then
+        match mexp with
+        | .MOutOfFuel => `($backtrackGenExhaustFn)
+        | _ => `($backtrackGenRefuteFn)
+      else
       match deriveSort with
       | .Generator | .Enumerator => `($failFn $genericFailure)
       | .Theorem => `(return ($(mkIdent ``Except.error) $genericFailure))
@@ -384,8 +423,27 @@ mutual
         -- provided by the `DecOpt` instance for the proposition, then pattern
         -- match on its result
         let trueCase ← `(Term.matchAltExpr| | $(mkIdent ``Except.ok) $(mkIdent ``true) => $k1)
-        let wildCardCase ← `(Term.matchAltExpr| | _ => $failFn $genericFailure)
-        let cases := #[trueCase, wildCardCase]
+        let useBasalt := (Lean.Option.get (← getOptions) specimen.emitBasalt)
+          && deriveSort matches .Generator
+        -- `DecOpt` is three-valued, and the two failures mean different things: `ok false` is a
+        -- definite "this constructor does not apply", `error` only says the checker ran out of budget.
+        --
+        -- Under `Plausible.Gen` there is nowhere to put that difference — failure is a single thrown
+        -- error — so both collapse. Under Basalt they must not: a refutation is `Fail.fail` and an
+        -- undecided premise `FailWith`, so an inconclusive premise stays inconclusive. Collapsing
+        -- `error` into a refutation would let a *derived* checker that merely ran out of fuel be
+        -- reported as a definite refutation of the whole branch, and `backtrack` would then be
+        -- entitled to report a refutation for a relation that is in fact inhabited. This is the same
+        -- distinction the `size = 0` case preserves with `Specimen.truncated`.
+        let cases ←
+          if useBasalt then do
+            let falseCase ← `(Term.matchAltExpr|
+              | $(mkIdent ``Except.ok) $(mkIdent ``false) => $backtrackGenRefuteFn)
+            let errCase ← `(Term.matchAltExpr| | _ => $basaltInconclusiveFn)
+            pure #[trueCase, falseCase, errCase]
+          else do
+            let wildCardCase ← `(Term.matchAltExpr| | _ => $failFn $genericFailure)
+            pure #[trueCase, wildCardCase]
         `(match $m1:term with $cases:matchAlt*)
       | .Theorem, .Checker => do
         -- For theorem mode: return the error as a value rather than throwing,
@@ -452,8 +510,13 @@ mutual
       let typedArgs := List.zip args argTyExprs
       let argsTuple ← mkTuple typedArgs
       let propBody ← delabMexpAsExpr prop
+      -- Under Basalt a constrained sub-producer is looked up through `BacktrackGenFor` rather than
+      -- `ArbitrarySizedSuchThat`, both for the recorded instance constraint and for the call.
+      let useBasalt := (Lean.Option.get (← getOptions) specimen.emitBasalt)
+        && prodSort matches .Generator
       let typeClassName :=
-        match prodSort with
+        if useBasalt then Name.mkStr1 "BacktrackGenFor"
+        else match prodSort with
         | .Enumerator => ``EnumSizedSuchThat
         | .Generator => ``ArbitrarySizedSuchThat
       let typeClassInstance ← `($(mkIdent typeClassName) `_ (fun $argsTuple:term => $propBody))
@@ -463,7 +526,8 @@ mutual
       StateT.modifyGet $ fun instances =>
         let producerWithArgs := MExp.MFun typedArgs prop
         let producerMExp :=
-          match prodSort with
+          if useBasalt then backtrackGenForCall producerWithArgs fuel
+          else match prodSort with
           | .Enumerator => enumSizedST producerWithArgs fuel
           | .Generator => arbitrarySizedST producerWithArgs fuel
         (producerMExp, instances.push typeClassInstance)
@@ -494,7 +558,7 @@ def scheduleStepToMExp (step : ScheduleStep) (defFuel : MExp) (k : MExp) (output
     | Source.NonRec hyp => do
       let ty ← hypothesisExprToTSyntaxTerm hyp
       let tyExpr := ToExpr.toExpr hyp
-      let producer ← unconstrainedProducer prodSort ty
+      let producer ← unconstrainedProducer prodSort ty defFuel
       pure $ .MBind monadSort producer [⟨v,tyExpr⟩] k
     | Source.Rec f args | Source.MutRec f args =>
       pure $ .MBind monadSort (recCall f fuelPrimeName sizeExpr args) [⟨v, outputType⟩] k
@@ -536,6 +600,26 @@ def scheduleStepToMExp (step : ScheduleStep) (defFuel : MExp) (k : MExp) (output
     pure $ .MBind .Checker checker [] k
   | .Match explicit scrutinee pattern =>
     pure $ .MMatch explicit (.MId scrutinee) [(pattern, k), (wildCardPattern, .MFail)]
+
+/-- The steps of a recursive constructor's schedule that decide whether its conclusion applies to the
+    inputs: its leading input matches, and the checks on inputs alone that follow them (a non-linear
+    conclusion's equalities among them). -/
+def conclusionSteps (steps : List ScheduleStep) : List ScheduleStep :=
+  steps.takeWhile fun
+    | .Match .. => true
+    | .Check (.NonRec _) _ => true
+    | _ => false
+
+/-- The `size = 0` stand-in for a recursive constructor: its conclusion is matched against the inputs
+    (`conclusionSteps`), and where it matches the constructor is cut off with `Specimen.truncated`
+    rather than refuted, since it would apply at a larger size. Where it does not match, the match
+    fails and refutes, so a disjunction none of whose recursive constructors could apply is still
+    refuted. Nothing after the conclusion is run, so no size is spent. -/
+def truncationToMExp (steps : List ScheduleStep) (defFuel : MExp) (recType : Expr)
+    (fuelPrimeName : Name := `fuel') (targetInductive : Name := `_unknown) : CompileScheduleM MExp :=
+  List.foldrM (fun step acc => scheduleStepToMExp step defFuel acc recType fuelPrimeName
+      (.MLit (.natVal 0)) targetInductive)
+    (.MConst (Name.mkStr2 "Specimen" "truncated")) (conclusionSteps steps)
 
 /-- Converts a `Schedule` (a list of `ScheduleStep`s along with a `ScheduleSort`,
     which acts as the conclusion of the schedule) to an `MExp`.

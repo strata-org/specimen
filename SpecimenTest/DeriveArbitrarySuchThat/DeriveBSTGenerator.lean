@@ -5,6 +5,7 @@ import Specimen.DeriveConstrainedProducer
 import SpecimenTest.CommonDefinitions.BinaryTree
 import SpecimenTest.DeriveDecOpt.DeriveBSTChecker
 import Plausible.Testable
+import Specimen.Basalt
 
 /-! Snapshot test: derived constrained generator for Binary Search Trees. -/
 

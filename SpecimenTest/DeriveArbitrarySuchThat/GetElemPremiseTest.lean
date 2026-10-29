@@ -2,6 +2,7 @@ import Plausible.Arbitrary
 import Specimen.ArbitrarySizedSuchThat
 import Specimen.DeriveConstrainedProducer
 import Specimen.DeriveArbitrary
+import Specimen.Basalt
 
 /-! Tests for `derive_generator` on inductive relations whose premises are
     headed by functions carrying unrepresentable implicit/instance arguments,

@@ -93,6 +93,71 @@ def genErrorType : Ident := mkIdent ``Plausible.GenError
 def genTypeConstructor : Ident := mkIdent ``Plausible.Gen
 def enumTypeConstructor : Ident := mkIdent $ Name.mkStr1 "Enumerator"
 
+/-! ## Basalt emission vocabulary (used when `specimen.emitBasalt` is set)
+
+    Spelled as plain names rather than with `` `` `` quotation because Specimen's deriver does not
+    import Basalt: the names only have to resolve in the *emitted* code's scope, which imports
+    `Specimen.Basalt`. `ArbitrarySizedSuchThat` and `Enumerator` above are handled the same way. -/
+
+/-- Basalt's generator class, the `[Gen G]` binder on emitted definitions. Spelled `_root_.Gen`
+    because a bare `Gen` is ambiguous with `Plausible.Gen` in any file with `open Plausible`. -/
+def basaltGenClass : Ident := mkIdent $ Name.mkStr2 "_root_" "Gen"
+
+/-- The type variable for the generator monad in emitted definitions. -/
+def basaltGenVar : Ident := mkIdent $ Name.mkStr1 "G"
+
+/-- The instance binders of a Basalt-targeted derived generator after `{G : Type → Type}`: a
+    generator monad that can refute (`Fail`), fail without refuting (`FailWith Specimen.Exhaustion`)
+    and backtrack among rules (`Specimen.Backtrack`, with `Specimen.MonoBacktrack`). -/
+def basaltFailClass : Ident := mkIdent $ Name.mkStr2 "Specimen" "Fail"
+def basaltFailWithClass : Ident := mkIdent $ Name.mkStr2 "Specimen" "FailWith"
+def basaltExhaustionType : Ident := mkIdent $ Name.mkStr2 "Specimen" "Exhaustion"
+def basaltBacktrackClass : Ident := mkIdent $ Name.mkStr2 "Specimen" "Backtrack"
+def basaltMonoBacktrackClass : Ident := mkIdent $ Name.mkStr2 "Specimen" "MonoBacktrack"
+
+def basaltInstBinders : MacroM (Array (TSyntax ``Lean.Parser.Term.bracketedBinder)) := do
+  let g := basaltGenVar
+  return #[← `(Lean.Parser.Term.bracketedBinderF| [$basaltGenClass $g]),
+    ← `(Lean.Parser.Term.bracketedBinderF| [$basaltFailClass $g]),
+    ← `(Lean.Parser.Term.bracketedBinderF| [$basaltFailWithClass $basaltExhaustionType $g]),
+    ← `(Lean.Parser.Term.bracketedBinderF| [$basaltBacktrackClass $g]),
+    ← `(Lean.Parser.Term.bracketedBinderF| [$basaltMonoBacktrackClass $g])]
+
+/-- `fun {G} [Gen G] [Fail G] [FailWith Specimen.Exhaustion G] [Specimen.Backtrack G] [Specimen.MonoBacktrack G] => body`. -/
+def basaltFun (body : TSyntax `term) : MacroM (TSyntax `term) := do
+  let g := basaltGenVar
+  `(fun {$g : Type → Type} [$basaltGenClass $g] [$basaltFailClass $g]
+      [$basaltFailWithClass $basaltExhaustionType $g] [$basaltBacktrackClass $g]
+      [$basaltMonoBacktrackClass $g] => $body)
+
+/-- `∀ {G} [Gen G] [Fail G] [FailWith Specimen.Exhaustion G] [Specimen.Backtrack G] [Specimen.MonoBacktrack G], ty`. -/
+def basaltForall (ty : TSyntax `term) : MacroM (TSyntax `term) := do
+  let g := basaltGenVar
+  `(∀ {$g : Type → Type} [$basaltGenClass $g] [$basaltFailClass $g]
+      [$basaltFailWithClass $basaltExhaustionType $g] [$basaltBacktrackClass $g]
+      [$basaltMonoBacktrackClass $g], $ty)
+
+/-- `BacktrackGenFor α P`, the Basalt counterpart of `ArbitrarySizedSuchThat`. Its `gen` field is
+    itself quantified over `{G}` and `basaltInstBinders`. -/
+def backtrackGenForTypeclass : Ident := mkIdent $ Name.mkStr1 "BacktrackGenFor"
+
+/-- The field name of `BacktrackGenFor`. -/
+def unqualifiedBacktrackGenForFn : Ident := mkIdent $ Name.mkStr1 "gen"
+
+/-- Basalt's weighted backtracking. Its branches are functions (`List (Nat × (Unit → G α))`), so the
+    emitted branch list wraps each producer in `fun (_ : Unit) => …` and only the branch selected is
+    built. -/
+def basaltBacktrackFn : Ident := mkIdent $ Name.mkStr3 "Specimen" "Backtrack" "backtrack"
+
+/-- `Specimen.outOfFuel`, replacing `throw Gen.outOfFuelError`. -/
+def backtrackGenExhaustFn : Ident := mkIdent $ Name.mkStr2 "Specimen" "outOfFuel"
+
+/-- `Specimen.inconclusive`, for a premise whose checker could not decide. -/
+def basaltInconclusiveFn : Ident := mkIdent $ Name.mkStr2 "Specimen" "inconclusive"
+
+/-- `Specimen.refute`, the definite failure, replacing `throw Plausible.Gen.genericFailure`. -/
+def backtrackGenRefuteFn : Ident := mkIdent $ Name.mkStr2 "Specimen" "refute"
+
 
 /-- Produces a fresh user-facing & *accessible* identifier with respect to the local context
     - Note: prefer using this function over `Core.mkFreshUserName`, which is meant

@@ -128,7 +128,7 @@ def sourceBook : PlanBook :=
   let src := sourceBook.toPinnedOrdersSource [bstSpec] "bstPinnedOrders"
   -- Elaborate it command by command, exactly as pasting it into a file would.
   for cmd in src.splitOn "\n\n" do
-    let cmd := cmd.trim
+    let cmd := cmd.trimAscii.toString
     if cmd.isEmpty || cmd.startsWith "--" then continue
     match Parser.runParserCategory (← getEnv) `command cmd with
     | .error e => throwError "emitted pin source does not parse: {e}\n{cmd}"
