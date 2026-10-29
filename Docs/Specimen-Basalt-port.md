@@ -275,7 +275,10 @@ whether some value makes the rest of the checker true. They ask through `Specime
 `Specimen.CheckerSearchAll`, which run the Basalt enumerator at `Specimen.Search` and stop at the first
 success, and fall back to the lazy-list `EnumSizedSuchThat` and `Enum` where only those exist. `Finite`
 is strict, so reading a premise there would build the whole enumeration before testing any of it.
-`SpecimenTest/CheckerSearchTest.lean` checks the search's answers against `Finite`'s.
+Its answer to every continuation is the Kleene disjunction of what `Finite` lists (`SearchesAs`, in
+`Specimen.Enum.Laws.Search`), walked for a derived enumerator in
+`SpecimenTest/Correctness/DerivedSearchLaw.lean`; `SpecimenTest/CheckerSearchTest.lean` checks the
+same by running both readings.
 
 `derive_enumerator`, the single-relation command `derive_mutual` superseded, ignores the flag and emits
 the lazy-list enumerator.

@@ -23,3 +23,4 @@ import Specimen.Enum.Laws
 import SpecimenTest.Correctness.EnumLaws
 import SpecimenTest.Correctness.EnumBacktrackingTest
 import SpecimenTest.Correctness.DerivedEnumLaw
+import SpecimenTest.Correctness.DerivedSearchLaw

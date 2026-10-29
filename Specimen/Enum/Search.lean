@@ -71,6 +71,29 @@ theorem any_map_mono {l : List β} {f g : β → Verdict} (h : ∀ b, f b ⊑ g 
   | nil => exact FlatOrder.rel.refl
   | cons b l ih => exact orElse_mono (h b) ih
 
+theorem any_ofFn_mono {n : Nat} {f g : Fin n → Verdict} (h : ∀ i, f i ⊑ g i) :
+    any (List.ofFn fun i _ => f i) ⊑ any (List.ofFn fun i _ => g i) := by
+  induction n with
+  | zero => exact FlatOrder.rel.refl
+  | succ n ih =>
+    rw [List.ofFn_succ, List.ofFn_succ]
+    exact orElse_mono (h 0) (ih fun i => h i.succ)
+
+@[simp] theorem orElse_no (a : Verdict) : orElse a (fun _ => .no) = a := by
+  cases a <;> rfl
+
+@[simp] theorem no_orElse (b : Unit → Verdict) : orElse .no b = b () := rfl
+
+theorem orElse_assoc (a : Verdict) (b c : Unit → Verdict) :
+    orElse (orElse a b) c = orElse a (fun _ => orElse (b ()) c) := by
+  cases a <;> cases hb : b () <;> cases hc : c () <;> simp [orElse, hb, hc]
+
+theorem any_append (l₁ l₂ : List (Unit → Verdict)) :
+    any (l₁ ++ l₂) = orElse (any l₁) (fun _ => any l₂) := by
+  induction l₁ with
+  | nil => rfl
+  | cons t l₁ ih => simp only [List.cons_append, any, ih, orElse_assoc]
+
 end Verdict
 
 /-- A search over the values of `α`: given what to ask of a value, the answer for all of them. -/
@@ -134,9 +157,9 @@ instance : MonoBind Search where
 
 /-- Every value of the range, in increasing order. -/
 instance : RandomChoice Search where
-  choose lo hi _ := ⟨fun k => Verdict.any ((List.range' lo (hi - lo + 1)).attach.map
-      fun p _ => k (.up ⟨p.1, by have := p.2; rw [List.mem_range'_1] at this; omega⟩)),
-    fun _ _ h => Verdict.any_map_mono fun _ => h _⟩
+  choose lo hi _ := ⟨fun k => Verdict.any (List.ofFn fun (i : Fin (hi - lo + 1)) _ =>
+      k (.up ⟨lo + i.val, by have := i.isLt; omega⟩)),
+    fun _ _ h => Verdict.any_ofFn_mono fun _ => h _⟩
 
 /-- A refutation: no value. -/
 instance : Fail Search := ⟨⟨fun _ => .no, monotone_const _⟩⟩
