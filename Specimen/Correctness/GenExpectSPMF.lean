@@ -197,4 +197,93 @@ theorem sok_backtrack_one (gs : List (Nat × (Unit → SGen A))) (hW : 0 < sumWe
   rw [sum_weight_sok gs h, ENNReal.div_self (by exact_mod_cast hW.ne') (ENNReal.natCast_ne_top _)] at hb
   exact hb
 
+/-! ## Exactly the first draw, where every branch succeeds surely -/
+
+/-- A run that succeeds surely has only successes in its support. -/
+theorem support_ok_of_sok {g : SGen A} (h : sok g = 1) :
+    ∀ o ∈ g.run.run.support, ∃ a, o = some (.ok a) := by
+  intro o ho
+  by_cases hs : ∃ a, o = some (.ok a)
+  · exact hs
+  exfalso
+  have hz : succVal (fun _ => (1 : ℝ≥0∞)) o = 0 := by
+    rcases o with _ | _ | a <;> simp_all [succVal]
+  have hpos : g.run.run o ≠ 0 := ho
+  have hle : SPMF.expect g.run.run (fun o' => succVal (fun _ => (1 : ℝ≥0∞)) o' +
+      ({o} : Set _).indicator 1 o') ≤ 1 := by
+    calc _ ≤ SPMF.expect g.run.run (fun _ => 1) := SPMF.expect_mono fun o' => by
+          by_cases e : o' = o
+          · subst e; simp [hz]
+          · simp only [Set.indicator, Set.mem_singleton_iff, e, ↓reduceIte, add_zero]
+            rcases o' with _ | _ | a' <;> simp [succVal]
+      _ = g.run.run.mass := SPMF.expect_one _
+      _ ≤ 1 := SPMF.mass_le_one _
+  rw [SPMF.expect_add] at hle
+  have h1 : SPMF.expect g.run.run (succVal fun _ => (1 : ℝ≥0∞)) = 1 := h
+  have h2 := SPMF.prob_singleton g.run.run o
+  unfold SPMF.prob at h2
+  rw [h1, h2] at hle
+  have : g.run.run o = 0 := by
+    have h3 : 1 + g.run.run o = 1 + 0 := by rw [add_zero]; exact le_antisymm hle le_self_add
+    exact (ENNReal.add_right_inj ENNReal.one_ne_top).mp h3
+  exact hpos this
+
+theorem pickDrop_mem {β : Type} : ∀ {gs : List (Nat × β)} {n k b rest},
+    pickDrop gs n = some (k, b, rest) → (k, b) ∈ gs
+  | [], _, _, _, _, h => by simp [pickDrop] at h
+  | (k', b') :: gs, n, k, b, rest, h => by
+    simp only [pickDrop] at h
+    split at h
+    · simp only [Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl, rfl⟩ := h
+      exact List.mem_cons_self
+    · cases hp : pickDrop gs (n - k') with
+      | none => simp [hp] at h
+      | some t =>
+        obtain ⟨k₀, b₀, r₀⟩ := t
+        simp only [hp, Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl, rfl⟩ := h
+        exact List.mem_cons_of_mem _ (pickDrop_mem hp)
+
+/-- Where every branch succeeds surely, the search is its first draw. -/
+theorem expect_searchWith_eq (f : A → ℝ≥0∞) : ∀ (fuel : Nat) (gs : List (Nat × (Unit → SGen A)))
+    (acc : Option Exhaustion), 0 < fuel → 0 < sumWeights gs → (∀ p ∈ gs, sok (p.2 ()) = 1) →
+    SPMF.expect (searchWith fuel gs acc).run (succVal f) =
+      (gs.map fun p => (p.1 : ℝ≥0∞) * sexpect (p.2 ()) f).sum / (sumWeights gs : ℝ≥0∞)
+  | 0, _, _, h, _, _ => absurd h (Nat.lt_irrefl _)
+  | _, [], _, _, h, _ => by simp [sumWeights] at h
+  | fuel + 1, p :: gs, acc, _, hW, hall => by
+    simp only [searchWith, OptionT.run_mk]
+    rw [SPMF.expect_bind]
+    calc _ = SPMF.expect (RandomChoice.choose 0 (sumWeights (p :: gs) - 1) (Nat.zero_le _) :
+            SPMF (ULift.{0} {x : Nat // 0 ≤ x ∧ x ≤ sumWeights (p :: gs) - 1}))
+          (fun n => drawn (fun g => sexpect (g ()) f) (pickDrop (p :: gs) n.down.val)) := by
+          congr 1
+          funext n
+          split
+          · rename_i heq
+            simp only [heq, drawn]
+            cases acc <;> simp [Backtrack.finish, OptionT.run_failure, SPMF.expect_pure, succVal]
+          · rename_i g rest heq
+            simp only [heq, drawn, sexpect]
+            rw [SPMF.expect_bind]
+            refine SPMF.expect_congr_support fun o ho => ?_
+            obtain ⟨a, rfl⟩ := support_ok_of_sok (hall _ (pickDrop_mem heq)) o ho
+            simp [SPMF.expect_pure, succVal]
+      _ = _ := by
+          rw [expect_choose_down _ _ (fun m => drawn (fun g => sexpect (g ()) f) (pickDrop (p :: gs) m)),
+            SPMF.expect_chooseNat_zero hW, sum_drawn_pickDrop]
+
+/-- Where every branch succeeds surely, `backtrack` is its first draw: each branch with its share of
+    the weight. -/
+theorem sexpect_backtrack_eq (gs : List (Nat × (Unit → SGen A))) (f : A → ℝ≥0∞)
+    (hW : 0 < sumWeights gs) (h : ∀ p ∈ gs, sok (p.2 ()) = 1) :
+    sexpect (Specimen.Backtrack.backtrack gs) f =
+      (gs.map fun p => (p.1 : ℝ≥0∞) * sexpect (p.2 ()) f).sum / (sumWeights gs : ℝ≥0∞) := by
+  have hlen : 0 < gs.length := by
+    cases gs with
+    | nil => simp [sumWeights] at hW
+    | cons => simp
+  exact expect_searchWith_eq f gs.length gs none hlen hW h
+
 end Specimen.Correctness
