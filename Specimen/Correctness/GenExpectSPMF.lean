@@ -286,4 +286,22 @@ theorem sexpect_backtrack_eq (gs : List (Nat × (Unit → SGen A))) (f : A → �
     | cons => simp
   exact expect_searchWith_eq f gs.length gs none hlen hW h
 
+/-! ## Draws -/
+
+/-- A draw at the sampler's monad is the SPMF draw, lifted. -/
+theorem sexpect_choose (lo hi : Nat) (h : lo ≤ hi) (f : ULift {x : Nat // lo ≤ x ∧ x ≤ hi} → ℝ≥0∞) :
+    sexpect (RandomChoice.choose lo hi h : SGen _) f =
+      SPMF.expect (RandomChoice.choose lo hi h : SPMF _) f := by
+  show SPMF.expect (ExceptT.lift (OptionT.lift (RandomChoice.choose lo hi h : SPMF _))).run.run
+    (succVal f) = _
+  rw [ExceptT.run_lift, OptionT.run_map, OptionT.run_lift, SPMF.expect_map, SPMF.expect_bind]
+  congr 1
+  funext a
+  simp [SPMF.expect_pure, succVal]
+
+theorem sexpect_chooseNat (lo hi : Nat) (h : lo ≤ hi) (f : Nat → ℝ≥0∞) :
+    sexpect (chooseNat lo hi h : SGen Nat) f =
+      (∑ x ∈ Finset.Icc lo hi, f x) / ((hi - lo + 1 : ℕ) : ℝ≥0∞) := by
+  rw [chooseNat, sexpect_map, sexpect_choose, ← SPMF.expect_chooseNat h, chooseNat, SPMF.expect_map]
+
 end Specimen.Correctness
