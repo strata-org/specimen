@@ -835,44 +835,55 @@ private def guardIf (sort : DeriveSort) (steps : List ScheduleStep) (t : TSyntax
   | some g => `(if $g then some $t else none)
   | none => `(some $t)
 
-/-- Under `specimen.emitBasalt`, a recursive constructor's branch for the `size = 0` pool, where it cannot
-    recurse: its conclusion matched against the inputs and, where it matches, `Specimen.truncated`
-    (`MExp.truncationToMExp`). Weight `1`, not the constructor's weight: the default weight function
-    gives a recursive constructor `0` at size `0`, and a branch of weight `0` is never tried, so it
-    could never say the search was cut short. `none` off the Basalt path, where the size-`0` pool is
-    the non-recursive constructors alone. -/
+/-- A recursive constructor's stand-in for the `size = 0` pool, where it cannot recurse: its
+    conclusion matched against the inputs and, where it matches, `Specimen.truncated`
+    (`MExp.truncationToMExp`), with the input guard dispatch would give its branch. -/
+private structure Truncation where
+  guard? : Option (TSyntax `term)
+  body : TSyntax `term
+
+/-- Under `specimen.emitBasalt`, a recursive constructor's truncation for the `size = 0` pool; `none`
+    off the Basalt path, where the size-`0` pool is the non-recursive constructors alone. -/
 private def truncationBranch (sort : DeriveSort) (steps : List ScheduleStep) (outputType : Expr)
-    (fuelPrimeName targetInductive : Name) : TermElabM (Option (TSyntax `term)) := do
+    (fuelPrimeName targetInductive : Name) : TermElabM (Option Truncation) := do
   unless Lean.Option.get (← getOptions) specimen.emitBasalt && (sort == .Generator || sort == .Enumerator) do
     return none
   let (body, _) ← StateT.run (s := #[]) (do
     let mexp ← MExp.truncationToMExp steps (.MId `initSize) outputType
       (fuelPrimeName := fuelPrimeName) (targetInductive := targetInductive)
     MExp.mexpToTSyntax mexp sort)
-  return some (← guardIf sort steps (← weightedBranch (← `(1)) body))
+  let guard? ← if ← dispatching sort then MExp.inputGuard? steps else pure none
+  return some { guard?, body }
 
-/-- A generator's `size = 0` pool gets one truncation branch, not one per recursive constructor:
-    `Specimen.truncated` when some recursive constructor's input guard holds. The branches never
-    succeed, so they change no success's probability, only the cost of a search, and every pick of
-    one was a wasted step (with 67 recursive constructors, `HasType`'s pool spent 39% of its picks on
-    them). What they decide is the label a failed search ends with; the one branch decides it from
-    the input matches alone, so a constructor whose input-only checks would fail now leaves the
-    search inconclusive rather than refuted. Enumerators keep one branch each, since their labels
-    are what `EnumeratesWith` relates. -/
-private def collapseTruncations (sort : DeriveSort) (ts : Array (TSyntax `term)) :
+/-- The `size = 0` pool's truncation branches. An enumerator gets one per recursive constructor, of
+    weight `1` (the default weight function gives a recursive constructor `0` at size `0`, and a
+    branch of weight `0` is never tried, so it could never say the search was cut short), since its
+    labels are what `EnumeratesWith` relates. A generator gets one branch for all of them,
+    `Specimen.truncations`: the constructors' matches and checks run in `Specimen.Label`, and the
+    branch fails with their labels joined, as the search over the separate branches would, since
+    those cannot succeed and draw nothing. Every pick of a separate branch was a wasted step — with 67
+    recursive constructors, `HasType`'s pool spent 39% of its picks on them. Its guard is the
+    disjunction of theirs: where none holds, every truncation refutes. -/
+private def truncationPool (sort : DeriveSort) (ts : Array Truncation) :
     TermElabM (Array (TSyntax `term)) := do
-  if ts.isEmpty || sort != .Generator then return ts
-  let branch ← weightedBranch (← `(1)) (← `($(mkIdent (Name.mkStr2 "Specimen" "truncated"))))
-  let mut guards : Array (TSyntax `term) := #[]
-  for t in ts do
-    match t with
-    | `(if $g then some $_ else none) => guards := guards.push g
-    | `(some $_) => return #[← `(some $branch)]
-    | _ => return #[branch]
-  let mut g := guards[0]!
-  for h in guards[1:] do
-    g ← `((($g : Bool) || ($h : Bool)))
-  return #[← `(if $g then some $branch else none)]
+  let guarded (g? : Option (TSyntax `term)) (t : TSyntax `term) : TermElabM (TSyntax `term) := do
+    if !(← dispatching sort) then return t
+    match g? with
+    | some g => `(if $g then some $t else none)
+    | none => `(some $t)
+  if ts.isEmpty then return #[]
+  if sort != .Generator then
+    return ← ts.mapM fun t => do guarded t.guard? (← weightedBranch (← `(1)) t.body)
+  let labelTy := mkIdent (Name.mkStr2 "Specimen" "Label")
+  let bodies ← ts.mapM fun t => `(($t.body : $labelTy _))
+  let branch ← weightedBranch (← `(1))
+    (← `($(mkIdent (Name.mkStr2 "Specimen" "truncations")) [$bodies,*]))
+  let guard? ← ts.foldlM (init := some none) fun acc t => do
+    match acc, t.guard? with
+    | some none, some g => pure (some (some g))
+    | some (some a), some g => pure (some (some (← `((($a : Bool) || ($g : Bool))))))
+    | _, _ => pure none
+  return #[← guarded guard?.join branch]
 
 /-- The branch list handed to `backtrack`: the guarded branches that pass, or the plain list when not
     dispatching. When no branch has a guard, the plain list is emitted too — every entry would be `some`,
@@ -1091,7 +1102,7 @@ def deriveConstrainedProducer
 
       -- Collect all the base / inductive producers into two Lean list terms
       -- Base producers are invoked when `size = 0`, inductive producers are invoked when `size > 0`
-      let baseProducers ← producerListTerm deriveSort (nonRecursiveProducers ++ (← collapseTruncations deriveSort truncationProducers))
+      let baseProducers ← producerListTerm deriveSort (nonRecursiveProducers ++ (← truncationPool deriveSort truncationProducers))
       let inductiveProducers ← producerListTerm deriveSort (nonRecursiveProducers ++ recursiveProducers)
 
       return (baseProducers, inductiveProducers, freshenedOutputNames, Lean.mkIdent <$> freshUnknowns, localCtx))
@@ -1465,7 +1476,7 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
     let freshSizePrimeName := `size'
     let mut nonRecursiveProducers : Array (TSyntax `term) := #[]
     let mut recursiveProducers : Array (TSyntax `term) := #[]
-    let mut truncationProducers : Array (TSyntax `term) := #[]
+    let mut truncationProducers : Array Truncation := #[]
     let freshSize' := Lean.mkIdent freshSizePrimeName
     -- Helper: rewrite Source.Rec to use globalName + rewrite sibling calls
     let rewriteSchedule := fun (steps : List ScheduleStep) =>
@@ -1535,11 +1546,11 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
         | .Enumerator =>
           -- Under Basalt the truncation branches say what this failsafe says, per constructor.
           if Lean.Option.get (← getOptions) specimen.emitBasalt then
-            pure (nonRecursiveProducers ++ truncationProducers)
+            pure (nonRecursiveProducers ++ (← truncationPool key.deriveSort truncationProducers))
           else
             let failsafe ← `($failFn $(mkIdent ``Gen.outOfFuelError))
             pure (nonRecursiveProducers.push failsafe)
-        | .Generator => pure (nonRecursiveProducers ++ (← collapseTruncations key.deriveSort truncationProducers))
+        | .Generator => pure (nonRecursiveProducers ++ (← truncationPool key.deriveSort truncationProducers))
       else
         pure nonRecursiveProducers
     let baseProducers ← producerListTerm key.deriveSort baseProducersWithFailsafe
@@ -2064,7 +2075,7 @@ def deriveConstrainedProducerParts
         throwError "Cannot derive constrained producer for '{inductiveName}': no constructor schedules were generated"
       if nonRecursiveProducers.isEmpty then
         throwError "Cannot derive constrained producer for '{inductiveName}': all constructors are recursive (no finite base case)"
-      let baseProducers ← producerListTerm deriveSort (nonRecursiveProducers ++ (← collapseTruncations deriveSort truncationProducers))
+      let baseProducers ← producerListTerm deriveSort (nonRecursiveProducers ++ (← truncationPool deriveSort truncationProducers))
       let inductiveProducers ← producerListTerm deriveSort (nonRecursiveProducers ++ recursiveProducers)
       return (baseProducers, inductiveProducers, freshenedOutputNames, Lean.mkIdent <$> freshUnknowns, localCtx))
   return (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, outputTypes, localCtx, inductiveName, inductiveLevels, producerSort)

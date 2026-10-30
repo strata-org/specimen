@@ -86,7 +86,11 @@ noncomputable def lkStep (iS : Nat) : SGenStep (List type × type) Nat :=
                 | _ => Specimen.refute)
             else none,
             if (match i.1 with | List.cons _ _ => true | _ => false) then
-              some (1, fun (_ : Unit) => Specimen.truncated)
+              some (1, fun (_ : Unit) =>
+                Specimen.truncations
+                  [((match i.1 with
+                    | List.cons _ _ => Specimen.truncated
+                    | _ => Specimen.refute) : Specimen.Label Nat)])
             else none])
     | Nat.succ size' =>
       Specimen.Backtrack.backtrack
