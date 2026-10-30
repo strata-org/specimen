@@ -82,7 +82,15 @@ noncomputable def typStep (iS : Nat) : SGenStep (List type × type) term :=
             some (3, fun (_ : Unit) =>
               @BacktrackGenFor.gen _ (fun (x : Nat) => @lookup i.1 x i.2) _ SGen _ _ _ _ _ _ iS iS >>=
                 fun x => pure (term.Var x)),
-            some (1, fun (_ : Unit) => Specimen.truncated)])
+            some (1, fun (_ : Unit) =>
+              Specimen.truncations
+                [((match i.2 with
+                  | type.Nat => Specimen.truncated
+                  | _ => Specimen.refute) : Specimen.Label term),
+                 ((match i.2 with
+                  | type.Fun _ _ => Specimen.truncated
+                  | _ => Specimen.refute) : Specimen.Label term),
+                 (Specimen.truncated : Specimen.Label term)])])
     | Nat.succ size' =>
       Specimen.Backtrack.backtrack
         (List.filterMap (fun o => o)

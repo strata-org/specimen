@@ -40,4 +40,23 @@ instance instFailExceptT {ε : Type} {G : Type → Type} [Monad G] [Fail G] : Fa
 instance instFailWithExceptT {ε : Type} {G : Type → Type} [Monad G] : FailWith ε (ExceptT ε G) :=
   ⟨fun e => ExceptT.mk (pure (.error e))⟩
 
+/-- The labels of runs that can only fail and draw nothing, joined as a search joins its branches'
+(a refutation adds nothing); `none` when every one refutes. -/
+def joinLabels {ε α : Type} [Max ε] : List (ExceptT ε (OptionT Id) α) → Option ε
+  | [] => none
+  | l :: ls =>
+    match l.run.run, joinLabels ls with
+    | some (.error e), some e' => some (max e e')
+    | some (.error e), none => some e
+    | _, r => r
+
+/-- Runs that can only fail and draw nothing, as one: it fails as a search over them would — every
+one run, the labels joined, refuted when all refute. A derived generator's `size = 0` truncations
+of its recursive rules, which would otherwise be one branch, and one pick, each. -/
+def truncations {ε α : Type} {G : Type → Type} [Max ε] [Fail G] [FailWith ε G]
+    (ls : List (ExceptT ε (OptionT Id) α)) : G α :=
+  match joinLabels ls with
+  | none => Fail.fail
+  | some e => FailWith.failWith e
+
 end Specimen
