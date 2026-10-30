@@ -248,10 +248,9 @@ theorem typing_gen_sound : ∀ (fuel iS sz : Nat) (G : List type) (t : type) (e 
           h
         simp only [List.filterMap_cons, List.filterMap_nil, Bool.false_eq_true, eq_self_iff_true,
           ite_false, ite_true, List.mem_cons, List.not_mem_nil, or_false] at hq
-        rcases hq with rfl | rfl | rfl | rfl
+        rcases hq with rfl | rfl | rfl
         · exact tconst hqa
         · exact tvar _ hqa
-        · simp at hqa
         · simp at hqa
       | succ sz =>
         obtain ⟨q, hq, _, hqa⟩ := produces_backtrack_ok _ _ h
@@ -278,9 +277,8 @@ theorem typing_gen_sound : ∀ (fuel iS sz : Nat) (G : List type) (t : type) (e 
           h
         simp only [List.filterMap_cons, List.filterMap_nil, Bool.false_eq_true, eq_self_iff_true,
           ite_false, ite_true, List.mem_cons, List.not_mem_nil, or_false] at hq
-        rcases hq with rfl | rfl | rfl
+        rcases hq with rfl | rfl
         · exact tvar _ hqa
-        · simp at hqa
         · simp at hqa
       | succ sz =>
         obtain ⟨q, hq, _, hqa⟩ := produces_backtrack_ok _ _ h

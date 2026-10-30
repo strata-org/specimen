@@ -851,6 +851,29 @@ private def truncationBranch (sort : DeriveSort) (steps : List ScheduleStep) (ou
     MExp.mexpToTSyntax mexp sort)
   return some (← guardIf sort steps (← weightedBranch (← `(1)) body))
 
+/-- A generator's `size = 0` pool gets one truncation branch, not one per recursive constructor:
+    `Specimen.truncated` when some recursive constructor's input guard holds. The branches never
+    succeed, so they change no success's probability, only the cost of a search, and every pick of
+    one was a wasted step (with 67 recursive constructors, `HasType`'s pool spent 39% of its picks on
+    them). What they decide is the label a failed search ends with; the one branch decides it from
+    the input matches alone, so a constructor whose input-only checks would fail now leaves the
+    search inconclusive rather than refuted. Enumerators keep one branch each, since their labels
+    are what `EnumeratesWith` relates. -/
+private def collapseTruncations (sort : DeriveSort) (ts : Array (TSyntax `term)) :
+    TermElabM (Array (TSyntax `term)) := do
+  if ts.isEmpty || sort != .Generator then return ts
+  let branch ← weightedBranch (← `(1)) (← `($(mkIdent (Name.mkStr2 "Specimen" "truncated"))))
+  let mut guards : Array (TSyntax `term) := #[]
+  for t in ts do
+    match t with
+    | `(if $g then some $_ else none) => guards := guards.push g
+    | `(some $_) => return #[← `(some $branch)]
+    | _ => return #[branch]
+  let mut g := guards[0]!
+  for h in guards[1:] do
+    g ← `((($g : Bool) || ($h : Bool)))
+  return #[← `(if $g then some $branch else none)]
+
 /-- The branch list handed to `backtrack`: the guarded branches that pass, or the plain list when not
     dispatching. When no branch has a guard, the plain list is emitted too — every entry would be `some`,
     so the `filterMap` would cost a pass and filter nothing, and generators with nothing to dispatch on stay
@@ -1068,7 +1091,7 @@ def deriveConstrainedProducer
 
       -- Collect all the base / inductive producers into two Lean list terms
       -- Base producers are invoked when `size = 0`, inductive producers are invoked when `size > 0`
-      let baseProducers ← producerListTerm deriveSort (nonRecursiveProducers ++ truncationProducers)
+      let baseProducers ← producerListTerm deriveSort (nonRecursiveProducers ++ (← collapseTruncations deriveSort truncationProducers))
       let inductiveProducers ← producerListTerm deriveSort (nonRecursiveProducers ++ recursiveProducers)
 
       return (baseProducers, inductiveProducers, freshenedOutputNames, Lean.mkIdent <$> freshUnknowns, localCtx))
@@ -1516,7 +1539,7 @@ def compileInductiveSchedule (indSched : InductiveSchedule)
           else
             let failsafe ← `($failFn $(mkIdent ``Gen.outOfFuelError))
             pure (nonRecursiveProducers.push failsafe)
-        | .Generator => pure (nonRecursiveProducers ++ truncationProducers)
+        | .Generator => pure (nonRecursiveProducers ++ (← collapseTruncations key.deriveSort truncationProducers))
       else
         pure nonRecursiveProducers
     let baseProducers ← producerListTerm key.deriveSort baseProducersWithFailsafe
@@ -2041,7 +2064,7 @@ def deriveConstrainedProducerParts
         throwError "Cannot derive constrained producer for '{inductiveName}': no constructor schedules were generated"
       if nonRecursiveProducers.isEmpty then
         throwError "Cannot derive constrained producer for '{inductiveName}': all constructors are recursive (no finite base case)"
-      let baseProducers ← producerListTerm deriveSort (nonRecursiveProducers ++ truncationProducers)
+      let baseProducers ← producerListTerm deriveSort (nonRecursiveProducers ++ (← collapseTruncations deriveSort truncationProducers))
       let inductiveProducers ← producerListTerm deriveSort (nonRecursiveProducers ++ recursiveProducers)
       return (baseProducers, inductiveProducers, freshenedOutputNames, Lean.mkIdent <$> freshUnknowns, localCtx))
   return (baseProducers, inductiveProducers, freshenedOutputNames, freshArgIdents, outputTypes, localCtx, inductiveName, inductiveLevels, producerSort)

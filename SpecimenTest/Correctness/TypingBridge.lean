@@ -82,18 +82,6 @@ noncomputable def typStep (iS : Nat) : SGenStep (List type × type) term :=
             some (3, fun (_ : Unit) =>
               @BacktrackGenFor.gen _ (fun (x : Nat) => @lookup i.1 x i.2) _ SGen _ _ _ _ _ _ iS iS >>=
                 fun x => pure (term.Var x)),
-            if (match i.2 with | type.Nat => true | _ => false) then
-              some (1, fun (_ : Unit) =>
-                match i.2 with
-                | type.Nat => Specimen.truncated
-                | _ => Specimen.refute)
-            else none,
-            if (match i.2 with | type.Fun _ _ => true | _ => false) then
-              some (1, fun (_ : Unit) =>
-                match i.2 with
-                | type.Fun _ _ => Specimen.truncated
-                | _ => Specimen.refute)
-            else none,
             some (1, fun (_ : Unit) => Specimen.truncated)])
     | Nat.succ size' =>
       Specimen.Backtrack.backtrack
@@ -186,10 +174,9 @@ theorem typStep_sound (iS : Nat) (hlk : LookupSound iS) : StepGenSoundB (typStep
       obtain ⟨p, hp, _, hpx⟩ := produces_backtrack_ok _ _ hx
       simp only [List.filterMap_cons, List.filterMap_nil, Bool.false_eq_true, eq_self_iff_true,
         ite_false, ite_true, List.mem_cons, List.not_mem_nil, or_false] at hp
-      rcases hp with rfl | rfl | rfl | rfl
+      rcases hp with rfl | rfl | rfl
       · exact tconst _ hpx
       · exact tvar _ hpx
-      · simp at hpx
       · simp at hpx
     | succ sz =>
       simp only [typStep] at hx
@@ -217,9 +204,8 @@ theorem typStep_sound (iS : Nat) (hlk : LookupSound iS) : StepGenSoundB (typStep
       obtain ⟨p, hp, _, hpx⟩ := produces_backtrack_ok _ _ hx
       simp only [List.filterMap_cons, List.filterMap_nil, Bool.false_eq_true, eq_self_iff_true,
         ite_false, ite_true, List.mem_cons, List.not_mem_nil, or_false] at hp
-      rcases hp with rfl | rfl | rfl
+      rcases hp with rfl | rfl
       · exact tvar _ hpx
-      · simp at hpx
       · simp at hpx
     | succ sz =>
       simp only [typStep] at hx
