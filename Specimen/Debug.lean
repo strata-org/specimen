@@ -50,6 +50,115 @@ register_option specimen.emitBasalt : Bool := {
   descr := "emit derived generators against Basalt's `Gen` algebra instead of `Plausible.Gen`"
 }
 
+/-- When true (with `specimen.emitBasalt`), `derive_mutual` proves each derived generator sound for its
+    relation, as `#specimen_sound` does: `W.sound` next to each worker `W`. Requires
+    `import Specimen.Correctness.SoundOf` in the deriving file. A generator whose proof does not close
+    is still emitted, with a warning; a hand-written instance's law is a fact for the proofs when
+    tagged `@[specimen_sound]`. -/
+register_option specimen.emitSound : Bool := {
+  defValue := false
+  descr := "prove derived generators sound for their relations (needs Specimen.Correctness.SoundOf)"
+}
+
+/-- When true, `derive_mutual` reports each derived producer rule's rejection points: the checks,
+    matches and required output shapes that can fail on a value the rule drew
+    (`Specimen.Rejections`). -/
+register_option specimen.reportRejections : Bool := {
+  defValue := false
+  descr := "report derived producers' rejection points"
+}
+
+/-- When true, `derive_mutual` compiles each spec's code in a task of its own, in parallel; the code
+    and the order it is emitted in are as without it. -/
+register_option specimen.parallelCodegen : Bool := {
+  defValue := false
+  descr := "compile derived specs' code in parallel tasks"
+}
+
+/-- When true, with `specimen.emitSound`, each block's proofs are split per worker into theorems for
+    the induction's base and step, which Lean elaborates in parallel (as it does any `theorem`), and
+    assembled by `Nat.rec`; the next components go on while they run. A proof that does not close is
+    then an error of the file, rather than a warning that the block was not proved. -/
+register_option specimen.parallelProofs : Bool := {
+  defValue := false
+  descr := "prove each derived block's workers as parallel theorems (with specimen.emitSound)"
+}
+
+/-- What `specimen.emitSound` runs on each derived component: its generators, as (worker, relation,
+    output indices), and the soundness theorems of the generators derived so far. Set by
+    `Specimen.Correctness.SoundOf`, which the deriver cannot import. -/
+initialize specimenSoundHook :
+    IO.Ref (Option (Array (Name × Name × List Nat) → Array Name → Elab.Command.CommandElabM Unit)) ←
+  IO.mkRef none
+
+/-- What `specimen.emitSound` runs on each derived component's checkers, as (worker, relation), with
+the soundness theorems derived so far; first, the generators and enumerators of the same mutual block,
+as for `specimenSoundHook`, to be proved sound with them. Set by `Specimen.Correctness.CheckSoundOf`. -/
+initialize specimenCheckSoundHook :
+    IO.Ref (Option (Array (Name × Name × List Nat) → Array (Name × Name) → Array Name →
+      Elab.Command.CommandElabM Unit)) ←
+  IO.mkRef none
+
+/-- What `specimen.emitSound` runs on each derived component's enumerators, with the theorems derived
+so far: their searches' laws. Set by `Specimen.Correctness.EnumSoundOf`. -/
+initialize specimenEnumSoundHook :
+    IO.Ref (Option (Array Name → Array Name → Elab.Command.CommandElabM Unit)) ←
+  IO.mkRef none
+
+/-- When true, a derived **generator** emitted against Basalt (`specimen.emitBasalt`) shares a rule's
+    size budget among its size-consuming calls by drawing a split (`Specimen.SizeSplit.drawEven`: each
+    call its floor, the remainder uniformly over its compositions) instead of handing each the quotient
+    `size' / k`. Enumerators and checkers always divide. See `specimen.splitFloor`. -/
+register_option specimen.sizeSplit : Bool := {
+  defValue := false
+  descr := "in Basalt generators, draw a split of the size budget among recursive calls"
+}
+
+/-- Under `specimen.sizeSplit`, the share of `size' / k` (per mille) each call is guaranteed before the
+    remainder is split: 0 is the uniform split, 1000 spreads only what the quotient leaves. -/
+register_option specimen.splitFloor : Nat := {
+  defValue := 0
+  descr := "under specimen.sizeSplit, per-mille of the equal share guaranteed to each call"
+}
+
+/-- Under `specimen.sizeSplit`, floor functions for relations' recursive calls, as
+    `"Rel:floorFn,…"`: a rule's call to `Rel` is guaranteed `floorFn` at the call's inputs, the least
+    size it can succeed at, and the rest of the size is split uniformly. -/
+register_option specimen.splitFloors : String := {
+  defValue := ""
+  descr := "under specimen.sizeSplit, per-relation floor functions of a call's inputs: Rel:fn,…"
+}
+
+/-- Under `specimen.sizeSplit`, derive each generator worker's floor function `W.floor` from its
+    schedules (`Specimen.DeriveFloors`) and guarantee each of a rule's calls to it its floor. Off by
+    default; a relation's `specimen.splitFloors` entry takes precedence. -/
+register_option specimen.deriveFloors : Bool := {
+  defValue := false
+  descr := "under specimen.sizeSplit, derive each generator's floor function and use it in the split"
+}
+
+/-- When true (with `specimen.emitBasalt`), `derive_mutual` proves each derived generator complete:
+    `W.complete` (every derivation is produced at every large enough size) and a
+    `BacktrackGenForComplete` instance, relative to the `BacktrackGenForComplete` and
+    `ArbitrarySizedComplete` instances of what it calls. Its instances then run their workers at fuel
+    `size + 1` rather than `specimen.fuel`. Requires `import Specimen.Correctness.CompleteOf`. -/
+register_option specimen.emitComplete : Bool := {
+  defValue := false
+  descr := "prove derived generators complete (needs Specimen.Correctness.CompleteOf)"
+}
+
+/-- What `specimen.emitComplete` runs on each derived component's generators, as (worker, relation,
+    output indices). Set by `Specimen.Correctness.CompleteOf`. -/
+initialize specimenCompleteHook :
+    IO.Ref (Option (Array (Name × Name × List Nat) → Elab.Command.CommandElabM Unit)) ←
+  IO.mkRef none
+
+/-- What `specimen.deriveFloors` (with `specimen.emitSound`) runs on each derived component's
+    generators: their floors' lower bounds. Set by `Specimen.Correctness.FloorOf`. -/
+initialize specimenFloorHook :
+    IO.Ref (Option (Array (Name × Name × List Nat) → Elab.Command.CommandElabM Unit)) ←
+  IO.mkRef none
+
 /-- Fuel for derived generators (termination device). High values are fine; only decrease for testing. -/
 register_option specimen.fuel : Nat := {
   defValue := 10000
@@ -201,3 +310,53 @@ def withDebugFlag [Monad m] [MonadOptions m] [MonadWithOptions m] [MonadLog m] [
     if (← inDebugMode) then do
       action
       logInfo ""
+
+/-- Appends `line` to the file `SPECIMEN_TIMER_LOG` names, if set, and flushes. Lean holds a command's
+    standard streams until the command ends, so this is how a long derivation can be watched while it
+    runs. -/
+def timerLog (line : String) : IO Unit := do
+  if let some path ← IO.getEnv "SPECIMEN_TIMER_LOG" then
+    let h ← IO.FS.Handle.mk path .append
+    h.putStrLn line
+    h.flush
+
+/-- Time and count of each labelled step of the proof in progress (`timeIn`, the `timed` tactic),
+    reported to the file `SPECIMEN_TIMER_LOG` names. -/
+initialize tacticTimes : IO.Ref (Array (String × Nat × Nat)) ← IO.mkRef #[]
+
+/-- Whether `timeIn` records (`SPECIMEN_TACTIC_TIMES` set). Off by default: the totals are shared by
+every thread, and proofs elaborated in parallel would mostly wait on each other for them. -/
+initialize tacticTimesOn : Bool ← return (← IO.getEnv "SPECIMEN_TACTIC_TIMES").isSome
+
+/-- Run `x`, adding its time to `label`'s. -/
+def timeIn [Monad m] [MonadLiftT IO m] [MonadFinally m] (label : String) (x : m α) : m α := do
+  unless tacticTimesOn do return ← x
+  let t0 ← (IO.monoNanosNow : IO Nat)
+  try x
+  finally
+    let dt := (← (IO.monoNanosNow : IO Nat)) - t0
+    (tacticTimes.modify fun a =>
+      match a.findIdx? (·.1 == label) with
+      | some i => a.modify i fun (k, v, c) => (k, v + dt, c + 1)
+      | none => a.push (label, dt, 1) : IO Unit)
+
+/-- `timed "label" tac`: `tac`, its time added to `label`'s. -/
+syntax "timed " str ppSpace tactic : tactic
+
+open Elab Tactic in
+elab_rules : tactic | `(tactic| timed $l:str $t:tactic) => timeIn l.getString (evalTactic t)
+
+/-- Report and reset the totals. -/
+def reportTacticTimes (what : String) : IO Unit := do
+  let a ← tacticTimes.get
+  tacticTimes.set #[]
+  unless a.isEmpty do
+    timerLog s!"    {what} by step: {", ".intercalate (a.toList.map fun (k, v, c) => s!"{k} {v / 1000000} ms ×{c}")}"
+
+/-- The input positions the derived floor of worker `w` takes (`w.floorArgs`), or `none` where it has
+none recorded (every position). -/
+def Specimen.floorArgPositions (env : Lean.Environment) (w : Lean.Name) : Option (List Nat) := do
+  let ci ← env.find? (w ++ `floorArgs)
+  let v ← ci.value?
+  let (_, xs) ← v.listLit?
+  xs.mapM fun x => x.nat? <|> x.rawNatLit?

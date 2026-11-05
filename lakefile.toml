@@ -44,7 +44,7 @@ rev = "df72b022e558978a1c50264cfc4d7fec86fa8e04"
 [[require]]
 name = "basalt"
 # LOCAL ONLY: Basalt #35 + #36 (instrumentation opt-in), until both merge to Basalt main.
-path = "/local/home/segevem/basalt-pr35-36"
+path = "/local/home/segevem/basalt-walk-perf"
 
 # Benchmarks, in `bench/`. `lake build Bench` compiles them; nothing runs them by default. Each has an
 # executable for timing compiled code. See bench/README.md.

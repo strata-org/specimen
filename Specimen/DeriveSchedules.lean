@@ -222,8 +222,12 @@ def collectCheckedHypotheses (env : ScheduleEnv) (boundVars : List Name) (checke
     if i ∉ checkedHypotheses && List.all vars (List.all · (· ∈ boundVars)) then
       some (i, hyp)
     else none) env.sortedHypotheses
-
-  checkSteps
+  -- Equalities (a repeated conclusion variable's, a function call's) are the cheapest checks: run
+  -- them before premises that may recurse, so a constructor whose conclusion does not match the inputs
+  -- is rejected without the recursion. Every hypothesis here has all its variables bound, so the order
+  -- is free. The callers emit this list reversed.
+  let (eqs, others) := checkSteps.partition fun (_, (h, _)) => h == ``Eq
+  others ++ eqs
 
 /-- Determines whether inputs & outputs of a generator appear under the same constructor in a hypothesis `hyp`
     - Example: consider the `TApp` constructor for STLC (when we are generating `e` such that `typing Γ e τ` holds):

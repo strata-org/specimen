@@ -203,3 +203,83 @@ class EnumFor (α : Type) (P : α → Prop) where
   enum : ∀ {G : Type → Type} [Gen G] [Specimen.Fail G] [Specimen.FailWith Specimen.Exhaustion G]
     [Specimen.Backtrack G] [Specimen.MonoBacktrack G] [Specimen.Pick G], (size leafSize : Nat) → G α
 
+
+namespace Specimen.SizeSplit
+
+/-! ## Dividing a rule's size budget among its calls
+
+A rule with `k` calls to the relation being derived shares its size `size'` among them. Each call is
+first given its floor, the size it is known to need, and what is left is split uniformly over all the
+ways of splitting it: every composition of the remainder into `k` parts equally likely. The first part
+is drawn with weight the number of ways to split what it leaves among the others, then the rest the
+same way, so no part is favoured. -/
+
+/-- The ways to split `r` into `k + 1` parts. -/
+def count : Nat → Nat → Nat
+  | _, 0 => 1
+  | r, k + 1 => ((List.range (r + 1)).map fun j => count (r - j) k).sum
+
+theorem count_pos : ∀ (r k : Nat), 0 < count r k
+  | _, 0 => Nat.one_pos
+  | r, k + 1 => by
+    simp only [count]
+    rw [List.range_succ_eq_map]
+    simp only [List.map_cons, List.sum_cons, Nat.sub_zero]
+    exact Nat.lt_of_lt_of_le (count_pos r k) (Nat.le_add_right _ _)
+
+theorem weights_pos {G : Type → Type} [Monad G] (k r : Nat) :
+    0 < (((List.range (r + 1)).map fun j => (count (r - j) k, fun _ : Unit => (pure j : G Nat))).map
+      Prod.fst).sum := by
+  rw [List.range_succ_eq_map]
+  simp only [List.map_cons, List.sum_cons, Nat.sub_zero]
+  exact Nat.lt_of_lt_of_le (count_pos r k) (Nat.le_add_right _ _)
+
+/-- A composition of `r` into `k` parts, uniformly. -/
+def uniform {G : Type → Type} [Gen G] : Nat → Nat → G (List Nat)
+  | 0, _ => pure []
+  | 1, r => pure [r]
+  | k + 2, r => do
+    let j ← frequency ((List.range (r + 1)).map fun j => (count (r - j) k, fun _ => pure j))
+      (weights_pos k r)
+    let rest ← uniform (k + 1) (r - j)
+    pure (j :: rest)
+
+/-- The floors met in order, as far as `total` reaches. -/
+def greedy : List Nat → Nat → List Nat
+  | [], _ => []
+  | f :: fs, t => min f t :: greedy fs (t - min f t)
+
+/-- A split of `total` among calls with floors `floors`: each its floor, and the remainder split
+uniformly (`uniform`). Where the floors exceed `total`, they are met in order as far as it reaches. -/
+def draw {G : Type → Type} [Gen G] (floors : List Nat) (total : Nat) : G (List Nat) :=
+  if floors.sum ≤ total then do
+    let parts ← uniform floors.length (total - floors.sum)
+    pure (List.zipWith (· + ·) parts floors)
+  else pure (greedy floors total)
+
+/-- `k` calls, each with floor `floor‰` of the equal share `total / k`. -/
+def drawEven {G : Type → Type} [Gen G] (k floor total : Nat) : G (List Nat) :=
+  draw (List.replicate k (total / k * min floor 1000 / 1000)) total
+
+/-- The `i`th part of a split. -/
+abbrev sizeAt (parts : List Nat) (i : Nat) : Nat := parts.getD i 0
+
+end Specimen.SizeSplit
+
+namespace Specimen.SizeSplit
+
+/-- The least of the costs of the rules that apply, `0` where none does (the generator then fails
+whatever its size). -/
+def minFloor : List (Option Nat) → Nat
+  | [] => 0
+  | none :: cs => minFloor cs
+  | some c :: cs => match minFloorAux cs with
+    | none => c
+    | some c' => min c c'
+where
+  minFloorAux : List (Option Nat) → Option Nat
+    | [] => none
+    | none :: cs => minFloorAux cs
+    | some c :: cs => some (match minFloorAux cs with | none => c | some c' => min c c')
+
+end Specimen.SizeSplit

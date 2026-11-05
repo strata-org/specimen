@@ -482,7 +482,11 @@ def mkConstrainedProducerMutualPieces
         let arbitraryTypeParamInstances ← mkTypeClassInstanceBinders typeParams instTypeClasses
         if useBasalt then
           -- The leaf size is the worker's `initSize`; the search's size is its `size`.
-          let leafCallArgs : TSyntaxArray `term := #[(⟨fuelLit⟩ : TSyntax `term),
+          -- Proved complete, the instance runs its worker at fuel `size + 1`: every recursive call
+          -- has less size, so no recursion is deeper, and completeness then holds at every size.
+          let instFuel : TSyntax `term ← if Lean.Option.get (← getOptions) specimen.emitComplete then
+              `($freshSizeIdent + 1) else pure ⟨fuelLit⟩
+          let leafCallArgs : TSyntaxArray `term := #[instFuel,
             (freshLeafSizeIdent : TSyntax `term), (freshSizeIdent : TSyntax `term)] ++
             (TSyntaxArray.mk outerParams)
           `(command|
