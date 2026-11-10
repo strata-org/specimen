@@ -44,7 +44,7 @@ rev = "df72b022e558978a1c50264cfc4d7fec86fa8e04"
 [[require]]
 name = "basalt"
 git = "https://github.com/hgoldstein95/basalt"
-rev = "2c6e912897f96ab8838617f69494a5916b2ef078"
+rev = "a90bfb5cf91fc04ea38a9cf56a46d22957fb3772"
 
 # Benchmarks, in `bench/`. `lake build Bench` compiles them; nothing runs them by default. Each has an
 # executable for timing compiled code. See bench/README.md.
