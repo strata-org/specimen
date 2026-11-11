@@ -1187,7 +1187,7 @@ def extractTypeParamRefs (typeParams : Std.HashSet Name) : ConstructorExpr → S
     instance requires on Sort-typed params. Used for external deps (already in env). -/
 private partial def synthExternalConstraints (indName : Name) (args : List ConstructorExpr)
     (typeParamNames : Array Name) (tcName : Name)
-    (outputVarNames : List Name := []) : TermElabM (Array Name) := do
+    (outputVarNames : List Name := []) (touched : Bool := false) : TermElabM (Array Name) := do
   let depIndInfo ← try getConstInfoInduct indName
     catch _ =>
       if typeParamNames.contains indName then
@@ -1198,7 +1198,9 @@ private partial def synthExternalConstraints (indName : Name) (args : List Const
       return #[]
   let depArgTypes ← getComponentsOfArrowType depIndInfo.type
   let depArgTypes := depArgTypes.pop
-  let mut touches := false
+  -- (`touched`: the caller saw a type parameter in an output's type, which the arguments need not
+  -- show, an implicit argument's being elided)
+  let mut touches := touched
   for i in [:args.length] do
     match args[i]! with
     | .Unknown varName =>
@@ -1208,7 +1210,11 @@ private partial def synthExternalConstraints (indName : Name) (args : List Const
     | _ => pure ()
   if !touches then return #[]
   Meta.withNewMCtxDepth do
+    -- (the Basalt classes are over `Type`: asked of them, the relation's universes are those that
+    -- make its type arguments `Type`s)
+    let basaltClass := tcName == `BacktrackGenFor || tcName == `EnumFor
     let indLevels ← depIndInfo.levelParams.mapM (fun _ => do
+      if basaltClass then pure (Level.succ .zero) else
       let lv ← Meta.mkFreshLevelMVar; pure (.succ lv))
     let numArgs := depArgTypes.size
     let outputIndices := computeOutputIndices args outputVarNames
@@ -1230,8 +1236,8 @@ private partial def synthExternalConstraints (indName : Name) (args : List Const
               let outputTypes ← outputFVars.mapM (fun e => inferType e)
               let outType ← tupleOfListM (throwError "empty")
                 (fun t' rest => do
-                  let u ← Meta.mkFreshLevelMVar
-                  let v ← Meta.mkFreshLevelMVar
+                  let u ← if basaltClass then pure Level.zero else Meta.mkFreshLevelMVar
+                  let v ← if basaltClass then pure Level.zero else Meta.mkFreshLevelMVar
                   pure (Lean.mkApp2 (Lean.mkConst ``Prod [u, v]) t' rest)) outputTypes
               withLocalDecl `x .default outType fun xFvar => do
                 let mut projections : Array Expr := #[]
@@ -1291,7 +1297,13 @@ private partial def synthExternalConstraints (indName : Name) (args : List Const
             withLocalDecl (Name.mkSimple s!"inst_enum_{instIdx}") .instImplicit enumTy fun _ =>
             withLocalDecl (Name.mkSimple s!"inst_arb_{instIdx}") .instImplicit arbTy fun _ =>
             withLocalDecl (Name.mkSimple s!"inst_deceq_{instIdx}") .instImplicit decEqTy fun _ =>
-              buildSynth (idx + 1) (.app t fv) (fvars.push fv) (instIdx + 1)
+              -- the Basalt class too, which the Basalt instances (`BacktrackGenFor`, `EnumFor`) ask
+              -- for, on a type parameter that is a `Type`
+              if basaltClass then do
+                let bArbTy ← mkAppM (Name.mkStr2 "Basalt" "ArbitrarySized") #[fv]
+                withLocalDecl (Name.mkSimple s!"inst_barb_{instIdx}") .instImplicit bArbTy fun _ =>
+                  buildSynth (idx + 1) (.app t fv) (fvars.push fv) (instIdx + 1)
+              else buildSynth (idx + 1) (.app t fv) (fvars.push fv) (instIdx + 1)
           else
             buildSynth (idx + 1) (.app t fv) (fvars.push fv) instIdx
     try buildSynth 0 (.const indName indLevels) #[] 0
@@ -1376,25 +1388,48 @@ def computeSpecConstraints (indSched : InductiveSchedule)
         let sibKey : SpecKey := { inductiveName := sibName, outputIndices := [], deriveSort := .Checker }
         if let some sibCs := sibs[sibKey]? then
           for c in sibCs do constraints := constraints.insert c
-    | .SuchThat _ (.NonRec (indName, args)) ps =>
-      let refs := args.foldl (fun acc a => acc.union (extractTypeParamRefs typeParamSet a)) ({} : Std.HashSet Name)
+    | .SuchThat vs (.NonRec (indName, args)) ps =>
+      -- the type parameters the step's arguments mention, and those its outputs' types do: an output
+      -- of a type parameter's type may show it nowhere else (`a = b` has it only as `Eq`'s implicit
+      -- argument), and its producer then needs that parameter's classes all the same
+      let outTyRefs := vs.foldl (fun acc (_, t?) => match t? with
+        | some t => acc.union (extractTypeParamRefs typeParamSet t)
+        | none => acc) ({} : Std.HashSet Name)
+      let refs := args.foldl (fun acc a => acc.union (extractTypeParamRefs typeParamSet a)) outTyRefs
       if !refs.isEmpty then
         let ds := match ps with | .Generator => DeriveSort.Generator | .Enumerator => .Enumerator
         let outputIndices := computeOutputIndices args
           ((match step with | .SuchThat vs _ _ => vs.map Prod.fst | _ => []))
         let depKey : SpecKey := { inductiveName := indName, outputIndices := outputIndices, deriveSort := ds }
-        match depConstraintMap[depKey]? with
+        -- A dependency's own constraints, if it is derived here. None recorded is no answer where an
+        -- output's type shows a type parameter the arguments do not (`Eq` producing an equal pair,
+        -- which an existing instance serves): the instance's are synthesized then, as for one not
+        -- derived here.
+        let known := (depConstraintMap[depKey]? <|> siblingConstraints.bind (·[depKey]?)).filter
+          fun cs => !cs.isEmpty || outTyRefs.isEmpty
+        match known with
         | some depCs => for c in depCs do constraints := constraints.insert c
         | none =>
-          let fromSibling := siblingConstraints.bind (·[depKey]?)
-          match fromSibling with
-          | some depCs => for c in depCs do constraints := constraints.insert c
-          | none =>
+          do
             let tcName := match ps with
               | .Generator => ``ArbitrarySizedSuchThat
               | .Enumerator => ``EnumSizedSuchThat
             let outNames := match step with | .SuchThat vs _ _ => vs.map Prod.fst | _ => []
-            let found ← synthExternalConstraints indName args typeParamNames tcName outNames
+            -- Under Basalt the producer called is the Basalt class's instance, whose instance
+            -- arguments (`Basalt.ArbitrarySized α`, for a pair constrained equal) are the ones the
+            -- emitted declaration must bind: that class asked first, the Plausible one only if it
+            -- finds nothing (a producer reached through the bridge)
+            let emitBasalt := Lean.Option.get (← getOptions) specimen.emitBasalt
+            let basaltTc : Option Name := if !emitBasalt then none else match ps with
+              | .Generator => some `BacktrackGenFor
+              | .Enumerator => some `EnumFor
+            let touched := !outTyRefs.isEmpty
+            let found ← match basaltTc with
+              | some tc => do
+                let f ← synthExternalConstraints indName args typeParamNames tc outNames touched
+                if f.isEmpty then synthExternalConstraints indName args typeParamNames tcName outNames touched
+                else pure f
+              | none => synthExternalConstraints indName args typeParamNames tcName outNames touched
             for c in found do constraints := constraints.insert c
     | .SuchThat _ (.Rec ..) _ => pure ()
     | .SuchThat _ (.MutRec sibName _) _ =>
@@ -2600,6 +2635,11 @@ def emitSpecComponents
       throwError "specimen.emitSound with an enumerator needs `import Specimen.Correctness.EnumSoundOf`"
     if sorts.contains .Checker && (← specimenCheckSoundHook.get).isNone then
       throwError "specimen.emitSound with a checker needs `import Specimen.Correctness.CheckSoundOf`"
+  let complete ← if basalt && Lean.Option.get (← getOptions) specimen.emitComplete then
+      match ← specimenCompleteHook.get with
+      | some hook => pure (some hook)
+      | none => throwError "specimen.emitComplete needs `import Specimen.Correctness.CompleteOf`"
+    else pure none
   -- A worker is declared in the current namespace; one from an earlier command may be elsewhere.
   let declared (w : Name) : CommandElabM Name := do
     let w' := (← getCurrNamespace) ++ w
@@ -2746,6 +2786,13 @@ def emitSpecComponents
               unless ens.isEmpty do dispatch (.search ens) soundNames
               for w in ens do
                 if (← getEnv).contains (w ++ `searchSound) then soundNames := soundNames.push (w ++ `searchSound)
+    if let some hook := complete then
+      let allSorts := Lean.Option.get (← getOptions) specimen.completeAllSorts
+      let gens ← (compMeta.filter fun (k, _) => k.deriveSort == .Generator ||
+          (allSorts && (k.deriveSort == .Enumerator || k.deriveSort == .Checker))).mapM fun (k, w) =>
+        return (← declared w, k.inductiveName, k.outputIndices)
+      let gens ← gens.filterM fun (w, _, _) => return !(← getEnv).contains (w ++ `complete)
+      unless gens.isEmpty do hook gens
 
 @[command_elab mutual_deriver]
 def elabDeriveMutual : CommandElab := fun stx => do

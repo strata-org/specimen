@@ -136,12 +136,86 @@ register_option specimen.splitFloors : String := {
   descr := "under specimen.sizeSplit, per-relation floor functions of a call's inputs: Rel:fn,…"
 }
 
+/-- When true (with `specimen.emitBasalt`), `derive_mutual` proves each derived generator complete:
+    `W.complete` (every derivation is produced at every large enough size) and a
+    `BacktrackGenForComplete` instance, relative to the `BacktrackGenForComplete` and
+    `ArbitrarySizedComplete` instances of what it calls. Its instances then run their workers at fuel
+    `size + 1` rather than `specimen.fuel`. Requires `import Specimen.Correctness.CompleteOf`. -/
+register_option specimen.emitComplete : Bool := {
+  defValue := false
+  descr := "prove derived generators complete (needs Specimen.Correctness.CompleteOf)"
+}
+
+register_option specimen.deferComplete : Bool := {
+  defValue := false
+  descr := "with specimen.emitComplete, record each component's generators instead of proving them \
+    complete, for `#specimen_complete_*` commands in files that import this one: completeness split \
+    across files, which Lean checks in parallel (within a file, its kernel checks run one at a time)"
+}
+
+register_option specimen.completeDropUnreachable : Bool := {
+  defValue := false
+  descr := "the completeness parts' walks drop the branches that cannot return the case's value \
+    (`basalt.walk.dropUnreachable`)"
+}
+
+register_option specimen.reachExtended : Bool := {
+  defValue := false
+  descr := "`reach_close` also: fixes what a check is about from a premise or its negation in context, \
+    rewrites a `match` with a premise either way round, and accepts a search over a type's unconstrained \
+    values (`CheckerSearchAll`). `specimen_complete_case` turns it on only for a case the plain search \
+    does not close, which pays nothing for the cases it does"
+}
+
+register_option specimen.reachSimpAll : Bool := {
+  defValue := true
+  descr := "`reach_close` tries `simp_all` last on a check's premise (costly; rarely what closes it)"
+}
+
+register_option specimen.searchSeparately : Bool := {
+  defValue := false
+  descr := "with specimen.completeAllSorts, the completeness blocks do not prove the enumerators' \
+    searches (`searchHits`): `#specimen_prove_all_but` does, before them"
+}
+
+register_option specimen.completeAllSorts : Bool := {
+  defValue := false
+  descr := "with specimen.emitComplete, prove the derived enumerators and checkers complete too, not \
+    only the generators: each enumerator's `complete` and its searches' `searchHits`/`searchTotal`, each \
+    checker's `complete`, and their instances' `EnumForComplete`, `EnumForSearch` and `DecOptComplete`"
+}
+
+register_option specimen.splitMinWorkers : Nat := {
+  defValue := 4
+  descr := "`#specimen_prove_setup`: the components with at least this many workers are split across     `#specimen_prove_part` files; the rest are proved by the setup"
+}
+
+register_option specimen.skipFailedParts : Bool := {
+  defValue := false
+  descr := "a slice of a component's completeness parts declares only the parts it proves, each \
+    proved in a task of its own; the rest are left to `#specimen_prove_finish`, in a file that \
+    imports more (no part is admitted)"
+}
+
+register_option specimen.admitFailedParts : Bool := {
+  defValue := false
+  descr := "a completeness part whose proof fails (or runs out of heartbeats) is admitted with `sorry` \
+    and a warning rather than an error, so that the file still compiles (`lean -o` writes no `.olean` \
+    for a file with errors); the theorems that use it then depend on `sorryAx`, as they would anyway"
+}
+
 register_option specimen.deferSound : Bool := {
   defValue := false
   descr := "with specimen.emitSound, record the soundness proofs' steps instead of running them, for \
-    `#specimen_sound_replay` in a file that imports this one (the proofs checked alongside other \
-    files, rather than before them)"
+    `#specimen_sound_replay` in a file that imports this one (soundness proved alongside the files \
+    that prove completeness, rather than before them)"
 }
+
+/-- What `specimen.emitComplete` runs on each derived component's generators, as (worker, relation,
+    output indices). Set by `Specimen.Correctness.CompleteOf`. -/
+initialize specimenCompleteHook :
+    IO.Ref (Option (Array (Name × Name × List Nat) → Elab.Command.CommandElabM Unit)) ←
+  IO.mkRef none
 
 /-- Fuel for derived generators (termination device). High values are fine; only decrease for testing. -/
 register_option specimen.fuel : Nat := {

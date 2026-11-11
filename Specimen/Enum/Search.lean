@@ -41,10 +41,14 @@ theorem eq_undef_or_eq {x y : Verdict} (h : x ⊑ y) : x = .undef ∨ x = y := b
   | bot => exact .inl rfl
   | refl => exact .inr rfl
 
-/-- Kleene disjunction, left to right: `yes` as soon as one side says so, without running the right
-side; `undef` as soon as an unfinished side is reached. -/
+/-- Disjunction, left to right: `yes` as soon as one side says so, without running the right side
+once the left has. An unfinished left side (`undef`) does not hide a `yes` on the right: parallel
+or, which is as monotone as the sequential one, so that a search answers `yes` whenever some value
+it lists is accepted, however its other branches end. -/
 def orElse : Verdict → (Unit → Verdict) → Verdict
-  | .undef, _ => .undef
+  | .undef, b => match b () with
+    | .yes => .yes
+    | _ => .undef
   | .yes, _ => .yes
   | .no, b => b ()
   | .unknown, b => match b () with
@@ -60,7 +64,15 @@ def any : List (Unit → Verdict) → Verdict
 theorem orElse_mono {a₁ a₂ : Verdict} {b₁ b₂ : Unit → Verdict} (ha : a₁ ⊑ a₂) (hb : b₁ () ⊑ b₂ ()) :
     orElse a₁ b₁ ⊑ orElse a₂ b₂ := by
   rcases eq_undef_or_eq ha with rfl | rfl
-  · exact FlatOrder.rel.bot
+  · -- an unfinished left side: `yes` only for a right side that says so, which stays so
+    cases h1 : b₁ () with
+    | yes =>
+      have h2 : b₂ () = .yes := by
+        rw [h1] at hb; rcases eq_undef_or_eq hb with h | h
+        · cases h
+        · exact h.symm
+      cases a₂ <;> simp only [orElse, h1, h2] <;> exact FlatOrder.rel.refl
+    | _ => simp only [orElse, h1]; exact FlatOrder.rel.bot
   · rcases eq_undef_or_eq hb with h | h
     · cases a₁ <;> simp only [orElse, h] <;> first | exact FlatOrder.rel.bot | exact FlatOrder.rel.refl
     · cases a₁ <;> simp only [orElse, h] <;> exact FlatOrder.rel.refl
