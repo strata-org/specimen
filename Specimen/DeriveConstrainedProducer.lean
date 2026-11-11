@@ -13,6 +13,7 @@ import Specimen.PatternCoverage
 import Specimen.Rejections
 import Specimen.Utils
 import Specimen.Debug
+import Specimen.DeriveFloors
 import Plausible.Arbitrary
 
 import Lean.Elab.Command
@@ -2454,7 +2455,45 @@ def compileSpecComponents (components : List (List SpecKey))
       compMeta.toList.map (fun (k, gn) => (k.inductiveName, k.outputIndices, gn, k.deriveSort))
     let mut defCmds : Array (TSyntax `command) := #[]
     let mut instCmds : Array (TSyntax `command) := #[]
-    -- Each spec's code in a task of its own (`specimen.parallelCodegen`).
+    -- The component's floor functions first (`specimen.deriveFloors`): its workers' splits call them.
+    if Lean.Option.get (← getOptions) specimen.deriveFloors && Lean.Option.get (← getOptions) specimen.sizeSplit
+        && Lean.Option.get (← getOptions) specimen.emitBasalt then
+      for (key, globalName) in compMeta do
+        let some (.done indSched) := finalMemo[key]? | continue
+        if indSched.alreadyExists || key.deriveSort != .Generator then continue
+        let tF0 ← IO.monoNanosNow
+        let some (cmds, fallback) ← liftTermElabM (Specimen.DeriveFloors.floorCmds indSched globalName)
+          | continue
+        let tF1 ← IO.monoNanosNow
+        -- The candidates in turn (refined, then plain); one that does not elaborate (its recursion
+        -- not structural, say) is dropped, and if none does the floor is `0`.
+        let saved ← get
+        let mut done := false
+        let mut why : Array String := #[]
+        for cand in cmds do
+          for cmd in cand do elabCommand cmd
+          -- Its unfolding equation too, which the floor's proofs rewrite by: Lean states it lazily,
+          -- and cannot for some structural recursions.
+          unless (← get).messages.hasErrors do
+            let eqDef := mkIdent (globalName ++ `floor ++ `eq_def)
+            elabCommand (← `(command| example := @$eqDef))
+          if (← get).messages.hasErrors && !saved.messages.hasErrors then
+            let errs := (← get).messages.toList.filter (·.severity == .error) |>.drop
+              (saved.messages.toList.filter (·.severity == .error)).length
+            why := why ++ (← errs.mapM (·.data.toString)).toArray
+            set saved
+          else
+            done := true; break
+        unless done do
+          for cmd in fallback do elabCommand cmd
+          logWarning m!"specimen.deriveFloors: {globalName}.floor not derived ({"; ".intercalate why.toList}); \
+            its calls get floor 0"
+        if reportTimers && !why.isEmpty && done then
+          timerLog s!"  floorfn {key.inductiveName}{key.outputIndices}: refined floor dropped: {("; ".intercalate why.toList).take 400}"
+        if reportTimers then
+          timerLog s!"  floorfn {key.inductiveName}{key.outputIndices}: derive {(tF1 - tF0) / 1000000} ms, elab {((← IO.monoNanosNow) - tF1) / 1000000} ms at {tF0 / 1000000}"
+    -- Each spec's code in a task of its own (`specimen.parallelCodegen`), started now that the
+    -- component's floors, which the code calls, are in the environment the task copies.
     if parallel then
       let mut started : Array (SpecKey × Option (Task (Except Exception
           ((TSyntax `command × TSyntax `command) × MessageLog × Nat × Option (String × String))))) := #[]
@@ -2786,6 +2825,19 @@ def emitSpecComponents
               unless ens.isEmpty do dispatch (.search ens) soundNames
               for w in ens do
                 if (← getEnv).contains (w ++ `searchSound) then soundNames := soundNames.push (w ++ `searchSound)
+    if Lean.Option.get (← getOptions) specimen.deriveFloors && sound.isSome then
+      if let some hook ← specimenFloorHook.get then
+        let gens ← (compMeta.filter fun (k, _) => k.deriveSort == .Generator).mapM fun (k, w) =>
+          return (← declared w, k.inductiveName, k.outputIndices)
+        let gens ← gens.filterM fun (w, _, _) => do
+          let env ← getEnv
+          return env.contains (w ++ `floor) && !env.contains (w ++ `floorSound)
+        unless gens.isEmpty do
+          let t0 ← IO.monoNanosNow
+          hook gens
+          if Lean.Option.get (← getOptions) specimen.reportPhaseTimers then
+            let proved := (← getEnv).contains (gens[0]!.1 ++ `floorSound)
+            timerLine s!"⏱ floor {gens[0]!.2.1} ({gens.size} workers): {((← IO.monoNanosNow) - t0) / 1000000} ms{if proved then "" else " NOT PROVED"}"
     if let some hook := complete then
       let allSorts := Lean.Option.get (← getOptions) specimen.completeAllSorts
       let gens ← (compMeta.filter fun (k, _) => k.deriveSort == .Generator ||

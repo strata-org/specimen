@@ -1,7 +1,6 @@
 import Specimen
 import Specimen.Basalt
-import Specimen.Correctness.CheckSoundOf
-import Specimen.Correctness.EnumSoundOf
+import Specimen.Correctness.FloorOf
 
 /-! A derived generator whose rules check premises with derived checkers: the checkers' soundness
 (`checkSound`), and the generator's soundness through it. -/

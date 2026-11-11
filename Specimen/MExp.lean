@@ -732,6 +732,11 @@ def scheduleToMExp (schedule : Schedule) (mfuel : MExp) (defFuel : MExp) (recTyp
     | [r, f] => if r.trimAscii.toString == targetInductive.toString then some f.trimAscii.toString.toName
                 else none
     | _ => none
+  -- Or the derived floor of the worker called (`specimen.deriveFloors`), where it was derived.
+  let derived := Lean.Option.get (← getOptions) specimen.deriveFloors
+  let env ← getEnv
+  let ns ← getCurrNamespace
+  let hasFloor (f : Name) : Bool := env.contains (f ++ `floor) || env.contains (ns ++ f ++ `floor)
   -- A floor can only read what is in scope when the split is drawn: not what a later step binds.
   let firstSized := scheduleSteps.findIdx? isSizeConsuming
   let boundBy : ScheduleStep → List Name := fun
@@ -749,9 +754,23 @@ def scheduleToMExp (schedule : Schedule) (mfuel : MExp) (defFuel : MExp) (recTyp
     | some fn, .Unconstrained _ (.Rec _ args) _ | some fn, .SuchThat _ (.Rec _ args) _ =>
       if inScope args then .MApp .allExplicit (.MConst fn) (args.map (constructorExprToMExp .allExplicit))
       else .MLit (.natVal 0)
+    | none, .Unconstrained _ (.Rec f args) _ | none, .SuchThat _ (.Rec f args) _
+    | none, .Unconstrained _ (.MutRec f args) _ | none, .SuchThat _ (.MutRec f args) _ =>
+      -- at the positions the floor reads (`floorArgs`), the others irrelevant to it
+      let fl := if env.contains (f ++ `floor) then f else ns ++ f
+      let args := match Specimen.floorArgPositions env fl with
+        | some ps => ps.filterMap fun j => args[j]?
+        | none => args
+      if derived && hasFloor f && inScope args then
+        .MApp .allExplicit (.MConst (f ++ `floor)) (args.map (constructorExprToMExp .allExplicit))
+      else .MLit (.natVal 0)
     | _, _ => .MLit (.natVal 0)
   let uniformFloor := Lean.Option.get (← getOptions) specimen.splitFloor
-  let anyFloor := floorFn?.isSome
+  let anyFloor := floorFn?.isSome || (derived && (scheduleSteps.filter isSizeConsuming).any fun st =>
+    match st with
+    | .Unconstrained _ (.Rec f _) _ | .SuchThat _ (.Rec f _) _
+    | .Unconstrained _ (.MutRec f _) _ | .SuchThat _ (.MutRec f _) _ => hasFloor f
+    | _ => false)
   let split : MExp :=
     if anyFloor then
       let floors := (scheduleSteps.filter isSizeConsuming).map callFloor

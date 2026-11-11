@@ -269,3 +269,20 @@ abbrev sizeAt (parts : List Nat) (i : Nat) : Nat := parts.getD i 0
 
 end Specimen.SizeSplit
 
+namespace Specimen.SizeSplit
+
+/-- The least of the costs of the rules that apply, `0` where none does (the generator then fails
+whatever its size). -/
+def minFloor : List (Option Nat) → Nat
+  | [] => 0
+  | none :: cs => minFloor cs
+  | some c :: cs => match minFloorAux cs with
+    | none => c
+    | some c' => min c c'
+where
+  minFloorAux : List (Option Nat) → Option Nat
+    | [] => none
+    | none :: cs => minFloorAux cs
+    | some c :: cs => some (match minFloorAux cs with | none => c | some c' => min c c')
+
+end Specimen.SizeSplit

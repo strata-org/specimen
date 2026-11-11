@@ -157,7 +157,7 @@ values); `specimen_complete_case` turns it on only for a case the plain search d
 derivation that does not need it pays nothing.
 
 The tests are in `Specimen/Correctness/*Test.lean` (one feature each: `EmitSoundTest`, `CompleteOfTest*`,
-`CheckSearchTest`, `SearchPolyTest`, `SizeSplitTest`, …) and `SpecimenTest/Correctness/Suite`
+`CheckSearchTest`, `SearchPolyTest`, `FloorCompleteTest`, …) and `SpecimenTest/Correctness/Suite`
 (relations derived in several modes with every law proved and audited: search trees, permutations,
 STLC, regular expressions, a key-value store, polymorphic relations, …), all built by the test
 library (`lake test`).
