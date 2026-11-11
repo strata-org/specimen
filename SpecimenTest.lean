@@ -188,6 +188,7 @@ import SpecimenTest.Interp.DiagnoseTest
 -- so the whole library can also be built with the flag on (see the comment in `lakefile.toml`).
 import SpecimenTest.BasaltEmissionTest
 import SpecimenTest.BasaltEnumeratorTest
+import SpecimenTest.CheckerSearchTest
 -- …and without `Specimen.Basalt`, Basalt stays unloaded and the flag asks for the import
 import SpecimenTest.BasaltNotImportedTest
 -- …and a dependency with only a hand-written Plausible generator is derived for Basalt, not missed

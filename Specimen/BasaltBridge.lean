@@ -1,4 +1,6 @@
 import Specimen.Enum.BacktrackWith
+import Specimen.Enum.Search
+import Specimen.EnumeratorCombinators
 import Basalt.OptionT
 import Basalt.PlausibleGen
 import Plausible.Arbitrary
@@ -75,12 +77,56 @@ def Specimen.toEnumeratorEntries (x : Specimen.Finite (Except Specimen.Exhaustio
       | .ok a => .ok a
       | .error _ => .error Gen.outOfFuelError)
 
-/-- A Basalt-derived enumerator called by a checker of its own `derive_mutual` block, which reaches the
-worker directly rather than through `EnumSizedSuchThat`: read as that instance reads it, with the
-worker's own budgets. -/
-def Specimen.basaltEnumeration (x : ExceptT Specimen.Exhaustion Specimen.Finite α) :
-    ExceptT GenError Enumerator α :=
-  fun _ => Specimen.toEnumeratorEntries x.run
+/-! ## What a derived checker asks of an enumeration
+
+A checker asks whether some value an enumeration lists makes its continuation true. Under
+`specimen.emitBasalt` it asks through these classes, which answer from the Basalt classes with
+`Specimen.Search`, stopping at the first success, and fall back to Specimen's lazy-list enumerators
+where only those exist. -/
+
+/-- A checker's answer as a search reads it. -/
+def Specimen.Verdict.ofCheck : Except GenError Bool → Specimen.Verdict
+  | .ok true => .yes
+  | .ok false => .no
+  | .error _ => .unknown
+
+/-- A search's answer as a checker reports it: undecided, or unfinished, is inconclusive. -/
+def Specimen.Verdict.toCheck : Specimen.Verdict → Except GenError Bool
+  | .yes => .ok true
+  | .no => .ok false
+  | .unknown | .undef => .error Gen.outOfFuelError
+
+/-- Whether some value satisfying `P`, enumerated with these budgets, satisfies the continuation. -/
+class Specimen.CheckerSearch (α : Type) (P : α → Prop) where
+  search : (size leafSize : Nat) → (α → Except GenError Bool) → Except GenError Bool
+
+instance {α : Type} {P : α → Prop} [EnumFor α P] : Specimen.CheckerSearch α P where
+  search size leafSize k :=
+    ((EnumFor.enum (P := P) (G := Specimen.Search) size leafSize).run
+      (Specimen.Verdict.ofCheck ∘ k)).toCheck
+
+instance (priority := low) {α : Type} {P : α → Prop} [EnumSizedSuchThat α P] :
+    Specimen.CheckerSearch α P where
+  search size leafSize k :=
+    EnumeratorCombinators.enumeratingOpt (EnumSizedSuchThat.enumSizedST P size) k leafSize
+
+/-- Whether some value of `α` up to the leaf size satisfies the continuation. -/
+class Specimen.CheckerSearchAll (α : Type) where
+  search : (leafSize : Nat) → (α → Except GenError Bool) → Except GenError Bool
+
+instance [Basalt.ArbitrarySized α] : Specimen.CheckerSearchAll α where
+  search leafSize k :=
+    ((Basalt.ArbitrarySized.arbitrarySized (G := Specimen.Search) leafSize).run
+      (Specimen.Verdict.ofCheck ∘ k)).toCheck
+
+instance (priority := low) [Enum α] : Specimen.CheckerSearchAll α where
+  search leafSize k := EnumeratorCombinators.enumerating Enum.enum k leafSize
+
+/-- An enumerator of a checker's own `derive_mutual` block, which the checker reaches directly
+rather than through `CheckerSearch`: the worker at `Search`, with its own budgets. -/
+def Specimen.searchWorker (s : Specimen.Search α) (k : α → Except GenError Bool) :
+    Except GenError Bool :=
+  (s.run (Specimen.Verdict.ofCheck ∘ k)).toCheck
 
 /-- A Basalt-derived enumerator runs as an `EnumSizedSuchThat`, read at `ExceptT Exhaustion Finite`:
 everything up to the size, by its law exactly what the enumerator can succeed with. A derived
