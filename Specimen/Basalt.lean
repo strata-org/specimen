@@ -1,4 +1,5 @@
 import Specimen.BasaltBridge
+import Specimen.SamplerAgreement
 import Specimen.DeriveBasaltArbitrary
 
 /-!
@@ -9,7 +10,8 @@ Import this in any file that derives generators or enumerators with
 
 - Basalt's `Gen` and Specimen's `Fail`, `FailWith`, `Backtrack`, `Pick`, `BacktrackGenFor` and `EnumFor`, which
   producers derived under the flag are emitted against, so the names must resolve in the deriving file;
-- the bridges that run a `BacktrackGenFor` wherever an `ArbitrarySizedSuchThat` is expected and an
+- the bridges that run a `BacktrackGenFor` wherever an `ArbitrarySizedSuchThat` is expected, at
+  `Specimen.Sampler` (`Specimen.SamplerAgreement`: as at `Specimen.BasaltSampler`), and an
   `EnumFor` wherever an `EnumSizedSuchThat` is (`Specimen.BasaltBridge`);
 - `deriving instance Basalt.ArbitrarySized for T` (`Specimen.DeriveBasaltArbitrary`), needed for
   every datatype a derived generator or enumerator draws unconstrained values of.

@@ -159,6 +159,29 @@ pool's truncation branches among them. -/
     Produces (Specimen.inconclusive : SGen A) x ↔ False :=
   iff_false_intro (not_produces_inconclusive x)
 
+/-! The failures as labels, so that `simp` evaluates the truncation branch's `joinLabels`. -/
+
+@[simp] theorem Label.run_refute : (Specimen.refute : Specimen.Label A).run.run = none := rfl
+@[simp] theorem Label.run_truncated :
+    (Specimen.truncated : Specimen.Label A).run.run = some (.error .truncated) := rfl
+@[simp] theorem Label.run_inconclusive :
+    (Specimen.inconclusive : Specimen.Label A).run.run = some (.error .inconclusive) := rfl
+@[simp] theorem Label.run_outOfFuel :
+    (Specimen.outOfFuel : Specimen.Label A).run.run = some (.error .fuel) := rfl
+
+attribute [simp] Specimen.joinLabels
+
+/-- The `size = 0` pool's one truncation branch, failing with its rules' labels joined. -/
+theorem not_produces_truncations (ls : List (Specimen.Label A)) (x : A) :
+    ¬ Produces (Specimen.truncations ls : SGen A) x := by
+  unfold Specimen.truncations
+  split <;> simp [Produces, Fail.fail, ExceptT.lift, OptionT.run_failure, FailWith.failWith,
+    OptionT.run_pure]
+
+@[simp] theorem produces_truncations_iff (ls : List (Specimen.Label A)) (x : A) :
+    Produces (Specimen.truncations ls : SGen A) x ↔ False :=
+  iff_false_intro (not_produces_truncations ls x)
+
 /-! ### Failures
 
 `Produces` is an `∃` over executions. Two statements about failure need the other outcomes: a run
@@ -337,6 +360,13 @@ theorem refutes_backtrack {gs : List (Nat × (Unit → SGen A))}
 
 @[simp] theorem refutes_refute_iff : Refutes (Specimen.refute : SGen A) ↔ True :=
   iff_true_intro refutes_refute
+
+/-- The truncation branch refutes exactly when every one of its rules does. -/
+@[simp] theorem refutes_truncations_iff (ls : List (Specimen.Label A)) :
+    Refutes (Specimen.truncations ls : SGen A) ↔ Specimen.joinLabels ls = none := by
+  unfold Specimen.truncations
+  split <;> simp_all [Refutes, Fail.fail, ExceptT.lift, OptionT.run_failure, FailWith.failWith,
+    OptionT.run_pure]
 
 /-- A search with a branch of positive weight that cannot fail cannot fail: that branch is tried
 before the search can stop, and succeeds. -/

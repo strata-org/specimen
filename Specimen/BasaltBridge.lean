@@ -9,6 +9,7 @@ import Specimen.ArbitrarySizedSuchThat
 import Specimen.Enumerators
 import Specimen.GeneratorCombinators
 import Specimen.BasaltClasses
+import Specimen.Sampler
 
 /-!
 # Running Basalt-derived generators through Specimen's Plausible machinery
@@ -41,7 +42,8 @@ def BasaltSampler.toPlausibleGen (x : BasaltSampler α) : Plausible.Gen α := do
 end Specimen
 
 /-- A Basalt-derived generator runs as an `ArbitrarySizedSuchThat` by instantiating its generator monad
-at `Specimen.BasaltSampler` and turning its failures into Plausible's errors. Its leaf size is
+at `Specimen.Sampler`, the one-layer form of `Specimen.BasaltSampler` (the same runs:
+`Specimen.SamplerAgreement`), and turning its failures into Plausible's errors. Its leaf size is
 Plausible's ambient size, which is what a Plausible-path generator's unconstrained values read.
 
 `priority := low`, so a hand-written or Plausible-path `ArbitrarySizedSuchThat` for the same relation
@@ -54,7 +56,7 @@ the boundary. -/
 instance (priority := low) {α : Type} {P : α → Prop} [BacktrackGenFor α P] :
     ArbitrarySizedSuchThat α P where
   arbitrarySizedST size := do
-    (BacktrackGenFor.gen (P := P) (G := Specimen.BasaltSampler) size (← Gen.getSize)).toPlausibleGen
+    (BacktrackGenFor.gen (P := P) (G := Specimen.Sampler) size (← Gen.getSize)).toPlausibleGen
 
 /-- A Basalt unconstrained generator is a Plausible one at `Plausible.Gen`. Low priority, so a native
 Plausible instance keeps winning and an existing test's distribution is unchanged. -/

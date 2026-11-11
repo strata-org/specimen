@@ -56,6 +56,10 @@ abbrev truncated [FailWith Exhaustion G] : G α := FailWith.failWith Exhaustion.
 /-- A premise's checker could not decide. -/
 abbrev inconclusive [FailWith Exhaustion G] : G α := FailWith.failWith Exhaustion.inconclusive
 
+/-- Where a rule's `size = 0` truncation is evaluated for `truncations`: its conclusion's matches and
+input-only checks draw nothing, so they run here to the label they end with. -/
+abbrev Label := ExceptT Exhaustion (OptionT Id)
+
 end Specimen
 
 /-- A generator for `α` whose successes satisfy `P`; the Basalt counterpart of

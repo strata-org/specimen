@@ -5,6 +5,7 @@ import Specimen.Enum.Laws.BacktrackWith
 import Specimen.Enum.Laws.BacktrackWithCost
 import Specimen.Enum.Laws.BacktrackWithWeight
 import Specimen.Enum.Laws.Search
+import Specimen.Enum.Laws.Truncations
 import Specimen.Enum.Laws.Basic
 import Specimen.Enum.Laws.Cost
 import Specimen.Enum.Laws.Fail
