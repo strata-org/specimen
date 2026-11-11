@@ -49,16 +49,10 @@ def enumDependencySatisfyingOrderingsTree {α v} [BEq α] [Repr α] [Repr v] [BE
     match remaining with
     | [] => ⟨currentOrder, ⟨fun _ => []⟩⟩
     | (h, deps) :: rest =>
-      let inOrder := Id.run do
-        let mut inOrder := []
-        let mut env := []
-        for (h', vs) in deps do
-          if !(vs.removeAll env).isEmpty then
-            inOrder := h' :: inOrder
-          env := vs ++ env
-        return inOrder
-
-      -- let inOrder := deps.filter (currentOrder.contains ·)
+      -- Every neighbour already placed is an anchor (as QuickChick's `build_ordering_tree`): a
+      -- neighbour whose shared variables an earlier neighbour *in the list* covers may still come
+      -- before that neighbour in the order, so dropping it drops the positions between them.
+      let inOrder := (deps.map Prod.fst).filter (currentOrder.contains ·)
       let chunks := splitIntoChunks currentOrder inOrder
       let insertionPositions := List.range (chunks.numAnchors + 1)
 

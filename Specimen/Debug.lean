@@ -45,9 +45,55 @@ register_option specimen.multiOutput : Bool := {
 
     Generators only: enumerators and checkers keep their concrete fuel-indexed types.
     See `Docs/Specimen-Basalt-port.md`. -/
+register_option specimen.plainBinds : Bool := {
+  defValue := false
+  descr := "emit a derived worker's binds and returns as `Bind.bind m fun x => k` and `Pure.pure e` \
+    rather than `do` notation: the same code without the `do` elaborator's cost, and without the \
+    trivial `match` on a variable a typed `do` binding elaborates to"
+}
+
 register_option specimen.emitBasalt : Bool := {
   defValue := false
   descr := "emit derived generators against Basalt's `Gen` algebra instead of `Plausible.Gen`"
+}
+
+/-- When true, `derive_mutual` reports each derived producer rule's rejection points: the checks,
+    matches and required output shapes that can fail on a value the rule drew
+    (`Specimen.Rejections`). -/
+register_option specimen.reportRejections : Bool := {
+  defValue := false
+  descr := "report derived producers' rejection points"
+}
+
+/-- When true, `derive_mutual` compiles each spec's code in a task of its own, in parallel; the code
+    and the order it is emitted in are as without it. -/
+register_option specimen.parallelCodegen : Bool := {
+  defValue := false
+  descr := "compile derived specs' code in parallel tasks"
+}
+
+/-- When true, a derived **generator** emitted against Basalt (`specimen.emitBasalt`) shares a rule's
+    size budget among its size-consuming calls by drawing a split (`Specimen.SizeSplit.drawEven`: each
+    call its floor, the remainder uniformly over its compositions) instead of handing each the quotient
+    `size' / k`. Enumerators and checkers always divide. See `specimen.splitFloor`. -/
+register_option specimen.sizeSplit : Bool := {
+  defValue := false
+  descr := "in Basalt generators, draw a split of the size budget among recursive calls"
+}
+
+/-- Under `specimen.sizeSplit`, the share of `size' / k` (per mille) each call is guaranteed before the
+    remainder is split: 0 is the uniform split, 1000 spreads only what the quotient leaves. -/
+register_option specimen.splitFloor : Nat := {
+  defValue := 0
+  descr := "under specimen.sizeSplit, per-mille of the equal share guaranteed to each call"
+}
+
+/-- Under `specimen.sizeSplit`, floor functions for relations' recursive calls, as
+    `"Rel:floorFn,…"`: a rule's call to `Rel` is guaranteed `floorFn` at the call's inputs, the least
+    size it can succeed at, and the rest of the size is split uniformly. -/
+register_option specimen.splitFloors : String := {
+  defValue := ""
+  descr := "under specimen.sizeSplit, per-relation floor functions of a call's inputs: Rel:fn,…"
 }
 
 /-- Fuel for derived generators (termination device). High values are fine; only decrease for testing. -/
@@ -76,6 +122,31 @@ register_option specimen.richOutput : Bool := {
 register_option specimen.textOutput : Nat := {
   defValue := 0
   descr := "plain-text output verbosity (0=off, 1=summary, 2=problems, 3=full)"
+}
+
+register_option specimen.prefixSearch : Bool := {
+  defValue := false
+  descr := "search premise orders with the prefix explorer (every order reachable, committed prefixes, \
+    sleep-set reduction) instead of the insertion tree"
+}
+
+register_option specimen.cycleFixpoint : Nat := {
+  defValue := 0
+  descr := "after deriving, re-derive the modes of each cycle (and its root), whose schedules were \
+    chosen against a placeholder for a mode then in progress, with every other mode at its derived \
+    score, up to this many rounds or until no schedule's score changes (0: off)"
+}
+
+register_option specimen.noncomputableDefs : Bool := {
+  defValue := false
+  descr := "emit the derived definitions and instances `noncomputable` (no compiled code; for \
+    checking proofs only)"
+}
+
+register_option specimen.prefixFullFootprint : Bool := {
+  defValue := false
+  descr := "in the prefix explorer, take two premises as independent when they share no unbound \
+    variable anywhere in their arguments, not only when both are plain relations"
 }
 
 /-- Maximum number of hypothesis orderings to evaluate per constructor before
@@ -201,3 +272,49 @@ def withDebugFlag [Monad m] [MonadOptions m] [MonadWithOptions m] [MonadLog m] [
     if (← inDebugMode) then do
       action
       logInfo ""
+
+/-- Appends `line` to the file `SPECIMEN_TIMER_LOG` names, if set, and flushes. Lean holds a command's
+    standard streams until the command ends, so this is how a long derivation can be watched while it
+    runs. -/
+def timerLog (line : String) : IO Unit := do
+  if let some path ← IO.getEnv "SPECIMEN_TIMER_LOG" then
+    let h ← IO.FS.Handle.mk path .append
+    h.putStrLn line
+    h.flush
+
+/-- Time and count of each labelled step of the proof in progress (`timeIn`, the `timed` tactic),
+    reported to the file `SPECIMEN_TIMER_LOG` names. -/
+initialize tacticTimes : IO.Ref (Array (String × Nat × Nat)) ← IO.mkRef #[]
+
+/-- Whether `timeIn` records (`SPECIMEN_TACTIC_TIMES` set). Off by default: the totals are shared by
+every thread, and proofs elaborated in parallel would mostly wait on each other for them. -/
+initialize tacticTimesOn : Bool ← return (← IO.getEnv "SPECIMEN_TACTIC_TIMES").isSome
+
+/-- Run `x`, adding its time to `label`'s. -/
+def timeIn [Monad m] [MonadLiftT IO m] [MonadFinally m] (label : String) (x : m α) : m α := do
+  unless tacticTimesOn do return ← x
+  let t0 ← (IO.monoNanosNow : IO Nat)
+  try x
+  finally
+    let dt := (← (IO.monoNanosNow : IO Nat)) - t0
+    (tacticTimes.modify fun a =>
+      match a.findIdx? (·.1 == label) with
+      | some i => a.modify i fun (k, v, c) => (k, v + dt, c + 1)
+      | none => a.push (label, dt, 1) : IO Unit)
+
+/-- `timed "label" tac`: `tac`, its time added to `label`'s. -/
+syntax "timed " str ppSpace tactic : tactic
+
+open Elab Tactic in
+elab_rules : tactic | `(tactic| timed $l:str $t:tactic) => timeIn l.getString (evalTactic t)
+
+/-- Report and reset the totals. -/
+def reportTacticTimes (what : String) : IO Unit := do
+  let a ← tacticTimes.get
+  tacticTimes.set #[]
+  unless a.isEmpty do
+    timerLog s!"    {what} by step: {", ".intercalate (a.toList.map fun (k, v, c) => s!"{k} {v / 1000000} ms ×{c}")}"
+
+/-- `#specimen_tactic_times`: the totals of `timeIn` so far (`SPECIMEN_TACTIC_TIMES`), to the timer
+log, reset. -/
+elab "#specimen_tactic_times" : command => do reportTacticTimes "all"

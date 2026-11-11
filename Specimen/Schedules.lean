@@ -704,4 +704,60 @@ def countSizeConsumingCalls (targetInductive : Name) (steps : List ScheduleStep)
     | .Check src _ => if isSameInductive src then acc + 1 else acc
     | _ => acc) 0
 
+/-! ## Provenance of memo entries
+
+While a mode is derived, scoring its candidates can read a mode still in progress (a mutual or
+recursive dependency), whose score is not known yet. An entry completed after such a read is
+*cycle-dependent*: its score depends on the placeholder it read and on which derivations were in
+progress, not only on its key. As in QuickChick 3.0's `modeMemo`, a derivation records its nesting
+depth while in progress, and one completes cycle-independent when every provisional entry it read
+started at its own depth or deeper (Tarjan's low-link). A score that bounds completions treats a
+cycle-dependent entry, like one in progress or not yet derived, optimistically. -/
+
+/-- The depth of each derivation in progress. -/
+initialize memoInProgressDepth : IO.Ref (Std.HashMap SpecKey Nat) ← IO.mkRef {}
+/-- The depth of the derivation running now (`0` outside every derivation). -/
+initialize memoDepth : IO.Ref Nat ← IO.mkRef 0
+/-- The lowest depth of a provisional entry read by the derivation running now. -/
+initialize memoLowestProvisionalRead : IO.Ref Nat ← IO.mkRef 1000000000
+/-- Completed cycle-dependent entries, with the lowest depth their derivation read. -/
+initialize memoCycleLow : IO.Ref (Std.HashMap SpecKey Nat) ← IO.mkRef {}
+/-- Completed derivations that read a provisional entry at their own depth: the roots of the cycles
+whose members `memoCycleLow` holds, chosen against their members' placeholder-dependent scores. -/
+initialize memoCycleRoots : IO.Ref (Std.HashSet SpecKey) ← IO.mkRef {}
+/-- When set, scorers read every provisional entry optimistically (a bound on completions). -/
+initialize memoBoundMode : IO.Ref Bool ← IO.mkRef false
+
+/-- Record a read of `key`'s entry; `true` if it is provisional (in progress or cycle-dependent). -/
+def recordMemoRead (memo : Std.HashMap SpecKey MemoEntry) (key : SpecKey) : IO Bool := do
+  match memo[key]? with
+  | some .inProgress =>
+    if let some d := (← memoInProgressDepth.get)[key]? then
+      memoLowestProvisionalRead.modify (min · d)
+    return true
+  | some (.done _) =>
+    if let some low := (← memoCycleLow.get)[key]? then
+      memoLowestProvisionalRead.modify (min · low)
+      return true
+    return false
+  | _ => return false
+
+/-- Run a derivation of `key` with provenance tracking: on completion it is marked cycle-dependent
+if it read a provisional entry below its own depth, and that read propagates to its parent. -/
+def withMemoProvenance {m} [Monad m] [MonadLiftT IO m] [MonadFinally m] (key : SpecKey) (act : m α) :
+    m α := do
+  let depth := (← (memoDepth.get : IO Nat)) + 1
+  let savedLow ← (memoLowestProvisionalRead.get : IO Nat)
+  (memoDepth.set depth : IO Unit)
+  (memoLowestProvisionalRead.set 1000000000 : IO Unit)
+  (memoInProgressDepth.modify (·.insert key depth) : IO Unit)
+  try act
+  finally
+    let low ← (memoLowestProvisionalRead.get : IO Nat)
+    (memoInProgressDepth.modify (·.erase key) : IO Unit)
+    if low < depth then (memoCycleLow.modify (·.insert key low) : IO Unit)
+    if low == depth then (memoCycleRoots.modify (·.insert key) : IO Unit)
+    (memoLowestProvisionalRead.set (min savedLow (if low < depth then low else 1000000000)) : IO Unit)
+    (memoDepth.set (depth - 1) : IO Unit)
+
 end Schedules
