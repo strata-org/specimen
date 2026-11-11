@@ -24,3 +24,17 @@ import SpecimenTest.Correctness.EnumLaws
 import SpecimenTest.Correctness.EnumBacktrackingTest
 import SpecimenTest.Correctness.DerivedEnumLaw
 import SpecimenTest.Correctness.DerivedSearchLaw
+
+-- Size as the measure, for two generators in the emitted shape; and the opt-in soundness leaf
+import Specimen.Correctness.SizeMeasureExamples
+import Specimen.Correctness.WalkSGenSelf
+-- Proofs derive_mutual emits (`specimen.emitSound`): the commands' tests
+import Specimen.Correctness.CheckNegTest
+import Specimen.Correctness.CheckSearchTest
+import Specimen.Correctness.CheckSoundTest
+import Specimen.Correctness.EmitSoundTest
+import Specimen.Correctness.SearchFindsTest
+import Specimen.Correctness.SearchPolyTest
+import Specimen.Correctness.SizeSplitTest
+import Specimen.Correctness.SoundDecideTest
+import Specimen.Correctness.SoundPolyTest

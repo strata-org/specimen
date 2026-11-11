@@ -57,6 +57,16 @@ register_option specimen.emitBasalt : Bool := {
   descr := "emit derived generators against Basalt's `Gen` algebra instead of `Plausible.Gen`"
 }
 
+/-- When true (with `specimen.emitBasalt`), `derive_mutual` proves each derived generator sound for its
+    relation, as `#specimen_sound` does: `W.sound` next to each worker `W`. Requires
+    `import Specimen.Correctness.SoundOf` in the deriving file. A generator whose proof does not close
+    is still emitted, with a warning; a hand-written instance's law is a fact for the proofs when
+    tagged `@[specimen_sound]`. -/
+register_option specimen.emitSound : Bool := {
+  defValue := false
+  descr := "prove derived generators sound for their relations (needs Specimen.Correctness.SoundOf)"
+}
+
 /-- When true, `derive_mutual` reports each derived producer rule's rejection points: the checks,
     matches and required output shapes that can fail on a value the rule drew
     (`Specimen.Rejections`). -/
@@ -71,6 +81,36 @@ register_option specimen.parallelCodegen : Bool := {
   defValue := false
   descr := "compile derived specs' code in parallel tasks"
 }
+
+/-- When true, with `specimen.emitSound`, each block's proofs are split per worker into theorems for
+    the induction's base and step, which Lean elaborates in parallel (as it does any `theorem`), and
+    assembled by `Nat.rec`; the next components go on while they run. A proof that does not close is
+    then an error of the file, rather than a warning that the block was not proved. -/
+register_option specimen.parallelProofs : Bool := {
+  defValue := false
+  descr := "prove each derived block's workers as parallel theorems (with specimen.emitSound)"
+}
+
+/-- What `specimen.emitSound` runs on each derived component: its generators, as (worker, relation,
+    output indices), and the soundness theorems of the generators derived so far. Set by
+    `Specimen.Correctness.SoundOf`, which the deriver cannot import. -/
+initialize specimenSoundHook :
+    IO.Ref (Option (Array (Name × Name × List Nat) → Array Name → Elab.Command.CommandElabM Unit)) ←
+  IO.mkRef none
+
+/-- What `specimen.emitSound` runs on each derived component's checkers, as (worker, relation), with
+the soundness theorems derived so far; first, the generators and enumerators of the same mutual block,
+as for `specimenSoundHook`, to be proved sound with them. Set by `Specimen.Correctness.CheckSoundOf`. -/
+initialize specimenCheckSoundHook :
+    IO.Ref (Option (Array (Name × Name × List Nat) → Array (Name × Name) → Array Name →
+      Elab.Command.CommandElabM Unit)) ←
+  IO.mkRef none
+
+/-- What `specimen.emitSound` runs on each derived component's enumerators, with the theorems derived
+so far: their searches' laws. Set by `Specimen.Correctness.EnumSoundOf`. -/
+initialize specimenEnumSoundHook :
+    IO.Ref (Option (Array Name → Array Name → Elab.Command.CommandElabM Unit)) ←
+  IO.mkRef none
 
 /-- When true, a derived **generator** emitted against Basalt (`specimen.emitBasalt`) shares a rule's
     size budget among its size-consuming calls by drawing a split (`Specimen.SizeSplit.drawEven`: each
@@ -94,6 +134,13 @@ register_option specimen.splitFloor : Nat := {
 register_option specimen.splitFloors : String := {
   defValue := ""
   descr := "under specimen.sizeSplit, per-relation floor functions of a call's inputs: Rel:fn,…"
+}
+
+register_option specimen.deferSound : Bool := {
+  defValue := false
+  descr := "with specimen.emitSound, record the soundness proofs' steps instead of running them, for \
+    `#specimen_sound_replay` in a file that imports this one (the proofs checked alongside other \
+    files, rather than before them)"
 }
 
 /-- Fuel for derived generators (termination device). High values are fine; only decrease for testing. -/

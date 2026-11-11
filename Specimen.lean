@@ -17,6 +17,7 @@ import Specimen.Debug
 import Specimen.UnificationMonad
 import Specimen.DeriveConstrainedProducer
 import Specimen.Schedules
+import Specimen.WorkerRegistry
 import Specimen.DeriveSchedules
 import Specimen.MExp
 import Specimen.LazyRoseTree
