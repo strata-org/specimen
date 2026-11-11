@@ -33,8 +33,10 @@ time over relations reflected as data (`RelSpec`), and each relation inherits th
 What is written per relation is the connection to it: an adequacy lemma saying the reflected spec
 means the same as the inductive, and a bridge showing the emitted code equals the interpreter at one
 step (`lk_bridge`, `TypingBridge`). Some STLC results are proved instead by decomposing the emitted code
-directly. Unlike *Computing Correctly*, the deriver does not emit proofs, so a new relation needs its
-own adequacy lemma and bridge.
+directly. A new relation proved this way needs its own adequacy lemma and bridge.
+
+The deriver can also prove its own output, as *Computing Correctly* does: see
+[Proofs `derive_mutual` emits](#proofs-derive_mutual-emits).
 
 ## The map
 
@@ -108,6 +110,31 @@ emitter, the scorer's schedule, the dispatch guards or the weights, and they sto
   can only run out of budget can never report a definite refutation. The statement is false of any
   emission that collapses `error` into `refute`; `Fail` and `FailWith` separate them precisely so it
   holds.
+
+## Proofs `derive_mutual` emits
+
+Under `specimen.emitSound`, `derive_mutual` proves each worker it derives sound for its relation,
+against Basalt's `SPMF` reading of the code (`specimen.emitBasalt`). Every law is a theorem the kernel
+checks; a step a heuristic cannot close fails the derivation, so a proof is never wrong, only missing.
+
+| Law | Worker | States |
+|---|---|---|
+| `w.sound` | generator, enumerator | every value produced satisfies the relation |
+| `w.checkSound` | checker | `.ok true` only when the relation holds |
+| `w.searchSound`, `w.searchFinds` | enumerator's search, used by a checker | a value found satisfies the relation |
+
+A worker's laws assume the laws of what it calls: the derived workers' own, and for anything else an
+instance of the matching class (`ArbitrarySizedSearch α` for a checker's search over a type). A
+hand-written producer the derivation calls needs its own law, registered with `@[specimen_sound]`.
+
+**Across files.** For a large derivation, `specimen.deferSound` records the soundness proofs' steps
+instead of running them, and `#specimen_sound_replay`, in a file that imports the derivation, runs
+them, so that Lake checks them alongside other files. `specimen.parallelProofs` proves a block's
+workers as parallel theorems.
+
+The tests are in `Specimen/Correctness/*Test.lean` (one feature each: `EmitSoundTest`,
+`CheckSoundTest`, `SearchFindsTest`, `SoundPolyTest`, `SizeSplitTest`, …), built by the test
+library (`lake test`, through `SpecimenTest.Proofs`).
 
 ## Budgets, and why completeness is conditional
 

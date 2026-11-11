@@ -3,6 +3,7 @@ import Lean.LocalContext
 
 import Specimen.UnificationMonad
 import Specimen.Schedules
+import Specimen.WorkerRegistry
 import Specimen.DeriveSchedules
 import Specimen.MExp
 import Specimen.MakeConstrainedProducerInstance
@@ -2522,12 +2523,95 @@ def compileSpecComponents (components : List (List SpecKey))
         h.putStrLn (Json.compress (Json.mkObj [("module", toJson modName), ("members", Json.arr members)]))
   return (compiledComponents, compiledCodeMap)
 
+/-- A per-component timing line. Lean captures a command's standard streams until the command ends, so
+    to watch a long `derive_mutual` the line also goes, as it happens, to the file `SPECIMEN_TIMER_LOG`
+    names. -/
+private def timerLine (line : String) : CommandElabM Unit := do
+  logInfo line
+  timerLog line
+
+/-- A call of a soundness hook, recorded by `specimen.deferSound` for `#specimen_sound_replay`: a
+component's generators (or enumerators, proved like them), its enumerators' searches, or its
+checkers with the enumerators of their block. -/
+inductive SoundCall where
+  | gens (gs : Array (Name × Name × List Nat))
+  | search (ens : Array Name)
+  | check (withEns : Array (Name × Name × List Nat)) (cks : Array (Name × Name))
+  deriving Inhabited
+
+/-- The soundness steps `specimen.deferSound` recorded, in order. -/
+initialize specimenSoundCallsExt : SimplePersistentEnvExtension SoundCall (Array SoundCall) ←
+  registerSimplePersistentEnvExtension {
+    addEntryFn := fun s e => s.push e
+    addImportedFn := fun as => as.foldl (· ++ ·) #[] }
+
+/-- Run a recorded soundness step, with the theorems proved so far. -/
+def runSoundCall (c : SoundCall) (soundNames : Array Name) : CommandElabM Unit := do
+  match c with
+  | .gens gs => if let some h ← specimenSoundHook.get then h gs soundNames
+  | .search ens => if let some h ← specimenEnumSoundHook.get then h ens soundNames
+  | .check w cks => if let some h ← specimenCheckSoundHook.get then h w cks soundNames
+
+/-- The theorems a soundness step proves, those it did. -/
+def soundCallNames (c : SoundCall) (env : Environment) : Array Name :=
+  let ws : Array Name := match c with
+    | .gens gs => gs.map (·.1)
+    | .search ens => ens
+    | .check w cks => w.map (·.1) ++ cks.map (·.1)
+  let cands := ws.foldl (fun acc w => acc ++ #[w ++ `sound, w ++ `checkSound, w ++ `searchFinds,
+    w ++ `searchSound]) #[]
+  cands.filter env.contains
+
+/-- `#specimen_sound_replay`: the soundness steps an imported `derive_mutual` recorded
+(`specimen.deferSound`), run here in order. -/
+syntax "#specimen_sound_replay" : command
+
+elab_rules : command
+  | `(#specimen_sound_replay) => do
+    let calls := specimenSoundCallsExt.getState (← getEnv)
+    let mut soundNames : Array Name := #[]
+    for (w, _) in Specimen.derivedWorkers (← getEnv) do
+      for suffix in [`sound, `checkSound, `searchSound, `searchFinds] do
+        if (← getEnv).contains (w ++ suffix) then soundNames := soundNames.push (w ++ suffix)
+    for c in calls do
+      runSoundCall c soundNames
+      for n in soundCallNames c (← getEnv) do
+        unless soundNames.contains n do soundNames := soundNames.push n
+
 /-- Emit compiled SCC components: each multi-def component as a single `mutual … end`
     block, single defs directly, followed by their instances at the given visibility. -/
 def emitSpecComponents
     (compiledComponents : Array (Array (SpecKey × Name) × Array (TSyntax `command) × Array (TSyntax `command)))
     (attrKind : AttributeKind) (rootNames : List Name := []) : CommandElabM Unit := do
   let basalt := Lean.Option.get (← getOptions) specimen.emitBasalt
+  let deferSound := Lean.Option.get (← getOptions) specimen.deferSound
+  let dispatch (c : SoundCall) (names : Array Name) : CommandElabM Unit :=
+    if deferSound then modifyEnv (specimenSoundCallsExt.addEntry · c) else runSoundCall c names
+  let sound ← if basalt && Lean.Option.get (← getOptions) specimen.emitSound then
+      match ← specimenSoundHook.get with
+      | some hook => pure (some hook)
+      | none => throwError "specimen.emitSound needs `import Specimen.Correctness.SoundOf`"
+    else pure none
+  -- the enumerators' and checkers' soundness hooks, needed when the derivation has either: without
+  -- them their laws would be left out, and nothing downstream says which are missing
+  if sound.isSome then
+    let sorts := compiledComponents.toList.flatMap fun (m, _, _) => m.toList.map (·.1.deriveSort)
+    if sorts.contains .Enumerator && (← specimenEnumSoundHook.get).isNone then
+      throwError "specimen.emitSound with an enumerator needs `import Specimen.Correctness.EnumSoundOf`"
+    if sorts.contains .Checker && (← specimenCheckSoundHook.get).isNone then
+      throwError "specimen.emitSound with a checker needs `import Specimen.Correctness.CheckSoundOf`"
+  -- A worker is declared in the current namespace; one from an earlier command may be elsewhere.
+  let declared (w : Name) : CommandElabM Name := do
+    let w' := (← getCurrNamespace) ++ w
+    return if (← getEnv).contains w' then w' else w
+  -- The soundness theorems so far, the facts for the next component's proofs.
+  let mut soundNames : Array Name := #[]
+  -- The laws of producers an earlier command derived, possibly in another namespace or module: a
+  -- component that reuses its instance calls its worker, whose name this command cannot predict.
+  if sound.isSome then
+    for (w, _) in Specimen.derivedWorkers (← getEnv) do
+      for suffix in [`sound, `checkSound, `searchSound] do
+        if (← getEnv).contains (w ++ suffix) then soundNames := soundNames.push (w ++ suffix)
   -- A component's definitions and instances.
   let emitDefs (compMeta : Array (SpecKey × Name)) (defCmds instCmds : Array (TSyntax `command)) :
       CommandElabM Unit := do
@@ -2559,14 +2643,109 @@ def emitSpecComponents
       elabC (← `(command| mutual $defCmds* end))
     else
       elabC defCmds[0]!
+    let visibility := Specimen.WorkerVisibility.ofAttrKind attrKind (← getCurrNamespace) (← getMainModule)
+    for (key, w) in compMeta do
+      modifyEnv (Specimen.specimenWorkerExt.addEntry ·
+        (← declared w, { sort := key.deriveSort, rel := key.inductiveName, outs := key.outputIndices,
+                         visibility }))
     let tInst ← IO.monoNanosNow
     for instCmd in instCmds do
       let c := setInstanceVisibility instCmd attrKind
       elabC (if nc then markNoncomputable c else c)
-    if Lean.Option.get (← getOptions) specimen.reportPhaseTimers then
+    if sound.isSome && Lean.Option.get (← getOptions) specimen.reportPhaseTimers then
       timerLog s!"  defs {compMeta.toList.map (·.1.inductiveName)} ({defCmds.size}): {((← IO.monoNanosNow) - tDef) / 1000000} ms (defs {(tInst - tDef) / 1000000}, instances {((← IO.monoNanosNow) - tInst) / 1000000})"
+  -- Proving in parallel, every definition first: adding one waits for the kernel to have checked every
+  -- proof started before it, so definitions after a component's proofs would wait for them.
+  let defsFirst := sound.isSome && Lean.Option.get (← getOptions) specimen.parallelProofs
+  if defsFirst then
+    for (compMeta, defCmds, instCmds) in compiledComponents do
+      unless defCmds.isEmpty do emitDefs compMeta defCmds instCmds
   for (compMeta, defCmds, instCmds) in compiledComponents do
-    unless defCmds.isEmpty do emitDefs compMeta defCmds instCmds
+    -- A component derived before, by an earlier command, has its theorems already if it was proved.
+    for (_, w) in compMeta do
+      for suffix in [`sound, `checkSound, `searchFinds, `searchSound] do
+        let s := (← declared w) ++ suffix
+        if (← getEnv).contains s && !soundNames.contains s then
+          soundNames := soundNames.push s
+    if defCmds.isEmpty then continue
+    unless defsFirst do emitDefs compMeta defCmds instCmds
+    -- A mutual block of checkers with the enumerators they search with, which call them back: each
+    -- needs the other's law, so the enumerators are proved sound with the checkers, in one induction,
+    -- after their searches' `searchFinds`, which does not.
+    let joint := defCmds.size > 1 && compMeta.any (·.1.deriveSort == .Checker) &&
+      compMeta.any (·.1.deriveSort == .Enumerator)
+    -- A derived enumerator is a generator read at another monad: it is proved sound at `SGen` alike,
+    -- apart from the generators, so that one that does not close cannot take them down with it.
+    if let some hook := sound then if !joint then
+      let ens ← (compMeta.filter fun (k, _) => k.deriveSort == .Enumerator).mapM fun (k, w) =>
+        return (← declared w, k.inductiveName, k.outputIndices)
+      let ens ← ens.filterM fun (w, _, _) => return !(← getEnv).contains (w ++ `sound)
+      unless ens.isEmpty do
+        let _ := hook
+        dispatch (.gens ens) soundNames
+        for (w, _, _) in ens do
+          if (← getEnv).contains (w ++ `sound) then soundNames := soundNames.push (w ++ `sound)
+    if let some hook := sound then
+      let gens ← (compMeta.filter fun (k, _) => k.deriveSort == .Generator).mapM fun (k, w) =>
+        return (← declared w, k.inductiveName, k.outputIndices)
+      let gens ← gens.filterM fun (w, _, _) => return !(← getEnv).contains (w ++ `sound)
+      unless gens.isEmpty do
+        if Lean.Option.get (← getOptions) specimen.reportPhaseTimers then
+          timerLog s!"▶ sound {gens.toList.map (·.2.1)} ({soundNames.size} facts)"
+        let t0 ← IO.monoNanosNow
+        let _ := hook
+        dispatch (.gens gens) soundNames
+        if Lean.Option.get (← getOptions) specimen.reportPhaseTimers then
+          let proved := (← getEnv).contains (gens[0]!.1 ++ `sound)
+          timerLine s!"⏱ sound {gens[0]!.2.1} ({gens.size} workers): {((← IO.monoNanosNow) - t0) / 1000000} ms{if proved then "" else " NOT PROVED"}"
+        for (w, _, _) in gens do
+          if (← getEnv).contains (w ++ `sound) then soundNames := soundNames.push (w ++ `sound)
+    if sound.isSome then
+      if let some hook ← specimenEnumSoundHook.get then
+        let ens ← (compMeta.filter fun (k, _) => k.deriveSort == .Enumerator).mapM fun (_, w) => declared w
+        let ens ← ens.filterM fun w => return !(← getEnv).contains (w ++ `searchFinds)
+        unless ens.isEmpty do
+          let t0 ← IO.monoNanosNow
+          let _ := hook
+          dispatch (.search ens) soundNames
+          if Lean.Option.get (← getOptions) specimen.reportPhaseTimers then
+            let proved := (← getEnv).contains (ens[0]! ++ `searchFinds)
+            timerLine s!"⏱ search {ens[0]!} ({ens.size} workers): {((← IO.monoNanosNow) - t0) / 1000000} ms{if proved then "" else " NOT PROVED"}"
+          for w in ens do
+            for suffix in [`searchFinds, `searchSound] do
+              if (← getEnv).contains (w ++ suffix) then soundNames := soundNames.push (w ++ suffix)
+    -- The checkers, after the enumerators they search with; the generators of later components use
+    -- their laws.
+    if sound.isSome then
+      if let some hook ← specimenCheckSoundHook.get then
+        let cks ← (compMeta.filter fun (k, _) => k.deriveSort == .Checker).mapM fun (k, w) =>
+          return (← declared w, k.inductiveName)
+        let cks ← cks.filterM fun (w, _) => return !(← getEnv).contains (w ++ `checkSound)
+        let withEns ← if joint then
+            let ens ← (compMeta.filter fun (k, _) => k.deriveSort == .Enumerator).mapM fun (k, w) =>
+              return (← declared w, k.inductiveName, k.outputIndices)
+            ens.filterM fun (w, _, _) => return !(← getEnv).contains (w ++ `sound)
+          else pure #[]
+        unless cks.isEmpty do
+          let t0 ← IO.monoNanosNow
+          let _ := hook
+          dispatch (.check withEns cks) soundNames
+          if Lean.Option.get (← getOptions) specimen.reportPhaseTimers then
+            let proved := (← getEnv).contains (cks[0]!.1 ++ `checkSound)
+            timerLine s!"⏱ check {cks[0]!.2} ({cks.size} workers): {((← IO.monoNanosNow) - t0) / 1000000} ms{if proved then "" else " NOT PROVED"}"
+          for (w, _) in cks do
+            if (← getEnv).contains (w ++ `checkSound) then soundNames := soundNames.push (w ++ `checkSound)
+          for (w, _, _) in withEns do
+            if (← getEnv).contains (w ++ `sound) then soundNames := soundNames.push (w ++ `sound)
+          -- the enumerators' searches' soundness, which needed theirs
+          if joint then
+            if let some eh ← specimenEnumSoundHook.get then
+              let ens ← (compMeta.filter fun (k, _) => k.deriveSort == .Enumerator).mapM fun (_, w) => declared w
+              let ens ← ens.filterM fun w => return !(← getEnv).contains (w ++ `searchSound)
+              let _ := eh
+              unless ens.isEmpty do dispatch (.search ens) soundNames
+              for w in ens do
+                if (← getEnv).contains (w ++ `searchSound) then soundNames := soundNames.push (w ++ `searchSound)
 
 @[command_elab mutual_deriver]
 def elabDeriveMutual : CommandElab := fun stx => do
@@ -3330,5 +3509,10 @@ def elabDeriveMutual : CommandElab := fun stx => do
           instCmds := instCmds.push instCmd
         let mutualCmd ← `(command| mutual $defCmds* end)
         elabCommand mutualCmd
+        for (rel, outs, w, sort) in specMeta do
+          let w' := (← getCurrNamespace) ++ w
+          let w := if (← getEnv).contains w' then w' else w
+          let visibility := Specimen.WorkerVisibility.ofAttrKind attrKind (← getCurrNamespace) (← getMainModule)
+          modifyEnv (Specimen.specimenWorkerExt.addEntry · (w, { sort, rel, outs, visibility }))
         for instCmd in instCmds do
           elabCommand (setInstanceVisibility instCmd attrKind)

@@ -43,8 +43,9 @@ rev = "df72b022e558978a1c50264cfc4d7fec86fa8e04"
 # proofwidgets revisions above are the ones Mathlib's release pins; keep them in step with it.
 [[require]]
 name = "basalt"
+# Basalt `main`: the walk speedups and options the derived generators' completeness proofs use.
 git = "https://github.com/hgoldstein95/basalt"
-rev = "a90bfb5cf91fc04ea38a9cf56a46d22957fb3772"
+rev = "cbfffa75a4298021b79cd990230677641a7b60a2"
 
 # Benchmarks, in `bench/`. `lake build Bench` compiles them; nothing runs them by default. Each has an
 # executable for timing compiled code. See bench/README.md.
