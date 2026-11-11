@@ -38,6 +38,12 @@ import Specimen.Correctness.CompleteOfTest
 import Specimen.Correctness.CompleteOfTest2
 import Specimen.Correctness.CompleteOfTest4
 import Specimen.Correctness.EmitSoundTest
+import Specimen.Correctness.FloorCompleteTest
+import Specimen.Correctness.FloorMergeTest
+import Specimen.Correctness.FloorOfMutualTest
+import Specimen.Correctness.FloorOfTest
+import Specimen.Correctness.FloorProofs
+import Specimen.Correctness.FloorTest
 import Specimen.Correctness.SearchFindsTest
 import Specimen.Correctness.SearchPolyTest
 import Specimen.Correctness.SizeSplitTest

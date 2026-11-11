@@ -1,7 +1,6 @@
 import Specimen
 import Specimen.Basalt
-import Specimen.Correctness.CheckSoundOf
-import Specimen.Correctness.EnumSoundOf
+import Specimen.Correctness.FloorOf
 
 /-! A derived checker with a negated decidable premise, and a generator that checks it. -/
 

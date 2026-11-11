@@ -136,6 +136,14 @@ register_option specimen.splitFloors : String := {
   descr := "under specimen.sizeSplit, per-relation floor functions of a call's inputs: Rel:fn,…"
 }
 
+/-- Under `specimen.sizeSplit`, derive each generator worker's floor function `W.floor` from its
+    schedules (`Specimen.DeriveFloors`) and guarantee each of a rule's calls to it its floor. Off by
+    default; a relation's `specimen.splitFloors` entry takes precedence. -/
+register_option specimen.deriveFloors : Bool := {
+  defValue := false
+  descr := "under specimen.sizeSplit, derive each generator's floor function and use it in the split"
+}
+
 /-- When true (with `specimen.emitBasalt`), `derive_mutual` proves each derived generator complete:
     `W.complete` (every derivation is produced at every large enough size) and a
     `BacktrackGenForComplete` instance, relative to the `BacktrackGenForComplete` and
@@ -214,6 +222,12 @@ register_option specimen.deferSound : Bool := {
 /-- What `specimen.emitComplete` runs on each derived component's generators, as (worker, relation,
     output indices). Set by `Specimen.Correctness.CompleteOf`. -/
 initialize specimenCompleteHook :
+    IO.Ref (Option (Array (Name × Name × List Nat) → Elab.Command.CommandElabM Unit)) ←
+  IO.mkRef none
+
+/-- What `specimen.deriveFloors` (with `specimen.emitSound`) runs on each derived component's
+    generators: their floors' lower bounds. Set by `Specimen.Correctness.FloorOf`. -/
+initialize specimenFloorHook :
     IO.Ref (Option (Array (Name × Name × List Nat) → Elab.Command.CommandElabM Unit)) ←
   IO.mkRef none
 
@@ -435,6 +449,14 @@ def reportTacticTimes (what : String) : IO Unit := do
   tacticTimes.set #[]
   unless a.isEmpty do
     timerLog s!"    {what} by step: {", ".intercalate (a.toList.map fun (k, v, c) => s!"{k} {v / 1000000} ms ×{c}")}"
+
+/-- The input positions the derived floor of worker `w` takes (`w.floorArgs`), or `none` where it has
+none recorded (every position). -/
+def Specimen.floorArgPositions (env : Lean.Environment) (w : Lean.Name) : Option (List Nat) := do
+  let ci ← env.find? (w ++ `floorArgs)
+  let v ← ci.value?
+  let (_, xs) ← v.listLit?
+  xs.mapM fun x => x.nat? <|> x.rawNatLit?
 
 /-- `#specimen_tactic_times`: the totals of `timeIn` so far (`SPECIMEN_TACTIC_TIMES`), to the timer
 log, reset. -/

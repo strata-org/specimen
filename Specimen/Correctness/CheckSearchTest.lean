@@ -1,7 +1,6 @@
 import Specimen
 import Specimen.Basalt
-import Specimen.Correctness.CheckSoundOf
-import Specimen.Correctness.EnumSoundOf
+import Specimen.Correctness.FloorOf
 
 /-! A derived checker that searches for a premise's witness with a derived enumerator: the
 enumerator's search law, the checker's soundness through it, and a generator's through that. -/
