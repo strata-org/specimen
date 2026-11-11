@@ -446,7 +446,10 @@ def mkConstrainedProducerMutualPieces
     -- Emit the instance (differs by deriveSort)
     let fuelVal := Lean.Option.get (← getOptions) specimen.fuel
     let fuelLit := Syntax.mkNumLit (toString fuelVal)
-    let callArgs : TSyntaxArray `term := #[(⟨fuelLit⟩ : TSyntax `term), (freshSizeIdent : TSyntax `term), (freshSizeIdent : TSyntax `term)] ++ (TSyntaxArray.mk outerParams)
+    -- A Basalt checker runs at fuel `size + 1`: every recursive call has less size, so no recursion
+    -- is deeper, and completeness holds at every size (a fixed fuel bounds the derivations it accepts).
+    let checkFuel : TSyntax `term ← if emitBasalt then `($freshSizeIdent + 1) else pure ⟨fuelLit⟩
+    let callArgs : TSyntaxArray `term := #[checkFuel, (freshSizeIdent : TSyntax `term), (freshSizeIdent : TSyntax `term)] ++ (TSyntaxArray.mk outerParams)
     let callExpr ← `($defIdent $callArgs*)
     let instTypeClasses := match requiredTypeClasses with
       | some tcs => tcs
@@ -482,7 +485,11 @@ def mkConstrainedProducerMutualPieces
         let arbitraryTypeParamInstances ← mkTypeClassInstanceBinders typeParams instTypeClasses
         if useBasalt then
           -- The leaf size is the worker's `initSize`; the search's size is its `size`.
-          let leafCallArgs : TSyntaxArray `term := #[(⟨fuelLit⟩ : TSyntax `term),
+          -- Proved complete, the instance runs its worker at fuel `size + 1`: every recursive call
+          -- has less size, so no recursion is deeper, and completeness then holds at every size.
+          let instFuel : TSyntax `term ← if Lean.Option.get (← getOptions) specimen.emitComplete then
+              `($freshSizeIdent + 1) else pure ⟨fuelLit⟩
+          let leafCallArgs : TSyntaxArray `term := #[instFuel,
             (freshLeafSizeIdent : TSyntax `term), (freshSizeIdent : TSyntax `term)] ++
             (TSyntaxArray.mk outerParams)
           `(command|

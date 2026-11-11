@@ -28,10 +28,15 @@ import SpecimenTest.Correctness.DerivedSearchLaw
 -- Size as the measure, for two generators in the emitted shape; and the opt-in soundness leaf
 import Specimen.Correctness.SizeMeasureExamples
 import Specimen.Correctness.WalkSGenSelf
--- Proofs derive_mutual emits (`specimen.emitSound`): the commands' tests
+-- Proofs derive_mutual emits (`specimen.emitSound`, `specimen.emitComplete`): the commands' tests (the
+-- suite of relations derived with every law proved, `SpecimenTest.Correctness.Suite`, is built
+-- module by module, `lakefile.toml`)
 import Specimen.Correctness.CheckNegTest
 import Specimen.Correctness.CheckSearchTest
 import Specimen.Correctness.CheckSoundTest
+import Specimen.Correctness.CompleteOfTest
+import Specimen.Correctness.CompleteOfTest2
+import Specimen.Correctness.CompleteOfTest4
 import Specimen.Correctness.EmitSoundTest
 import Specimen.Correctness.SearchFindsTest
 import Specimen.Correctness.SearchPolyTest

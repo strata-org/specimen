@@ -113,28 +113,54 @@ emitter, the scorer's schedule, the dispatch guards or the weights, and they sto
 
 ## Proofs `derive_mutual` emits
 
-Under `specimen.emitSound`, `derive_mutual` proves each worker it derives sound for its relation,
-against Basalt's `SPMF` reading of the code (`specimen.emitBasalt`). Every law is a theorem the kernel
-checks; a step a heuristic cannot close fails the derivation, so a proof is never wrong, only missing.
+Under `specimen.emitSound` and `specimen.emitComplete`, `derive_mutual` proves each worker it derives
+sound and complete for its relation, against Basalt's `SPMF` reading of the code
+(`specimen.emitBasalt`). Every law is a theorem the kernel checks; a step a heuristic cannot close fails
+the derivation (or, with `specimen.admitFailedParts`, is admitted with `sorry` and a warning), so a
+proof is never wrong, only missing.
 
 | Law | Worker | States |
 |---|---|---|
 | `w.sound` | generator, enumerator | every value produced satisfies the relation |
 | `w.checkSound` | checker | `.ok true` only when the relation holds |
 | `w.searchSound`, `w.searchFinds` | enumerator's search, used by a checker | a value found satisfies the relation |
+| `w.complete` | each | a value (or input) in the relation is produced (accepted) at some fuel and size |
+| `w.instComplete` | its instance | `BacktrackGenForComplete` / `EnumForComplete` / `DecOptComplete` |
+| `w.searchHits` | enumerator's search | a value in the relation is found |
 
-A worker's laws assume the laws of what it calls: the derived workers' own, and for anything else an
-instance of the matching class (`ArbitrarySizedSearch α` for a checker's search over a type). A
-hand-written producer the derivation calls needs its own law, registered with `@[specimen_sound]`.
+`specimen.emitComplete` alone proves the generators; `specimen.completeAllSorts` adds the
+enumerators and checkers. A worker's laws assume the laws of what it calls: the derived workers'
+own, and for anything else an instance of the matching class (`ArbitrarySizedComplete α` for an
+unconstrained draw, `BacktrackGenForComplete α P` for a hand-written generator, `ArbitrarySizedSearch`
+and `ArbitrarySizedHits` for a checker's search over a type). A missing one is reported by name.
+`Specimen.Correctness.LeafLaws` provides them for the instances `Specimen.BasaltBridge` supplies: a
+`Nat` above or below a bound (`n ≤ x`, `x < n`, …) and a pair constrained equal. A recursive type
+`deriving Basalt.ArbitrarySized` gets its laws by induction: `arbitrary_complete`,
+`arbitrary_search_derived` and `arbitrary_hits_derived` (`LeafComplete.lean`).
 
-**Across files.** For a large derivation, `specimen.deferSound` records the soundness proofs' steps
-instead of running them, and `#specimen_sound_replay`, in a file that imports the derivation, runs
-them, so that Lake checks them alongside other files. `specimen.parallelProofs` proves a block's
-workers as parallel theorems.
+**Across files.** For a large derivation, `specimen.deferSound` and `specimen.deferComplete` record
+the components instead of proving them, and these commands, in files that import the derivation,
+prove them, so that Lake checks the files in parallel:
 
-The tests are in `Specimen/Correctness/*Test.lean` (one feature each: `EmitSoundTest`,
-`CheckSoundTest`, `SearchFindsTest`, `SoundPolyTest`, `SizeSplitTest`, …), built by the test
-library (`lake test`, through `SpecimenTest.Proofs`).
+- `#specimen_prove_sound`: the soundness proofs.
+- `#specimen_prove_all_but [c, …]`: the enumerators' searches, and every component but those listed.
+- `#specimen_prove_stmts c`, `#specimen_prove_slice c i of n`, `#specimen_prove_finish c`: a large
+  component's parts stated once, proved in `n` slices, and assembled.
+- `#specimen_audit "suffix"`: counts each law over the workers whose names end in `suffix`, fails if
+  a worker lacks a law its sort's proved laws include (`laws missing`), and fails if a law depends on
+  an axiom other than `propext`, `Classical.choice` and `Quot.sound`.
+
+**Options.** `specimen.parallelProofs` proves a block's workers as parallel theorems.
+`specimen.reachExtended` lets `reach_close`, the completeness search, use premises in context more
+freely (a check's proposition or its negation, a `match` rewritten either way, a search over a type's
+values); `specimen_complete_case` turns it on only for a case the plain search does not close, so a
+derivation that does not need it pays nothing.
+
+The tests are in `Specimen/Correctness/*Test.lean` (one feature each: `EmitSoundTest`, `CompleteOfTest*`,
+`CheckSearchTest`, `SearchPolyTest`, `SizeSplitTest`, …) and `SpecimenTest/Correctness/Suite`
+(relations derived in several modes with every law proved and audited: search trees, permutations,
+STLC, regular expressions, a key-value store, polymorphic relations, …), all built by the test
+library (`lake test`).
 
 ## Budgets, and why completeness is conditional
 

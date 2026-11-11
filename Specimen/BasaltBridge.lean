@@ -180,3 +180,41 @@ instance instEnumForEqPair {α : Type} [Basalt.ArbitrarySized α] :
   enum _ leafSize := do
     let a ← Basalt.ArbitrarySized.arbitrarySized leafSize
     pure (a, a)
+
+/-! ## Leaf instances for bounds on a natural number
+
+A premise `n ≤ x`, `n < x`, `x ≤ n` or `x < n` on a value `x` nothing else fixes: produced directly,
+an unbounded one up to the leaf size above its bound, rather than drawn freely and checked. The
+counterparts of the generate-and-test Specimen's Plausible path falls back to. -/
+
+instance instBacktrackGenForNatGe {n : Nat} : BacktrackGenFor Nat (fun x => n ≤ x) where
+  gen _ leafSize := do
+    let k ← chooseNat 0 leafSize
+    pure (n + k)
+
+instance instBacktrackGenForNatGt {n : Nat} : BacktrackGenFor Nat (fun x => n < x) where
+  gen _ leafSize := do
+    let k ← chooseNat 0 leafSize
+    pure (n + 1 + k)
+
+instance instBacktrackGenForNatLe {n : Nat} : BacktrackGenFor Nat (fun x => x ≤ n) where
+  gen _ _ := chooseNat 0 n
+
+instance instBacktrackGenForNatLt {n : Nat} : BacktrackGenFor Nat (fun x => x < n) where
+  gen _ _ := if 0 < n then chooseNat 0 (n - 1) else Specimen.refute
+
+instance instEnumForNatGe {n : Nat} : EnumFor Nat (fun x => n ≤ x) where
+  enum _ leafSize := do
+    let k ← chooseNat 0 leafSize
+    pure (n + k)
+
+instance instEnumForNatGt {n : Nat} : EnumFor Nat (fun x => n < x) where
+  enum _ leafSize := do
+    let k ← chooseNat 0 leafSize
+    pure (n + 1 + k)
+
+instance instEnumForNatLe {n : Nat} : EnumFor Nat (fun x => x ≤ n) where
+  enum _ _ := chooseNat 0 n
+
+instance instEnumForNatLt {n : Nat} : EnumFor Nat (fun x => x < n) where
+  enum _ _ := if 0 < n then chooseNat 0 (n - 1) else Specimen.refute

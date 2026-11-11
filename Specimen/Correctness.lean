@@ -6,6 +6,7 @@ import Specimen.Correctness.ProducerInterp
 import Specimen.Correctness.GenSupport
 import Specimen.Correctness.GenInterp
 import Specimen.Correctness.EvSlice
+import Specimen.Correctness.Workers
 
 /-!
 # `Specimen.Correctness`
