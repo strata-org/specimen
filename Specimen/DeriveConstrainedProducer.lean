@@ -9,6 +9,7 @@ import Specimen.MakeConstrainedProducerInstance
 import Plausible.DeriveArbitrary
 import Specimen.TSyntaxCombinators
 import Specimen.PatternCoverage
+import Specimen.Rejections
 import Specimen.Utils
 import Specimen.Debug
 import Plausible.Arbitrary
@@ -704,6 +705,10 @@ def getProducerScheduleForInductiveConstructor
   getScheduleForInductiveRelationConstructor inductiveName ctorName inputNames deriveSort (some outputNamesTypesIndices) unknowns localCtx recFnName depMemo memoRef deriveDep
 
 
+/-- The folds `precomputeWeight` made so far, by their input (the weight term, names to unfold and
+binders, printed): the same constructor's weight recurs in every mode of its relation. -/
+initialize weightFoldCache : IO.Ref (Std.HashMap String (TSyntax `term × Bool)) ← IO.mkRef {}
+
 /-- When `specimen.precomputeWeights` is set, partially evaluate a constructor weight
     expression under the runtime `size` binder. `finalWeight` is a term mentioning the
     runtime size variable `sizePrimeName` and, otherwise, only literals baked in at
@@ -731,6 +736,15 @@ private def precomputeWeight (finalWeight : TSyntax `term) (sizePrimeName : Name
     TermElabM (TSyntax `term × Bool) := do
   unless Lean.Option.get (← getOptions) specimen.precomputeWeights do
     return (finalWeight, false)
+  let key := s!"{finalWeight.raw.prettyPrint}|{sizePrimeName}|{unfoldNames}|{extraBinder}|{← getCurrNamespace}"
+  if let some r := (← weightFoldCache.get)[key]? then return r
+  let t0 ← IO.monoMsNow
+  let r ← precomputeWeightCore finalWeight sizePrimeName unfoldNames extraBinder
+  timerLog s!"  weightfold {(← IO.monoMsNow) - t0} ms {key.take 80}"
+  weightFoldCache.modify (·.insert key r)
+  return r
+where precomputeWeightCore (finalWeight : TSyntax `term) (sizePrimeName : Name)
+    (unfoldNames : List Name) (extraBinder : Option Name) : TermElabM (TSyntax `term × Bool) := do
   try
     withLocalDeclD sizePrimeName (mkConst ``Nat) fun _ => do
     -- `extraBinder` is bound the same way, so a term mentioning it elaborates and the residual
@@ -744,6 +758,16 @@ private def precomputeWeight (finalWeight : TSyntax `term) (sizePrimeName : Name
       Term.synthesizeSyntheticMVarsNoPostponing
       let e ← instantiateMVars e
       if e.hasMVar then return (finalWeight, false)
+      -- Unfold the weight definitions and reduce the matches on what is closed first: a `match` on the
+      -- constructor's name with string patterns `simp` decides one pattern at a time, the fall-through
+      -- case in over a second, where reducing the matcher compares the literals directly.
+      let e ← Meta.transform e (pre := fun x => do
+        if let some c := x.getAppFn.constName? then
+          if unfoldNames.contains c then
+            if let some x' ← unfoldDefinition? x then return .visit x'.headBeta
+        match ← reduceMatcher? x with
+        | .reduced x' => return .visit x'.headBeta
+        | _ => return .continue)
       let mut thms : SimpTheorems ← getSimpTheorems
       for n in unfoldNames do
         thms ← thms.addDeclToUnfold n
@@ -1779,6 +1803,7 @@ partial def deriveBestInductiveSchedule (key : SpecKey)
 
   -- 3. Insert inProgress placeholder (cycle detection)
   memo.modify (·.insert key .inProgress)
+  withMemoProvenance key do
   let startTime ← IO.monoNanosNow
 
   -- 4. Derive schedules for each constructor
@@ -2282,6 +2307,14 @@ def deriveFromScheduleDep (dep : ScheduleDep) (scheduleRewriter : List ScheduleS
       dep.inductiveName indLevels freshArgIdents freshenedOutputNames.toList
       outTypes.toList producerSort localCtx
 
+/-- A generated `def` or `instance` command marked `noncomputable`, in its modifiers. -/
+def markNoncomputable (cmd : TSyntax `command) : TSyntax `command :=
+  let raw := cmd.raw
+  if raw.getKind != ``Lean.Parser.Command.declaration then cmd else
+  let mods := raw[0]
+  let mods := mods.setArg 4 (mkNullNode #[mkNode ``Lean.Parser.Command.noncomputable #[mkAtom "noncomputable"]])
+  ⟨raw.setArg 0 mods⟩
+
 /-- Rewrites a generated `instance` command to use `scoped instance` or `local instance`
     by patching the `attrKind` node in the syntax tree (declaration → instance → attrKind). -/
 def setInstanceVisibility (cmd : TSyntax `command) (kind : AttributeKind) : TSyntax `command :=
@@ -2356,10 +2389,16 @@ def compileSpecComponents (components : List (List SpecKey))
     : CommandElabM (Array (Array (SpecKey × Name) × Array (TSyntax `command) × Array (TSyntax `command))
                     × Std.HashMap SpecKey (String × String)) := do
   let reportTimers := Lean.Option.get (← getOptions) specimen.reportPhaseTimers
+  -- `SPECIMEN_DUMP_CODE=<dir>`: write each derived definition, pretty-printed, and its component.
+  let dumpDir? ← IO.getEnv "SPECIMEN_DUMP_CODE"
+  let buildCodeMap := buildCodeMap || dumpDir?.isSome
   let mut codegenNs : Nat := 0
   let mut ppNs : Nat := 0
   let mut compiledComponents : Array (Array (SpecKey × Name) × Array (TSyntax `command) × Array (TSyntax `command)) := #[]
   let mut compiledCodeMap : Std.HashMap SpecKey (String × String) := {}
+  let parallel := Lean.Option.get (← getOptions) specimen.parallelCodegen
+  let mut pending : Array (Array (SpecKey × Name) × Array (SpecKey × Option (Task (Except Exception
+      ((TSyntax `command × TSyntax `command) × MessageLog × Nat × Option (String × String)))))) := #[]
   for comp in components do
     -- Build the (key → globalName) mapping ONCE per component, then reuse it as the
     -- sibling list for every spec, so all specs agree on each other's names.
@@ -2379,6 +2418,35 @@ def compileSpecComponents (components : List (List SpecKey))
       compMeta.toList.map (fun (k, gn) => (k.inductiveName, k.outputIndices, gn, k.deriveSort))
     let mut defCmds : Array (TSyntax `command) := #[]
     let mut instCmds : Array (TSyntax `command) := #[]
+    -- Each spec's code in a task of its own (`specimen.parallelCodegen`).
+    if parallel then
+      let mut started : Array (SpecKey × Option (Task (Except Exception
+          ((TSyntax `command × TSyntax `command) × MessageLog × Nat × Option (String × String))))) := #[]
+      for (key, globalName) in compMeta do
+        match finalMemo[key]? with
+        | some (.done indSched) =>
+          if indSched.alreadyExists then continue
+          let specConstraints := constraintMap[key]?
+          let act ← liftCoreM <| Core.wrapAsync (cancelTk? := none) fun (_ : Unit) => do
+            modify fun st => { st with messages := {} }
+            let t0 ← IO.monoNanosNow
+            let r ← (compileInductiveSchedule indSched globalName compSiblings specConstraints).run'.run'
+            let dt := (← IO.monoNanosNow) - t0
+            if reportTimers then
+              timerLog s!"  codegen {key.inductiveName}{key.outputIndices} {repr key.deriveSort}: {dt / 1000000} ms [{t0 / 1000000}..{(t0 + dt) / 1000000}] tid {← IO.getTID}"
+            -- the rich widget's code view, printed here too
+            let pp ← if buildCodeMap then
+                let defStr ← try pure (← Lean.PrettyPrinter.ppCommand r.1).pretty
+                  catch _ => pure "(failed to pretty-print def)"
+                let instStr ← try pure (← Lean.PrettyPrinter.ppCommand r.2).pretty
+                  catch _ => pure "(failed to pretty-print instance)"
+                pure (some (defStr, instStr))
+              else pure none
+            return (r, (← get).messages, dt, pp)
+          started := started.push (key, some (← (act ()).asTask))
+        | _ => started := started.push (key, none)
+      pending := pending.push (compMeta, started)
+      continue
     for (key, globalName) in compMeta do
       match finalMemo[key]? with
       | some (.done indSched) =>
@@ -2389,6 +2457,8 @@ def compileSpecComponents (components : List (List SpecKey))
           let (defCmd, instCmd) ← liftTermElabM <|
             compileInductiveSchedule indSched globalName compSiblings specConstraints
           codegenNs := codegenNs + ((← IO.monoNanosNow) - tGen0)
+          if reportTimers then
+            timerLog s!"  codegen {key.inductiveName}{key.outputIndices} {repr key.deriveSort}: {((← IO.monoNanosNow) - tGen0) / 1000000} ms"
           defCmds := defCmds.push defCmd
           instCmds := instCmds.push instCmd
           -- Pretty-print to strings only for the rich widget's code dropdowns.
@@ -2413,8 +2483,43 @@ def compileSpecComponents (components : List (List SpecKey))
         if ← isInductive key.inductiveName then
           logWarning m!"No schedule found for {key.inductiveName}{key.outputIndices}"
     compiledComponents := compiledComponents.push (compMeta, defCmds, instCmds)
+  -- The parallel tasks' code, in the components' order.
+  for (compMeta, started) in pending do
+    let mut defCmds : Array (TSyntax `command) := #[]
+    let mut instCmds : Array (TSyntax `command) := #[]
+    for (key, t?) in started do
+      match t? with
+      | some t =>
+        match ← IO.wait t with
+        | .ok ((defCmd, instCmd), msgs, dt, pp?) =>
+          for m in msgs.toList do logMessage m
+          codegenNs := codegenNs + dt
+          if let some pp := pp? then compiledCodeMap := compiledCodeMap.insert key pp
+          defCmds := defCmds.push defCmd
+          instCmds := instCmds.push instCmd
+        | .error e =>
+          logWarning m!"Failed to compile {key.inductiveName}{key.outputIndices}{repr key.deriveSort}: {e.toMessageData}"
+      | none =>
+        if ← isInductive key.inductiveName then
+          logWarning m!"No schedule found for {key.inductiveName}{key.outputIndices}"
+    compiledComponents := compiledComponents.push (compMeta, defCmds, instCmds)
   if reportTimers then
     logInfo m!"⏱ codegen+pp split (ms): codegen {codegenNs / 1000000}, pp {ppNs / 1000000}{if buildCodeMap then "" else " (pp skipped: richOutput off)"}"
+  if let some dir := dumpDir? then
+    IO.FS.createDirAll dir
+    let modName := (← getMainModule).toString
+    let h ← IO.FS.Handle.mk (System.FilePath.mk dir / "components.jsonl") .append
+    for (compMeta, _, _) in compiledComponents do
+      let mut members : Array Json := #[]
+      for (key, gn) in compMeta do
+        let some (defStr, instStr) := compiledCodeMap[key]? | continue
+        IO.FS.writeFile (System.FilePath.mk dir / s!"{gn}.lean") (defStr ++ "\n\n" ++ instStr ++ "\n")
+        members := members.push (Json.mkObj [("name", toJson gn.toString),
+          ("sort", toJson (toString (repr key.deriveSort))),
+          ("defLines", toJson (defStr.splitOn "\n").length),
+          ("instLines", toJson (instStr.splitOn "\n").length)])
+      unless members.isEmpty do
+        h.putStrLn (Json.compress (Json.mkObj [("module", toJson modName), ("members", Json.arr members)]))
   return (compiledComponents, compiledCodeMap)
 
 /-- Emit compiled SCC components: each multi-def component as a single `mutual … end`
@@ -2423,8 +2528,9 @@ def emitSpecComponents
     (compiledComponents : Array (Array (SpecKey × Name) × Array (TSyntax `command) × Array (TSyntax `command)))
     (attrKind : AttributeKind) (rootNames : List Name := []) : CommandElabM Unit := do
   let basalt := Lean.Option.get (← getOptions) specimen.emitBasalt
-  for (compMeta, defCmds, instCmds) in compiledComponents do
-    if defCmds.isEmpty then continue
+  -- A component's definitions and instances.
+  let emitDefs (compMeta : Array (SpecKey × Name)) (defCmds instCmds : Array (TSyntax `command)) :
+      CommandElabM Unit := do
     -- A dependency derived under Basalt although a hand-written Plausible instance exists: the derived
     -- code needs a `BacktrackGenFor`, so the hand-written generator is not the one that runs. Said here,
     -- before the derived instances exist, because the scheduler's search discards its own messages.
@@ -2441,12 +2547,26 @@ def emitSpecComponents
               `BacktrackGenFor` instance, which generators derived under `specimen.emitBasalt` call. \
               Deriving one instead; to keep the hand-written generator, give it a `BacktrackGenFor` \
               counterpart."
+    let tDef ← IO.monoNanosNow
+    let nc := Lean.Option.get (← getOptions) specimen.noncomputableDefs
+    let defCmds := if nc then defCmds.map markNoncomputable else defCmds
+    -- (no info trees for the derived code: the whole derivation is one command, whose trees would
+    -- grow with every component, and nothing reads them)
+    let noInfo := (← IO.getEnv "SPECIMEN_DEFS_INFO").isNone
+    let elabC (c : TSyntax `command) : CommandElabM Unit :=
+      if noInfo then withEnableInfoTree false (elabCommand c) else elabCommand c
     if defCmds.size > 1 then
-      elabCommand (← `(command| mutual $defCmds* end))
+      elabC (← `(command| mutual $defCmds* end))
     else
-      elabCommand defCmds[0]!
+      elabC defCmds[0]!
+    let tInst ← IO.monoNanosNow
     for instCmd in instCmds do
-      elabCommand (setInstanceVisibility instCmd attrKind)
+      let c := setInstanceVisibility instCmd attrKind
+      elabC (if nc then markNoncomputable c else c)
+    if Lean.Option.get (← getOptions) specimen.reportPhaseTimers then
+      timerLog s!"  defs {compMeta.toList.map (·.1.inductiveName)} ({defCmds.size}): {((← IO.monoNanosNow) - tDef) / 1000000} ms (defs {(tInst - tDef) / 1000000}, instances {((← IO.monoNanosNow) - tInst) / 1000000})"
+  for (compMeta, defCmds, instCmds) in compiledComponents do
+    unless defCmds.isEmpty do emitDefs compMeta defCmds instCmds
 
 @[command_elab mutual_deriver]
 def elabDeriveMutual : CommandElab := fun stx => do
@@ -2503,6 +2623,27 @@ def elabDeriveMutual : CommandElab := fun stx => do
         for (indName, outIdxs, _, ds) in specMeta do
           let key : SpecKey := { inductiveName := indName, outputIndices := outIdxs, deriveSort := ds }
           let _ ← liftTermElabM <| deriveBestInductiveSchedule key memo
+        -- `specimen.cycleFixpoint`: a cycle's members were chosen against a placeholder for the mode
+        -- then in progress, and its root against them; re-derive them all, each reading the others
+        -- at their derived scores, until no score changes.
+        let rounds := Lean.Option.get (← getOptions) specimen.cycleFixpoint
+        for round in [:rounds] do
+          let keys := (← (memoCycleLow.get : IO _)).toList.map (·.1) ++ (← (memoCycleRoots.get : IO _)).toList
+          if keys.isEmpty then break
+          (memoCycleLow.set {} : IO Unit)
+          (memoCycleRoots.set {} : IO Unit)
+          let before ← memo.get
+          let fp (e : Option MemoEntry) : String := match e with
+            | some (.done s) => toString (s.ctorStats.map fun (n, _, _, sc) => (n, sc.reprFn sc.val))
+            | _ => "-"
+          let mut changed : Array SpecKey := #[]
+          for k in keys do
+            memo.modify (·.erase k)
+            let _ ← liftTermElabM <| deriveBestInductiveSchedule k memo
+            if fp before[k]? != fp (← memo.get)[k]? then changed := changed.push k
+          logInfo m!"specimen.cycleFixpoint: round {round + 1}: {keys.length} re-derived, \
+            {changed.size} changed{if changed.isEmpty then "" else s!": {changed.toList.map fun k => s!"{k.inductiveName}{k.outputIndices}"}"}"
+          if changed.isEmpty then break
         let tSearch ← IO.monoMsNow
         -- DFS from roots to find actually-used deps
         let finalMemo ← memo.get
@@ -2510,6 +2651,21 @@ def elabDeriveMutual : CommandElab := fun stx => do
         for (indName, outIdxs, _, ds) in specMeta do
           let key : SpecKey := { inductiveName := indName, outputIndices := outIdxs, deriveSort := ds }
           usedKeys := collectUsedDeps key finalMemo usedKeys
+        if Lean.Option.get (← getOptions) specimen.reportRejections then
+          let mut lines : Array String := #[]
+          let mut rules : Nat := 0
+          for key in usedKeys.toList do
+            unless key.deriveSort == .Generator || key.deriveSort == .Enumerator do continue
+            let some (.done s) := finalMemo[key]? | continue
+            if s.alreadyExists then continue
+            for (ctor, (steps, _)) in s.baseSchedules ++ s.recSchedules do
+              rules := rules + 1
+              let pts ← liftTermElabM <| Specimen.Rejections.rejectionPoints steps
+              for pt in pts do
+                lines := lines.push s!"{key.inductiveName.getString!}{key.outputIndices} {repr key.deriveSort} {ctor.getString!}: {pt}"
+          let sorted := lines.qsort (· < ·)
+          for l in sorted do timerLog s!"  REJECT {l}"
+          logInfo m!"rejection points: {sorted.size} in {rules} rules\n{"\n".intercalate sorted.toList}"
         -- Add all used deps to specMeta (so they're included in the mutual block)
         for key in usedKeys.toList do
           let inBlock := specMeta.any fun (sIndName, sOutIdxs, _, sDs) =>

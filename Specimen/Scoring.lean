@@ -356,6 +356,15 @@ abbrev ResolvedInductiveAggregator := List Score → Score
 /-- A resolved whole-schedule scorer that scores an entire schedule at once (for state-tracking scorers). -/
 abbrev ResolvedWholeScheduleScorer := SpecKey → Std.HashMap SpecKey MemoEntry → Std.HashSet Name → List ScheduleStep → MetaM Score
 
+/-- A whole-schedule scorer taken one step at a time, for a search that extends schedules step by
+step: the state after a prefix, extended by each step appended. Its law is
+`finish (← steps.foldlM (push key memo ins) init) = wholeScheduleScorer key memo ins steps`, so a
+prefix's state is the parent's extended by the new steps, never rescored. -/
+structure IncrementalScorer where
+  init : Dynamic
+  push : SpecKey → Std.HashMap SpecKey MemoEntry → Std.HashSet Name → Dynamic → ScheduleStep → MetaM Dynamic
+  finish : Dynamic → Score
+
 ----------------------------------------------
 -- Default score type
 ----------------------------------------------
@@ -472,6 +481,8 @@ structure ScorerBundle where
       this instead of `stepScorer` + `scheduleScorer`. Allows tracking state across
       steps (e.g., variable source quality). -/
   wholeScheduleScorer : Option ResolvedWholeScheduleScorer := none
+  /-- Optional incremental form of `wholeScheduleScorer` (see `IncrementalScorer`). -/
+  incrementalScorer : Option IncrementalScorer := none
 
 /-- Build a complete ScorerBundle from typed scorers. -/
 def mkScorerBundle [Inhabited S] [TypeName S] [Repr S] [Scorable S]

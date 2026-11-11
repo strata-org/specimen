@@ -22,6 +22,7 @@ import Specimen.MExp
 import Specimen.LazyRoseTree
 import Specimen.SearchTree
 import Specimen.Scoring
+import Specimen.ScoringInversion
 import Specimen.PatternCoverage
 import Specimen.TheoremChecker
 import Specimen.Tactic

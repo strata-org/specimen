@@ -112,6 +112,9 @@ private def deriveOne (tyName : Name) : CommandElabM Unit := do
     else liftTermElabM `($(mkIdent tyName) $paramIdents*)
   let genName := tyName ++ `basaltArbitrarySized
   let genIdent := mkIdent genName
+  -- (declared at the root: `tyName` is already qualified, so in the current namespace it would get
+  -- the namespace twice)
+  let genDeclId := mkIdent (`_root_ ++ genName)
   let fuelN := mkIdent `n
 
   -- The two match branches need *separate* generator terms, because the fuel they may mention
@@ -175,7 +178,7 @@ private def deriveOne (tyName : Name) : CommandElabM Unit := do
   let paramBinders ← liftTermElabM <|
     mkTypeClassInstanceBinders paramNames #[`Basalt.ArbitrarySized]
   elabCommand (← `(command|
-    def $genIdent $paramBinders:bracketedBinder* {G : Type → Type} [_root_.Gen G] [Specimen.Pick G] :
+    def $genDeclId $paramBinders:bracketedBinder* {G : Type → Type} [_root_.Gen G] [Specimen.Pick G] :
         Nat → G $tyIdent
       | Nat.zero => _root_.oneOf [$zeroBranches,*]
       | Nat.succ $fuelN => _root_.oneOf [$succBranches,*]))

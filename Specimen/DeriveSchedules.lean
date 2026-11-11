@@ -222,8 +222,12 @@ def collectCheckedHypotheses (env : ScheduleEnv) (boundVars : List Name) (checke
     if i ∉ checkedHypotheses && List.all vars (List.all · (· ∈ boundVars)) then
       some (i, hyp)
     else none) env.sortedHypotheses
-
-  checkSteps
+  -- Equalities (a repeated conclusion variable's, a function call's) are the cheapest checks: run
+  -- them before premises that may recurse, so a constructor whose conclusion does not match the inputs
+  -- is rejected without the recursion. Every hypothesis here has all its variables bound, so the order
+  -- is free. The callers emit this list reversed.
+  let (eqs, others) := checkSteps.partition fun (_, (h, _)) => h == ``Eq
+  others ++ eqs
 
 /-- Determines whether inputs & outputs of a generator appear under the same constructor in a hypothesis `hyp`
     - Example: consider the `TApp` constructor for STLC (when we are generating `e` such that `typing Γ e τ` holds):
@@ -1315,6 +1319,12 @@ def recordChosenOrder [Monad m] [MonadEnv m] (key : SpecKey) (ctorName : Name) (
   modifyEnv (chosenOrdersExt.modifyState · (fun l =>
     (key, ctorName, order) :: l.filter (fun (k, c, _) => !(k == key && c == ctorName))))
 
+/-- Prefix-search counters: nodes, leaves, bounds computed, ns in bounds, ns in leaf scoring,
+prunes. TEMPORARY instrumentation. -/
+initialize prefixSearchStats : IO.Ref (Array Nat) ← IO.mkRef #[0, 0, 0, 0, 0, 0]
+
+def bumpPrefixStat (i n : Nat) : IO Unit := prefixSearchStats.modify fun a => a.modify i (· + n)
+
 /-- Find the best hypothesis ordering for one constructor, using the active
     scoring bundle as the objective function.
 
@@ -1471,13 +1481,13 @@ partial def searchBestScheduleM (ctorName : Name) (vars : List TypedVar)
 
   -- Helper: score an ordering via processChoice → ScheduleSteps → bundle.
   -- On-demand: derives unknown deps before scoring.
-  let scoreComponentOrdering := fun (env : List Name) (envSet : Std.HashSet Name)
-      (ordering : List (HypothesisExpr × List (List Name))) => do
-    let (compSched, _, _) ← processOrdering ordering env envSet
+  let convertPre := fun (compSched : List (PreScheduleStep HypothesisExpr Name)) => do
     let typedSteps := compSched.map (typePreScheduleStep nameTypeMap)
-    let schedSteps ← (typedSteps.flatMapM (preScheduleStepToScheduleStep ctorName)).run scheduleEnv
+    (typedSteps.flatMapM (preScheduleStepToScheduleStep ctorName)).run scheduleEnv
+  -- Score converted steps; `derive` derives the dependency modes they call first.
+  let scoreSteps := fun (derive : Bool) (schedSteps : List ScheduleStep) => do
     -- On-demand dep derivation
-    let deps := collectNonRecDeps schedSteps
+    let deps := if derive then collectNonRecDeps schedSteps else []
     for dep in deps do
       if dep.kind == DepKind.relation || dep.kind == DepKind.checker then
         let depKey : SpecKey := { inductiveName := dep.inductiveName,
@@ -1494,6 +1504,19 @@ partial def searchBestScheduleM (ctorName : Name) (vars : List TypedVar)
         let stepScores ← schedSteps.mapM fun step => bundle.stepScorer key memoState inputVarSet step
         pure (bundle.scheduleScorer stepScores)
     return score
+  let scorePreSchedWith := fun (derive : Bool) (compSched : List (PreScheduleStep HypothesisExpr Name)) => do
+    scoreSteps derive (← convertPre compSched)
+  let scorePreSched := scorePreSchedWith true
+  -- The bound of converted steps: no dependency derived for them, and every provisional mode read
+  -- at its best.
+  let boundSteps := fun (schedSteps : List ScheduleStep) => show MetaM Score from do
+    let saved ← (memoBoundMode.get : IO Bool)
+    (memoBoundMode.set true : IO Unit)
+    try scoreSteps false schedSteps finally (memoBoundMode.set saved : IO Unit)
+  let scoreComponentOrdering := fun (env : List Name) (envSet : Std.HashSet Name)
+      (ordering : List (HypothesisExpr × List (List Name))) => do
+    let (compSched, _, _) ← processOrdering ordering env envSet
+    scorePreSched compSched
 
   -- 4. Either honour a pinned premise order, or search for one.
   let mut accSched : List (PreScheduleStep HypothesisExpr Name) := []
@@ -1546,8 +1569,183 @@ partial def searchBestScheduleM (ctorName : Name) (vars : List TypedVar)
     pinned := true
     chosenHyps := order.filterMap (fun i => hypotheses[i]?)
 
+  -- The prefix explorer (`specimen.prefixSearch`, after QuickChick 3.0's
+  -- `enum_schedules_prefix_classified`): the schedule is built left to right, each node choosing any
+  -- remaining premise as the next step, so every order is reachable; the steps a prefix commits are
+  -- never revisited, so for a score that only grows as steps are appended its own score bounds every
+  -- completion, and pruning by it is exact. Orders differing only in the relative order of independent
+  -- premises (plain relations sharing no unbound variable) are explored once, by sleep sets.
+  let prefixSearch := specimen.prefixSearch.get (← getOptions)
+  if !pinned && prefixSearch then
+    -- A committed prefix's score bounds its completions for any score that grows as steps are
+    -- appended (the built-in ones), so the bundle's order prunes here even when the bundle declares
+    -- `noPruning` for the insertion tree, whose nodes are orders of a subset of the premises.
+    let pruneBetter : Score → Score → Bool := bundle.isBetter
+    -- A node's bound, carried: its parent's state extended by the node's new steps (in bound mode, as
+    -- `boundSteps` scores), so a bound never rescores its prefix. Without an incremental form of the
+    -- bundle's scorer, the prefix is rescored.
+    let pushBound := fun (st : Dynamic) (newSteps : List ScheduleStep) => show MetaM Dynamic from do
+      match bundle.incrementalScorer with
+      | none => return st
+      | some inc =>
+        let saved ← (memoBoundMode.get : IO Bool)
+        (memoBoundMode.set true : IO Unit)
+        try
+          let m ← memo.get
+          newSteps.foldlM (inc.push key m inputVarSet) st
+        finally (memoBoundMode.set saved : IO Unit)
+    let boundOf := fun (st : Dynamic) (steps : List ScheduleStep) => show MetaM Score from do
+      match bundle.incrementalScorer with
+      | some inc => return inc.finish st
+      | none => boundSteps steps
+    let initState : Dynamic := match bundle.incrementalScorer with
+      | some inc => inc.init
+      | none => bundle.emptyScore.val
+    for scc in sccGroups do
+      if ← done.get then break
+      let constructed := (scc.map (·.1)).map (constructHypothesis typeVars delegableMap)
+      let indexed := constructed.zipIdx
+      let plain (h : HypothesisExpr × List (List Name) × List Name) : Bool :=
+        h.1.2.all fun a => match a with | .Unknown _ => true | _ => false
+      let footprint (h : HypothesisExpr × List (List Name) × List Name) : List Name :=
+        h.2.1.flatten ++ h.2.2
+      -- With `prefixFullFootprint`, any two premises sharing no unbound variable anywhere in their
+      -- arguments — under constructors and functions, and the inputs of a delegated producer — are
+      -- independent: each one's mode, and the checks it makes ready, depend only on the variables it
+      -- mentions, none of which the other binds, so the two orders give the same steps, the checks
+      -- placed differently, and every score built in sums the same. A variable whose type mentions
+      -- another (a dependent type, a type parameter) could tie them through the type, so a premise
+      -- with one is independent of nothing.
+      let fullFootprint := specimen.prefixFullFootprint.get (← getOptions)
+      let typeClosed (v : Name) : Bool := match nameTypeMap.find? v with
+        | some ty => !ty.hasFVar && !ty.hasLooseBVars && !ty.hasMVar
+        | none => false
+      let argVars (h : HypothesisExpr × List (List Name) × List Name) : List Name :=
+        h.1.2.flatMap variablesInConstructorExpr
+      let independent (envSet : Std.HashSet Name) (a b : HypothesisExpr × List (List Name) × List Name) :
+          Bool :=
+        if fullFootprint then
+          let fa := argVars a
+          let fb := argVars b
+          fa.all typeClosed && fb.all typeClosed &&
+            !(fa.any fun v => !envSet.contains v && fb.contains v)
+        else
+          plain a && plain b && !((footprint a).any fun v => !envSet.contains v && (footprint b).contains v)
+      let hypOf (j : Nat) := (indexed.find? (·.2 == j)).map (·.1)
+      -- (env, envSet, steps, remaining, sleeping)
+      -- A node: (env, envSet, pre-steps, the same converted, remaining premises, sleeping)
+      -- Each child converts only its own new steps, so a bound never re-converts its prefix.
+      let expand := fun (env : List Name) (envSet : Std.HashSet Name)
+          (sched : List (PreScheduleStep HypothesisExpr Name)) (steps : List ScheduleStep)
+          (st : Dynamic)
+          (remaining : List ((HypothesisExpr × List (List Name) × List Name) × Nat))
+          (sleeping : List Nat) (useSleep : Bool) => do
+        let forced := if useSleep then remaining.find? fun (h, i) =>
+            remaining.all fun (h', i') => i == i' || independent envSet h h' else none
+        let mut children : Array (List Name × Std.HashSet Name ×
+          List (PreScheduleStep HypothesisExpr Name) × List ScheduleStep × Dynamic ×
+          List ((HypothesisExpr × List (List Name) × List Name) × Nat) × List Nat) := #[]
+        let mut explored : List Nat := []
+        for (h, i) in remaining do
+          if useSleep && sleeping.contains i then continue
+          if let some (_, fi) := forced then
+            if fi != i then continue
+          let others := remaining.filter (·.2 != i)
+          let (hyp, outs, always) := h
+          let (newSteps, rest', env', envSet') ←
+            processModeChoices hyp outs always (others.map (·.1)) env envSet
+          -- the premises left, with their indices (`rest'` keeps `others`' order)
+          let (remaining', _) := others.foldl (fun (acc, todo) (o, oi) =>
+            match todo with
+            | t :: ts => if t.1 == o.1 then (acc ++ [(o, oi)], ts) else (acc, todo)
+            | [] => (acc, todo)) (([] : List ((HypothesisExpr × List (List Name) × List Name) × Nat)), rest')
+          let childSleep := if !useSleep then [] else (sleeping ++ explored).filter fun j =>
+            remaining'.any (·.2 == j) && (match hypOf j with
+              | some o => independent envSet h o
+              | none => false)
+          let newConverted ← convertPre newSteps
+          children := children.push (env', envSet', sched ++ newSteps, steps ++ newConverted,
+            ← pushBound st newConverted, remaining', childSleep)
+          explored := explored ++ [i]
+        return children
+      let mut best : Option (List (PreScheduleStep HypothesisExpr Name) × List Name × Std.HashSet Name ×
+        Score) := none
+      -- A first bound: dive to one complete schedule by the best-bounded child at each node.
+      let mut dive := (accEnv, accEnvSet, ([] : List (PreScheduleStep HypothesisExpr Name)),
+        ([] : List ScheduleStep), initState, indexed)
+      let mut diving := true
+      while diving do
+        let (env, envSet, sched, steps, st, remaining) := dive
+        if remaining.isEmpty then
+          let score ← scoreSteps true steps
+          best := some (sched, env, envSet, score)
+          diving := false
+        else
+          let children ← expand env envSet sched steps st remaining [] false
+          let mut pick : Option (Score × _) := none
+          for c@(_, _, _, csteps, cst, _, _) in children do
+            let b ← boundOf cst csteps
+            match pick with
+            | some (pb, _) => if bundle.isBetter b pb then pick := some (b, c)
+            | none => pick := some (b, c)
+          match pick with
+          | some (_, (e, es, sc, cs, cst, rem, _)) => dive := (e, es, sc, cs, cst, rem)
+          | none => diving := false
+      let mut stack : List (List Name × Std.HashSet Name × List (PreScheduleStep HypothesisExpr Name) ×
+        List ScheduleStep × Dynamic × List ((HypothesisExpr × List (List Name) × List Name) × Nat) ×
+        List Nat) :=
+        [(accEnv, accEnvSet, [], [], initState, indexed, [])]
+      while !stack.isEmpty do
+        if ← done.get then break
+        match stack with
+        | [] => break
+        | (env, envSet, sched, steps, st, remaining, sleeping) :: rest =>
+          stack := rest
+          (bumpPrefixStat 0 1 : IO Unit)
+          if let some (_, _, _, b) := best then
+            if !steps.isEmpty then
+              let t0 ← (IO.monoNanosNow : IO Nat)
+              let bsc ← boundOf st steps
+              (bumpPrefixStat 2 1 : IO Unit)
+              (bumpPrefixStat 3 ((← (IO.monoNanosNow : IO Nat)) - t0) : IO Unit)
+              -- a schedule (complete or not) that cannot beat the best with every unknown mode at
+              -- its best is dropped, before anything is derived for it
+              if pruneBetter b bsc then
+                (bumpPrefixStat 5 1 : IO Unit)
+                continue
+          if remaining.isEmpty then
+            (bumpPrefixStat 1 1 : IO Unit)
+            let t0 ← (IO.monoNanosNow : IO Nat)
+            let score ← scoreSteps true steps
+            (bumpPrefixStat 4 ((← (IO.monoNanosNow : IO Nat)) - t0) : IO Unit)
+            let c ← countRef.get
+            countRef.set (c + 1)
+            match best with
+            | some (_, _, _, b) => if bundle.isBetter score b then best := some (sched, env, envSet, score)
+            | none => best := some (sched, env, envSet, score)
+            if c + 1 > limit then done.set true
+            continue
+          -- Children in the fixed sibling order (which the sleep sets are defined by), unscored: each is
+          -- bounded when it is popped.
+          let children ← expand env envSet sched steps st remaining sleeping true
+          stack := children.toList ++ stack
+      match best with
+      | none =>
+        throwError "searchBestScheduleM: no schedule for a component of \
+          {key.inductiveName} (ctor {ctorName}, outputIndices {key.outputIndices}, \
+          deriveSort {repr key.deriveSort}) — the prefix search yielded no leaf."
+      | some (compSched, compEnv, compEnvSet, bestScore) =>
+        if (← (IO.getEnv "SPECIMEN_PREFIX_BEST" : IO _)).isSome then
+          (IO.eprintln s!"PREFIXBEST {key.inductiveName} {key.outputIndices} {repr key.deriveSort} \
+            {ctorName} {bundle.reprScore bestScore}" : IO Unit)
+        accSched := accSched ++ compSched
+        accEnv := compEnv
+        accEnvSet := compEnvSet
+        chosenHyps := chosenHyps ++ compSched.flatMap fun st => match st with
+          | .Produce _ h => [h] | .Checks hs => hs | .InstVars _ => []
+
   -- Emptied rather than guarded with `unless`, so the search loop below needs no reindentation.
-  let componentTrees := if pinned then [] else componentTrees
+  let componentTrees := if pinned || prefixSearch then [] else componentTrees
   for (_sccGroup, tree) in componentTrees do
     if ← done.get then break
     -- Use minTreePruningM to find the best ordering for this component
@@ -1560,8 +1758,12 @@ partial def searchBestScheduleM (ctorName : Name) (vars : List TypedVar)
 
     -- `none` is a bound that never prunes. A concrete seed can prune every leaf, since
     -- additive score types (`DefaultScore.checks`) can exceed any finite constant.
+    -- `noPruning`: a bound that never prunes (the bundle's score is not monotone in the premises).
+    let pruneBetter : Score → Score → Bool := match bundle.pruneStrategy with
+      | .noPruning => fun _ _ => false
+      | _ => bundle.isBetter
     let _ ← SearchTree.minTreePruningM tree (scoreComponentOrdering envSnapshot envSetSnapshot)
-      bundle.isBetter (none : Option Score) componentDone
+      pruneBetter (none : Option Score) componentDone
       fun (ordering, score) currentBest => do
         -- Record before checking the limit: bailing first would leave `componentBestRef`
         -- unset and drop this component's hypotheses.

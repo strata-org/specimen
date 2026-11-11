@@ -404,6 +404,9 @@ mutual
       | .Checker => `($(mkIdent ``Except.ok) $(mkIdent ``false))
     | .MRet e => do
       let e' ← mexpToTSyntax e deriveSort
+      if Lean.Option.get (← getOptions) specimen.plainBinds then
+        `($(mkIdent ``Pure.pure) $e')
+      else
       `(return $e')
     | .MBind monadSort m vars k => do
       -- Compile the monadic expression `m` and the continuation `k` to `TSyntax term`s
@@ -422,6 +425,9 @@ mutual
           else
             mkTuple vars
         -- If we have a producer, we can just produce a monadic bind
+        if Lean.Option.get (← getOptions) specimen.plainBinds then
+          `($(mkIdent ``Bind.bind) $m1:term (fun $compiledArgs:term => $k1:term))
+        else
         `(do let $compiledArgs:term ← $m1:term ; $k1:term)
       | .Generator, .Checker
       | .Enumerator, .Checker => do
@@ -659,6 +665,9 @@ def truncationToMExp (steps : List ScheduleStep) (defFuel : MExp) (recType : Exp
       (.MLit (.natVal 0)) targetInductive)
     (.MConst (Name.mkStr2 "Specimen" "truncated")) (conclusionSteps steps)
 
+
+
+
 /-- Converts a `Schedule` (a list of `ScheduleStep`s along with a `ScheduleSort`,
     which acts as the conclusion of the schedule) to an `MExp`.
     - `mfuel` and `defFuel` are auxiliary `MExp`s representing the fuel
@@ -673,6 +682,23 @@ def scheduleToMExp (schedule : Schedule) (mfuel : MExp) (defFuel : MExp) (recTyp
   let sizeExpr : MExp :=
     if numSizeCalls ≤ 1 then .MId sizePrimeName
     else .MApp .allExplicit (.MConst ``Nat.div) [.MId sizePrimeName, .MLit (.natVal numSizeCalls)]
+  -- Under a budget, a generator's size-consuming calls each take their part of a drawn split.
+  let budget := numSizeCalls ≥ 2 && Lean.Option.get (← getOptions) specimen.emitBasalt &&
+    Lean.Option.get (← getOptions) specimen.sizeSplit &&
+    scheduleSort matches .ProducerSchedule .Generator _
+  let partsName := `__sizes
+  let isSizeConsuming : ScheduleStep → Bool := fun step =>
+    Schedules.countSizeConsumingCalls targetInductive [step] == 1
+  let stepSizes : List MExp := Id.run do
+    let mut i := 0
+    let mut out := #[]
+    for step in scheduleSteps do
+      if budget && isSizeConsuming step then
+        out := out.push (.MApp .allExplicit (.MConst (Name.mkStr3 "Specimen" "SizeSplit" "sizeAt"))
+          [.MId partsName, .MLit (.natVal i)])
+        i := i + 1
+      else out := out.push sizeExpr
+    return out.toList
   -- Determine the *epilogue* of the schedule (i.e. what happens after we
   -- have finished executing all the `scheduleStep`s)
   let epilogue :=
@@ -699,8 +725,50 @@ def scheduleToMExp (schedule : Schedule) (mfuel : MExp) (defFuel : MExp) (recTyp
   -- Note that the fold composes the `MExp`, and we use `foldr` since
   -- we want the `epilogue` to be the base-case of the fold
   let basalt := Lean.Option.get (← getOptions) specimen.emitBasalt
-  let steps (basaltWorkers : Bool) := List.foldrM (fun step acc => scheduleStepToMExp step defFuel acc
-    recType fuelPrimeName sizeExpr targetInductive basaltWorkers) epilogue scheduleSteps
+  -- Each call's floor, where the relation has a floor function (`specimen.splitFloors`): the function
+  -- at the call's inputs, which the steps before the split have fixed.
+  let floorFn? : Option Name := ((Lean.Option.get (← getOptions) specimen.splitFloors).splitOn ",").findSome? fun e =>
+    match e.splitOn ":" with
+    | [r, f] => if r.trimAscii.toString == targetInductive.toString then some f.trimAscii.toString.toName
+                else none
+    | _ => none
+  -- A floor can only read what is in scope when the split is drawn: not what a later step binds.
+  let firstSized := scheduleSteps.findIdx? isSizeConsuming
+  let boundBy : ScheduleStep → List Name := fun
+    | .Match _ _ p => patternVars p
+    | .Unconstrained v _ _ => [v]
+    | .SuchThat vs _ _ => vs.map (·.1)
+    | _ => []
+  let boundLater : List Name := match firstSized with
+    | some i => (scheduleSteps.drop i).flatMap boundBy
+    | none => []
+  let inScope (args : List ConstructorExpr) : Bool :=
+    args.all fun a => (Schedules.varsInConstructorExpr a).all (!boundLater.contains ·)
+  let callFloor : ScheduleStep → MExp := fun step =>
+    match floorFn?, step with
+    | some fn, .Unconstrained _ (.Rec _ args) _ | some fn, .SuchThat _ (.Rec _ args) _ =>
+      if inScope args then .MApp .allExplicit (.MConst fn) (args.map (constructorExprToMExp .allExplicit))
+      else .MLit (.natVal 0)
+    | _, _ => .MLit (.natVal 0)
+  let uniformFloor := Lean.Option.get (← getOptions) specimen.splitFloor
+  let anyFloor := floorFn?.isSome
+  let split : MExp :=
+    if anyFloor then
+      let floors := (scheduleSteps.filter isSizeConsuming).map callFloor
+      let lst := floors.foldr (fun x acc => .MApp .allowImplicit (.MConst ``List.cons) [x, acc])
+        (.MConst ``List.nil)
+      .MApp .allowImplicit (.MConst (Name.mkStr3 "Specimen" "SizeSplit" "draw")) [lst, .MId sizePrimeName]
+    else
+      .MApp .allowImplicit (.MConst (Name.mkStr3 "Specimen" "SizeSplit" "drawEven"))
+        [.MLit (.natVal numSizeCalls), .MLit (.natVal uniformFloor), .MId sizePrimeName]
+  -- The split is drawn just before the first call it sizes, once the steps before it have fixed what
+  -- the floors read.
+  let steps (basaltWorkers : Bool) := do
+    List.foldrM (fun ((step, sz), i) acc => do
+      let m ← scheduleStepToMExp step defFuel acc recType fuelPrimeName sz targetInductive basaltWorkers
+      if budget && firstSized == some i then
+        return .MBind .Gen split [⟨partsName, some (mkApp (mkConst ``List [0]) (mkConst ``Nat))⟩] m
+      return m) epilogue (scheduleSteps.zip stepSizes).zipIdx
   -- A checker stays on `DecOpt` and reads its premises' enumerators through Specimen's own classes,
   -- which `Specimen.BasaltBridge` serves from the Basalt ones; only its calls into its own block's
   -- enumerators, which are Basalt workers, need adapting.
