@@ -35,7 +35,7 @@ inductive InterpIssue where
   /-- A step reads a variable that nothing bound — usually a schedule edited out of order. -/
   | unboundVar (spec : SpecKey) (ctor : Name) (variable_ : Name) (context : String)
   /-- A call passes the wrong number of value-level arguments for the callee's input arity. -/
-  | arityMismatch (spec : SpecKey) (ctor : Name) (callee : String) («given» expected : Nat)
+  | arityMismatch (spec : SpecKey) (ctor : Name) (callee : String) (given expected : Nat)
   /-- A step or schedule form v1 does not interpret. -/
   | unsupported (spec : SpecKey) (ctor : Name) (why : String)
   deriving Repr

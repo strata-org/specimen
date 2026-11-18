@@ -859,8 +859,12 @@ def deriveConstrainedProducer
   -- Obtain Lean's `InductiveVal` data structure, which contains metadata about the inductive relation
   let inductiveVal ← getConstInfoInduct inductiveName
 
-  -- Infer dependent argument types in the actual arguments' local context.
-  let argTypes ← getCorrectTypes constrArgs inductiveName inductiveLevels
+  -- Determine the type for each argument to the inductive
+  let inductiveTypeComponents ← getComponentsOfArrowType inductiveVal.type
+
+  -- To obtain the type of each arg to the inductive,
+  -- we pop the last element (`Prop`) from `inductiveTypeComponents`
+  let argTypes := inductiveTypeComponents.pop
 
   -- Extract the name of each argument. Output positions may not be fvars
   -- (e.g., when the output type depends on fun-bound variables), so use the

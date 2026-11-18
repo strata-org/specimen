@@ -204,7 +204,7 @@ inductive PlanError where
   /-- The plan generates a variable the constructor does not declare, or declares without a type. -/
   | unknownVar (v : Name)
   /-- The `CtorSpec` is malformed: the conclusion has more or fewer arguments than the relation. -/
-  | arityMismatch («given» expected : Nat)
+  | arityMismatch (given expected : Nat)
   /-- The conclusion is not linearized: an input position holds a function application, so its
       variables can be neither matched nor solved for. -/
   | conclusionNotLinearized (arg : String)
