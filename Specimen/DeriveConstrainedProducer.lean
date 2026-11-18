@@ -859,12 +859,8 @@ def deriveConstrainedProducer
   -- Obtain Lean's `InductiveVal` data structure, which contains metadata about the inductive relation
   let inductiveVal ← getConstInfoInduct inductiveName
 
-  -- Determine the type for each argument to the inductive
-  let inductiveTypeComponents ← getComponentsOfArrowType inductiveVal.type
-
-  -- To obtain the type of each arg to the inductive,
-  -- we pop the last element (`Prop`) from `inductiveTypeComponents`
-  let argTypes := inductiveTypeComponents.pop
+  -- Infer dependent argument types in the actual arguments' local context.
+  let argTypes ← getCorrectTypes constrArgs inductiveName inductiveLevels
 
   -- Extract the name of each argument. Output positions may not be fvars
   -- (e.g., when the output type depends on fun-bound variables), so use the
@@ -2539,7 +2535,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
           compileSpecComponents components finalMemo constraintMap (buildCodeMap := richOutput)
         let tCodegen ← IO.monoMsNow
         -- Build HTML output using ProofWidgets (controlled by specimen.richOutput)
-        let mkSpan (style : Json) (text : String) : Html :=
+        let mkSpan (style : Json) (text : String) : ProofWidgets.Html :=
           .element "span" #[("style", style)] #[.text text]
         let headerStyle := json% {"fontWeight": "bold", "fontSize": "1.2em", "color": "#4fc1ff"}
         let srcStyle := json% {"color": "#dcdcaa", "fontWeight": "bold"}
@@ -2549,7 +2545,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
         let singletonStyle := json% {"color": "#b5cea8"}
         let mutualStyle := json% {"color": "#ce9178", "fontWeight": "bold"}
         let scoreStyle := json% {"color": "#808080", "fontSize": "0.9em"}
-        let mut htmlChildren : Array Html := #[]
+        let mut htmlChildren : Array ProofWidgets.Html := #[]
         -- Title
         htmlChildren := htmlChildren.push (.element "div" #[("style", json% {"marginBottom": "12px"})] #[
           mkSpan headerStyle s!"⚙ derive_mutual — {usedKeys.size} specs, {components.length} components"
@@ -2564,9 +2560,9 @@ def elabDeriveMutual : CommandElab := fun stx => do
         -- Aggregate spec-level color from the inductive-level score
         let specColor (indSched : InductiveSchedule) : String :=
           scoreToColor indSched.score
-        let mkCtorItems (indSched : InductiveSchedule) : Array Html := Id.run do
+        let mkCtorItems (indSched : InductiveSchedule) : Array ProofWidgets.Html := Id.run do
           let allScheds := indSched.baseSchedules ++ indSched.recSchedules
-          let mut items : Array Html := #[]
+          let mut items : Array ProofWidgets.Html := #[]
           for (ctorName, schedule@(steps, _)) in allScheds do
             let isBase := indSched.baseSchedules.any (fun (n, _) => n == ctorName)
             let tag := if isBase then "base" else "rec"
@@ -2580,7 +2576,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
                 (s!" ({String.intercalate ", " parts})", scoreToColor score)
               | none => ("", scoreToColor bundle.emptyScore)
             let ctorNameStyle := json% {"color": $(ctorColor), "fontWeight": "bold"}
-            items := items.push (Html.element "details" #[] #[
+            items := items.push (ProofWidgets.Html.element "details" #[] #[
               .element "summary" #[("style", json% {"cursor": "pointer", "marginBottom": "2px"})] #[
                 mkSpan ctorNameStyle ctorName.getString!,
                 .text " ",
@@ -2615,7 +2611,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
                     | .SuchThat _ (.Rec ..) _ => "hsl(200, 50%, 60%)"
                     | .SuchThat _ (.MutRec ..) _ => "hsl(200, 50%, 60%)"
                     | .Match .. => "hsl(120, 40%, 60%)"
-                  Html.element "div" #[] #[mkSpan (json% {"color": $(color)}) stepStr]
+                  ProofWidgets.Html.element "div" #[] #[mkSpan (json% {"color": $(color)}) stepStr]
                 let (_, sort) := schedule
                 let conclusionStr := match sort with
                   | .ProducerSchedule _ conclusion =>
@@ -2625,14 +2621,14 @@ def elabDeriveMutual : CommandElab := fun stx => do
                     s!"return {outputStr}"
                   | .CheckerSchedule => "return ok"
                   | .TheoremSchedule hyp _ => s!"check_conclusion {ppHypothesisExpr hyp}"
-                let conclusionHtml := Html.element "div" #[] #[mkSpan (json% {"color": "hsl(120, 70%, 70%)"}) conclusionStr]
+                let conclusionHtml := ProofWidgets.Html.element "div" #[] #[mkSpan (json% {"color": "hsl(120, 70%, 70%)"}) conclusionStr]
                 stepHtmls.push conclusionHtml)
             ])
           items
-        let mut orderItems : Array Html := #[]
+        let mut orderItems : Array ProofWidgets.Html := #[]
         for comp in components do
           if comp.length > 1 then
-            let mut mutualItems : Array Html := #[]
+            let mut mutualItems : Array ProofWidgets.Html := #[]
             for k in comp do
               let numArgs ← getNumArgs k
               match finalMemo[k]? with
@@ -2643,10 +2639,10 @@ def elabDeriveMutual : CommandElab := fun stx => do
                 let ctorItems := mkCtorItems indSched
                 let specNameStyle := json% {"color": $(specColor indSched), "fontWeight": "bold"}
                 let indScoreStr := bundle.reprScore indSched.score
-                let codeDropdown : Array Html := match compiledCodeMap[k]? with
+                let codeDropdown : Array ProofWidgets.Html := match compiledCodeMap[k]? with
                   | some (defStr, instStr) =>
                     let codeStyle := json% {"whiteSpace": "pre-wrap", "fontFamily": "var(--vscode-editor-font-family, monospace)", "fontSize": "0.85em", "lineHeight": "1.4", "padding": "8px", "background": "#0d1117", "borderRadius": "4px", "border": "1px solid #30363d", "overflow": "auto", "maxHeight": "400px"}
-                    #[Html.element "details" #[] #[
+                    #[ProofWidgets.Html.element "details" #[] #[
                       .element "summary" #[("style", json% {"cursor": "pointer", "marginTop": "4px", "marginBottom": "2px"})] #[
                         mkSpan (json% {"color": "#79c0ff", "fontSize": "0.9em"}) "📝 generated code"
                       ],
@@ -2655,7 +2651,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
                   | none => #[]
                 let cs := displayConstraintMap[k]?.getD #[]
                 let tpIdxs := typeParamIdxMap[k]?.getD #[]
-                mutualItems := mutualItems.push (Html.element "details" #[] #[
+                mutualItems := mutualItems.push (ProofWidgets.Html.element "details" #[] #[
                   .element "summary" #[("style", json% {"cursor": "pointer", "marginBottom": "2px"})] #[
                     mkSpan specNameStyle (k.prettyPrint numArgs cs tpIdxs),
                     mkSpan scoreStyle s!" ({nCtors} ctors{timeStr}) score: {indScoreStr}"
@@ -2684,10 +2680,10 @@ def elabDeriveMutual : CommandElab := fun stx => do
                 let ctorItems := mkCtorItems indSched
                 let specNameStyle := json% {"color": $(specColor indSched), "fontWeight": "bold"}
                 let indScoreStr := bundle.reprScore indSched.score
-                let codeDropdown : Array Html := match compiledCodeMap[k]? with
+                let codeDropdown : Array ProofWidgets.Html := match compiledCodeMap[k]? with
                   | some (defStr, instStr) =>
                     let codeStyle := json% {"whiteSpace": "pre-wrap", "fontFamily": "var(--vscode-editor-font-family, monospace)", "fontSize": "0.85em", "lineHeight": "1.4", "padding": "8px", "background": "#0d1117", "borderRadius": "4px", "border": "1px solid #30363d", "overflow": "auto", "maxHeight": "400px"}
-                    #[Html.element "details" #[] #[
+                    #[ProofWidgets.Html.element "details" #[] #[
                       .element "summary" #[("style", json% {"cursor": "pointer", "marginTop": "4px", "marginBottom": "2px"})] #[
                         mkSpan (json% {"color": "#79c0ff", "fontSize": "0.9em"}) "📝 generated code"
                       ],
@@ -2696,7 +2692,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
                   | none => #[]
                 let cs := displayConstraintMap[k]?.getD #[]
                 let tpIdxs := typeParamIdxMap[k]?.getD #[]
-                orderItems := orderItems.push (Html.element "details" #[] #[
+                orderItems := orderItems.push (ProofWidgets.Html.element "details" #[] #[
                   .element "summary" #[("style", json% {"cursor": "pointer", "marginBottom": "2px"})] #[
                     .text "● ",
                     mkSpan specNameStyle (k.prettyPrint numArgs cs tpIdxs),
@@ -2705,7 +2701,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
                   .element "div" #[("style", json% {"marginLeft": "12px"})] (ctorItems ++ codeDropdown)
                 ])
             | _ => pure ()
-        htmlChildren := htmlChildren.push (Html.element "details" #[("open", json% true)] #[
+        htmlChildren := htmlChildren.push (ProofWidgets.Html.element "details" #[("open", json% true)] #[
           .element "summary" #[("style", json% {"cursor": "pointer", "fontWeight": "bold", "color": "#569cd6", "marginBottom": "6px"})] #[
             .text "📋 Derived Specs (topological order)"
           ],
@@ -2722,7 +2718,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
               | none => "(schedule not found)"
             | _ => "(not derived)"
           -- Build graph section
-          let mut graphItems : Array Html := #[]
+          let mut graphItems : Array ProofWidgets.Html := #[]
           for k in usedKeys.toList do
             let nArgs ← getNumArgs k
             let label := k.prettyPrint nArgs
@@ -2740,13 +2736,13 @@ def elabDeriveMutual : CommandElab := fun stx => do
                     if ctorName ∉ existing then
                       depCtors := depCtors.insert dk (existing ++ [ctorName])
               if !depCtors.isEmpty then
-                let mut dstItems : Array Html := #[]
+                let mut dstItems : Array ProofWidgets.Html := #[]
                 for (dk, ctors) in depCtors.toList do
                   let dkArgs ← getNumArgs dk
                   -- Each constructor is a clickable details showing its schedule
                   let ctorElements ← ctors.toArray.mapM fun ctorName => do
                     let schedText := getCtorSchedule k ctorName.getString!
-                    pure (Html.element "details" #[("style", json% {"display": "inline"})] #[
+                    pure (ProofWidgets.Html.element "details" #[("style", json% {"display": "inline"})] #[
                       .element "summary" #[("style", json% {"cursor": "pointer", "display": "inline", "color": "#4ec9b0"})] #[
                         .text ctorName.getString!
                       ],
@@ -2754,7 +2750,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
                         mkSpan schedStyle schedText
                       ]
                     ])
-                  let ctorSep := ctorElements.foldl (init := (#[] : Array Html)) fun acc el =>
+                  let ctorSep := ctorElements.foldl (init := (#[] : Array ProofWidgets.Html)) fun acc el =>
                     if acc.isEmpty then #[el] else acc ++ #[.text ", ", el]
                   dstItems := dstItems.push (.element "div" #[("style", json% {"marginLeft": "16px", "marginBottom": "3px"})] #[
                     mkSpan reqStyle "requires ",
@@ -2770,7 +2766,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
                   .element "div" #[] dstItems
                 ])
             | _ => pure ()
-          htmlChildren := htmlChildren.push (Html.element "details" #[] #[
+          htmlChildren := htmlChildren.push (ProofWidgets.Html.element "details" #[] #[
             .element "summary" #[("style", json% {"cursor": "pointer", "fontWeight": "bold", "color": "#569cd6", "marginTop": "12px", "marginBottom": "6px"})] #[
               .text s!"📊 Dependency Graph ({totalEdges} edges)"
             ],
@@ -2781,7 +2777,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
         -- with which constructors cover it and their schedule scores. Leaves with no
         -- covering constructor are unsupported inputs; leaves covered only by expensive
         -- constructors highlight where generation quality is weakest.
-        let mut trieItems : Array Html := #[]
+        let mut trieItems : Array ProofWidgets.Html := #[]
         for k in usedKeys.toList do
           match finalMemo[k]? with
           | some (.done indSched) =>
@@ -2803,7 +2799,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
                 let tree ← PatternCoverage.coverPatterns patterns initPat
                 return PatternCoverage.collectLeaves tree
               let ctorScores : List (Name × Score) := indSched.ctorStats.map fun (name, _, _, score) => (name, score)
-              let mut leafHtmls : Array Html := #[]
+              let mut leafHtmls : Array ProofWidgets.Html := #[]
               for (pat, rules) in leaves do
                 let covering : List (Name × Score) := rules.filterMap fun r =>
                   ctorScores.find? (fun x => x.1 == r)
@@ -2817,13 +2813,13 @@ def elabDeriveMutual : CommandElab := fun stx => do
                     mkSpan (json% {"color": "hsl(0, 50%, 50%)", "marginLeft": "16px"}) "UNCOVERED"
                   ])
                 else
-                  let ctorItems : Array Html := covering.toArray.map fun (r, s) =>
+                  let ctorItems : Array ProofWidgets.Html := covering.toArray.map fun (r, s) =>
                     let shortName := (r.componentsRev.head?.getD r).toString
                     let ctorColor := scoreToColor s
-                    Html.element "div" #[("style", json% {"marginLeft": "16px"})] #[
+                    ProofWidgets.Html.element "div" #[("style", json% {"marginLeft": "16px"})] #[
                       mkSpan (json% {"color": $(ctorColor)}) s!"{shortName}: {bundle.reprScore s}"
                     ]
-                  let aggregateHtml := Html.element "div" #[("style", json% {"marginLeft": "16px", "fontStyle": "italic"})] #[
+                  let aggregateHtml := ProofWidgets.Html.element "div" #[("style", json% {"marginLeft": "16px", "fontStyle": "italic"})] #[
                     mkSpan (json% {"color": $(leafColor)}) s!"aggregates to: {bundle.reprScore leafScore}"
                   ]
                   leafHtmls := leafHtmls.push (.element "div" #[("style", json% {"marginLeft": "8px", "marginBottom": "6px"})] (
@@ -2832,7 +2828,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
                     #[aggregateHtml]
                   ))
               let indScoreStr := bundle.reprScore indSched.score
-              trieItems := trieItems.push (Html.element "details" #[] #[
+              trieItems := trieItems.push (ProofWidgets.Html.element "details" #[] #[
                 .element "summary" #[("style", json% {"cursor": "pointer", "marginBottom": "2px"})] #[
                   mkSpan (json% {"color": $(specColor indSched), "fontWeight": "bold"}) (k.prettyPrint nArgs),
                   mkSpan scoreStyle s!" ({leaves.length} leaves, score: {indScoreStr})"
@@ -2841,7 +2837,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
               ])
           | _ => pure ()
         if !trieItems.isEmpty then
-          htmlChildren := htmlChildren.push (Html.element "details" #[] #[
+          htmlChildren := htmlChildren.push (ProofWidgets.Html.element "details" #[] #[
             .element "summary" #[("style", json% {"cursor": "pointer", "fontWeight": "bold", "color": "#569cd6", "marginTop": "12px", "marginBottom": "6px"})] #[
               .text s!"🌲 Pattern Coverage ({trieItems.size} inductives)"
             ],
@@ -2849,7 +2845,7 @@ def elabDeriveMutual : CommandElab := fun stx => do
           ])
         -- Emit the full HTML widget (at top of infoview)
         if richOutput && !silent then
-          let fullHtml := Html.element "div" #[("style", json% {"fontFamily": "var(--vscode-editor-font-family, monospace)", "fontSize": "13px", "lineHeight": "1.6", "padding": "8px"})] htmlChildren
+          let fullHtml := ProofWidgets.Html.element "div" #[("style", json% {"fontFamily": "var(--vscode-editor-font-family, monospace)", "fontSize": "13px", "lineHeight": "1.6", "padding": "8px"})] htmlChildren
           let graphMsg ← liftCoreM <| Lean.MessageData.ofHtml fullHtml
             s!"derive_mutual: {usedKeys.size} specs in {components.length} components"
           logInfo graphMsg

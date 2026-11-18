@@ -117,12 +117,8 @@ def deriveScheduledChecker' (_args : Array Expr)
   -- Obtain Lean's `InductiveVal` data structure, which contains metadata about the inductive relation
   let inductiveVal ← getConstInfoInduct inductiveName
 
-  -- Determine the type for each argument to the inductive
-  let inductiveTypeComponents ← getComponentsOfArrowType inductiveVal.type
-
-  -- To obtain the type of each arg to the inductive,
-  -- we pop the last element (`Prop`) from `inductiveTypeComponents`
-  let argTypes := inductiveTypeComponents.pop
+  -- Infer dependent argument types in the actual arguments' local context.
+  let argTypes ← getCorrectTypes constrArgs inductiveName constrLevels
   -- For now we fail if any argument is not a variable
   let argNames ← constrArgs.mapM
     (fun ident : Expr =>
